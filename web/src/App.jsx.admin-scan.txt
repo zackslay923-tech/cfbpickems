@@ -1,6 +1,0 @@
-import React, { useEffect, useState } from "react";
-import TeamLogo from "./components/TeamLogo";
-import { db, googleLogin, logout, onAuth } from "./firebase";
-import { collection, doc, getDoc, getDocs, setDoc, serverTimestamp, writeBatch, query, where } from "firebase/firestore";
-
-// ---------- small UI helpers ----------
