@@ -1,0 +1,2264 @@
+import teamColors from "./lib/teamColors.json";
+
+/* === School color helpers === */
+const normalizeName = (s) => String(s||"")
+  .toLowerCase()
+  .normalize("NFD")
+  .replace(/[\u0300-\u036f]/g, "")
+  .replace(/[^a-z0-9]+/g, "");
+
+const SCHOOL_COLORS = new Map(
+  Object.entries(teamColors).map(([k,v]) => [normalizeName(k), String(v).toUpperCase()])
+);
+
+function textColorFor(bg) {
+  try {
+    const hex = String(bg||"").replace("#","");
+    const full = hex.length===3 ? hex.split("").map(c=>c+c).join("") : hex;
+    const r=parseInt(full.slice(0,2),16), g=parseInt(full.slice(2,4),16), b=parseInt(full.slice(4,6),16);
+    const yiq=(r*299+g*587+b*114)/1000;
+    return yiq >= 140 ? "#111" : "#fff";
+  } catch(e) { return "#fff"; }
+}
+const schoolBg = (name) => (name ? (SCHOOL_COLORS.get(normalizeName(name)) || null) : null);
+
+/* Winners row style (pure fn so we can call it from JSX) */
+const winnerCellStyleFn = (results, cell, g) => {
+  const COL_W = 140;
+  const base = {
+    ...cell,
+    fontWeight: 700,
+    fontSize: "15px",
+    textAlign: "center",
+    width: COL_W,
+    minWidth: COL_W,
+  };
+  const w = results?.[g?.id]?.winner;
+  if (!w) return base;
+  const bg = schoolBg(w);
+  if (!bg) return base;
+  return { ...base, background: bg, color: textColorFor(bg) };
+};
+/* === end helpers === */
+import "./index.css";
+import "./App.css";
+import { mergeEspnWeek } from "./lib/espnWeek";
+import React, { useEffect, useState, useRef , useMemo } from "react";
+import TeamLogo from "./components/TeamLogo";
+import Scorebug from "./components/Scorebug"; // SCOREBUG import
+import useScoreboard from "./lib/useScoreboard"; 
+import useAutoWinners from "./lib/useAutoWinners";// SCOREBOARD hook
+import AdminPicksPage from "./components/AdminPicksPage";
+import BulkImportPicksPreview from "./components/BulkImportPicksPreview";
+import { db, googleLogin, logout, onAuth } from "./firebase";
+
+import { onSnapshot, collection, doc, getDoc, getDocs, setDoc, serverTimestamp, writeBatch, query, where , runTransaction } from "firebase/firestore";
+
+
+/* === Fit font helper (for header + winners) === */
+const fitFontByLen = (len) => (len <= 28 ? 15 : len <= 34 ? 14 : len <= 40 ? 13 : len <= 46 ? 12 : 11);
+/* === end fit font === */
+
+// ---------- small UI helpers ----------
+function Row({ children, style }) {
+  return <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", ...style }}>{children}</div>;
+}
+function Card({ children, style }) {
+  return <div style={{
+    background: "#121a2b", border: "1px solid #1f2a44",
+    borderRadius: 16, padding: 16, boxShadow: "0 10px 24px rgba(0,0,0,.25)"
+  , ...style}}>{children}</div>;
+}
+function Container({ children, maxWidth = 720 }) { return <div style={{ maxWidth: maxWidth, margin: "0 auto", padding: 24 }}>{children}</div>; }
+function Header({ user, isAdmin, setPage }) {
+
+  async function loadByCode() {
+    setMsg("");
+    const c = (loadCode || "").trim();
+    const ln = (loadLastName || "").trim().toLowerCase();
+    if (!/^\d{6}$/.test(c) || ln.length === 0) {
+      setMsg("Enter your 6-digit code and last name."); return;
+    }
+    const id = year + "_W" + week + "_" + c;
+    try {
+      const ref = doc(db, "picks", id);
+      const snap = await getDoc(ref);
+      if (!snap.exists()) { setMsg("No picks found for that code."); return; }
+      const d = snap.data();
+      const storedLower = (d.lastNameLower || (d.lastName || "").toLowerCase().trim());
+      if (storedLower !== ln) { setMsg("Code and last name do not match."); return; }
+
+      setForm(f => ({
+        ...f,
+        firstName: d.firstName || "",
+        lastName: d.lastName || "",
+        phone: d.phone || "", venmo: d.venmo || ""
+      }));
+      setPicks(d.picks || {});
+      setCode(c);
+      setEditing(true);
+      setMsg("Loaded. Editing code " + c + ".");
+    } catch (e) {
+      const m = (e && e.message) ? String(e.message) : String(e);
+      setMsg("Load failed: " + m);
+    }
+  }
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 16 }}>
+      <h1 style={{ margin: 0, fontSize: 20 }}>CFB Pick'em</h1>
+      <nav style={{ display: "flex", gap: 8 }}>
+        <a href="#" onClick={(e)=>{e.preventDefault();
+    
+    location.hash="#/picks"; setPage("picks");}}>Picks</a>
+        <a href="#" onClick={(e)=>{e.preventDefault(); location.hash="#/leader"; setPage("leader");}}>Leaderboard</a>
+        {isAdmin && <a href="#" onClick={(e)=>{e.preventDefault(); location.hash="#/admin"; setPage("admin");}}>Admin</a>}
+        {!user && <a href="#" onClick={(e)=>{e.preventDefault(); googleLogin();}}>Admin Login</a>}
+        {user && <a href="#" onClick={(e)=>{e.preventDefault(); logout();}}>Sign out</a>}
+      </nav>
+    </div>
+  );
+}
+function Field({ label, children }) {
+  return <label style={{ display: "flex", flexDirection: "column", gap: 8, fontSize: 14 }}>{label}{children}</label>;
+}
+const inputStyle = { background:"#0c1426", color:"#fff", border:"1px solid #1f2a44", padding:"10px 12px", borderRadius:10 };
+
+// Renders "#7 Team" if rank is 1..25, else just "Team"
+function teamLabel(name, rank) {
+  const n = Number(rank);
+  return n && n > 0 && n <= 25 ? `#${n} ${name}` : name;
+}
+
+// ---------- shared helpers ----------
+const norm = (s) => String(s || "")
+  .normalize("NFD")               // split letters + diacritics
+  .replace(/[\u0300-\u036f]/g, "")// strip diacritics (?? -> e)
+  .toLowerCase()
+  .replace(/[^a-z0-9]/g, "");     // keep only a??"z, 0??"9
+
+// ---------- auth/admin state ----------
+function useAuthAdmin() {
+  const [user, setUser] = useState(null);
+  const [isAdmin, setIsAdmin] = useState(false);
+  useEffect(() => onAuth(async u => {
+    setUser(u || null);
+    if (u) {
+      const email = (u.email || "").toLowerCase();
+      let isAdm = false;
+      try {
+        const s1 = await getDoc(doc(db, "admins", u.uid || ""));
+        if (s1.exists()) isAdm = true;
+      } catch (e) {}
+      if (!isAdm) {
+        try {
+          const s2 = await getDoc(doc(db, "admins", email));
+          if (s2.exists()) isAdm = true;
+        } catch (e) {}
+      }
+      setIsAdmin(isAdm);
+    } else {
+      setIsAdmin(false);
+    }
+  }), []);
+  return { user, isAdmin };
+}
+
+// ---------- Firestore helpers ----------
+async function listGames({ year, week, includedOnly }) {
+  const col = collection(db, "games");
+  const baseQ = query(col, where("year","==", year), where("week","==", week));
+  const q = includedOnly
+    ? query(col, where("year","==", year), where("week","==", week), where("included","==", true))
+    : baseQ;
+
+  const snap = await getDocs(q);
+  const items = [];
+  snap.forEach(d => items.push({ id: d.id, ...d.data() }));
+
+  const _etDay = new Intl.DateTimeFormat("en-CA", { timeZone:"America/New_York", year:"numeric", month:"2-digit", day:"2-digit" });
+  items.sort((a,b)=>{
+    const da = a.startTimeStr ? new Date(a.startTimeStr) : null;
+    const db = b.startTimeStr ? new Date(b.startTimeStr) : null;
+    const ka = (da && !isNaN(+da)) ? _etDay.format(da) : "9999-12-31";
+    const kb = (db && !isNaN(+db)) ? _etDay.format(db) : "9999-12-31";
+    if (ka !== kb) return ka.localeCompare(kb);         // day (ET)
+    const oa = (a.orderDay ?? 1e9), ob = (b.orderDay ?? 1e9);
+    if (oa !== ob) return oa - ob;                      // ESPN per-day
+    const wa = (a.order ?? 1e9), wb = (b.order ?? 1e9);
+    if (wa !== wb) return wa - wb;                      // ESPN week (fallback)
+    return String(a.away||"").localeCompare(String(b.away||"")); // stable tie-break
+  });
+  return items;
+}
+async function setGameIncluded(gameId, included) {
+  await setDoc(doc(db, "games", gameId), { included: !!included }, { merge: true });
+}
+
+
+async function setGameGameday(year, week, gameId) {
+  const q = query(collection(db, "games"), where("year","==",year), where("week","==",week));
+  const snap = await getDocs(q);
+  const batch = writeBatch(db);
+  snap.forEach(d => {
+    batch.set(d.ref, { gameday: d.id === gameId }, { merge: true });
+  });
+  await batch.commit();
+}
+async function setResult(gameId, winner, totalPoints) {
+  const payload = { winner: String(winner), updatedAt: serverTimestamp() };
+  if (totalPoints !== undefined && totalPoints !== null && totalPoints !== "") {
+    payload.totalPoints = Number(totalPoints);
+  }
+  await setDoc(doc(db, "results", gameId), payload, { merge: true });
+}
+async function getResultsMap(gameIds) {
+  const map = {};
+  await Promise.all(gameIds.map(async id => {
+    const s = await getDoc(doc(db, "results", id));
+    if (s.exists()) map[id] = s.data();
+  }));
+  return map;
+}
+
+async function getWeekResultsMap(year, week, games) {
+  // Prefer the weekly results doc: results/{year}_W{week}.games -> { [gameId]: result }
+  try {
+    const s = await getDoc(doc(db, "results", `${year}_W${week}`));
+    if (!s.exists()) return null;
+    const weekData = s.data() || {};
+    const gamesMap = weekData.games || {};
+    // Normalize team names to CFBD weekly key: "away__home"
+    const normalizeKey = (name) => {
+      if (!name) return "";
+      let out = String(name).toLowerCase();
+      out = out.replace(/\ba\s*&\s*m\b|\ba\s*and\s*m\b/gi, "a&m");
+      out = out.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, "");
+      if (out === "texasam" || out === "texasa&m") out = "texasam";
+      return out;
+    };
+    const keyFrom = (home, away) => `${normalizeKey(away)}__${normalizeKey(home)}`;
+
+    const map = {};
+    for (const g of games) {
+      const home = g.home || g.homeTeam || "";
+      const away = g.away || g.awayTeam || "";
+      const k = keyFrom(home, away);
+      const r = gamesMap[k];
+      if (r) {
+      // Recase winner to the exact team label when possible
+      const nh = normalizeKey(home);
+      const na = normalizeKey(away);
+      let winner = r.winner;
+      if (winner) {
+        const nw = normalizeKey(String(winner));
+        if (nw === "tie") { winner = null; } else if (nw === nh) winner = home;
+        else if (nw === na) winner = away;
+        else winner = String(winner).toUpperCase();
+      }
+      map[g.id] = { ...r, winner };
+    }
+    }
+    return map;
+  } catch (e) {
+    console.warn("[getWeekResultsMap] failed", e);
+    return null;
+  }
+}
+function picksDocId(year, week, email) {
+  return `${year}_W${week}_${(email||"").toLowerCase()}`.replace(/[^\w\-@.]+/g, "_");
+}
+async function getPicksForWeek(year, week) {
+  const y = Number(year), w = Number(week);
+  // Try numeric fields first
+  let snap = await getDocs(query(collection(db, "picks"), where("year","==", y), where("week","==", w)));
+  let out = [];
+  snap.forEach(d => out.push(d.data()));
+
+  // Fallback to string-typed fields (legacy/edge docs)
+  if (!Array.isArray(out) || out.length === 0) {
+    const snap2 = await getDocs(query(collection(db, "picks"), where("year","==", String(y)), where("week","==", String(w))));
+    const out2 = [];
+    snap2.forEach(d => out2.push(d.data()));
+    if (out2.length) out = out2;
+  }
+  return out;
+}// ---------- Import helpers (CFBD + ESPN with CORS fallback) ----------
+const FBS_CONF = new Set([
+  "ACC","American Athletic","American","Big 12","Big Ten",
+  "Conference USA","CUSA","Mid-American","MAC","Mountain West","Pac-12","SEC","Sun Belt",
+  "FBS Independents","Independent","Independents"
+]);
+
+async function getCfbdKey() {
+  const s = await getDoc(doc(db, "config", "cfbd"));
+  return s.exists() ? String(s.data().apiKey || "") : "";
+}
+async function setCfbdKey(apiKey) {
+  await setDoc(doc(db, "config", "cfbd"), { apiKey: String(apiKey) }, { merge: true });
+}
+
+async function fetchJson(url, options) {
+  try {
+    const r = await fetch(url, options);
+    if (!r.ok) return { ok: false, status: r.status, data: null };
+    const data = await r.json();
+    return { ok: true, status: r.status, data };
+  } catch (e) {
+    return { ok: false, status: 0, data: null, error: String(e) };
+  }
+}
+
+async function buildFbsNameSet(apiKey, year) {
+  const add = (set, t) => {
+    const fields = [t.school, t.name, t.team, t.display_name, t.abbreviation, t.alt_name1, t.alt_name2, t.alt_name3];
+    for (const f of fields) { const n = norm(f); if (n) set.add(n); }
+  };
+  const base = "https://api.collegefootballdata.com";
+  const endpoints = [
+    `/teams/fbs?year=${encodeURIComponent(year)}`,
+    `/teams?year=${encodeURIComponent(year)}&division=fbs`,
+    `/teams?year=${encodeURIComponent(year)}&classification=fbs`
+  ];
+  const set = new Set();
+  for (const ep of endpoints) {
+    const res = await fetchJson(base + ep, { headers: { Authorization: "Bearer " + apiKey }});
+    if (res.ok && Array.isArray(res.data)) {
+      for (const t of res.data) add(set, t);
+      if (set.size) break;
+    }
+  }
+  return set;
+}
+
+function getRankFromCompetitor(c) {
+  const r1 = c?.curatedRank?.current;
+  const r2 = c?.rank;
+  const r3 = c?.team?.rank;
+  const candidates = [r1, r2, r3];
+  for (const v of candidates) {
+    const n = Number(v);
+    if (Number.isFinite(n) && n > 0) return n;
+    if (typeof v === "string" && /^\d+$/.test(v)) return Number(v);
+  }
+  return null;
+}
+
+function mapEspnEventsToGames(events) {
+  if (!Array.isArray(events)) return [];
+  const out = [];
+  for (const ev of events) {
+    const comp = (ev.competitions && ev.competitions[0]) || {};
+    const teams = comp.competitors || [];
+    const home = teams.find(t => (t.homeAway || t.home_away) === "home");
+    const away = teams.find(t => (t.homeAway || t.home_away) === "away");
+    const homeName = home?.team?.location || home?.team?.displayName || home?.team?.name || home?.team?.shortDisplayName || "";
+const awayName = away?.team?.location || away?.team?.displayName || away?.team?.name || away?.team?.shortDisplayName || "";
+    const homeAbbr = home?.team?.abbreviation || "";
+    const awayAbbr = away?.team?.abbreviation || "";
+
+    if (homeName && awayName) {
+      const homeRank = getRankFromCompetitor(home);
+      const awayRank = getRankFromCompetitor(away);
+      out.push({
+        home: homeName, away: awayName,
+        homeAbbr, awayAbbr,
+        homeRank, awayRank,
+        startTimeStr: ev.date || ""
+      });
+    }
+  }
+  return out;
+}
+
+async function importWeek({ year, week }) {
+  const debug = { sourceTried: [], cfbdGames: 0, fbsTeamNames: 0, espnDirect: 0, espnProxy: 0, includedFbs: 0, writtenTotal: 0 };
+  const batch = writeBatch(db);
+  const keepIds = new Set();
+
+  // --- Try CFBD first
+  const apiKey = await getCfbdKey();
+  let games = [];
+  if (apiKey) {
+    debug.sourceTried.push("CFBD");
+    const gamesUrl = `https://api.collegefootballdata.com/games?year=${encodeURIComponent(year)}&week=${encodeURIComponent(week)}&seasonType=regular`;
+    const resGames = await fetchJson(gamesUrl, { headers: { Authorization: "Bearer " + apiKey }});
+    if (resGames.ok && Array.isArray(resGames.data)) {
+      debug.cfbdGames = resGames.data.length;
+      const fbsSet = await buildFbsNameSet(apiKey, year);
+      debug.fbsTeamNames = fbsSet.size;
+      for (const g of resGames.data) {
+        const homeN = norm(g.home_team), awayN = norm(g.away_team);
+        const isFbsByTeam = fbsSet.has(homeN) || fbsSet.has(awayN);
+        const isFbsByConf = FBS_CONF.has(g.home_conference || "") || FBS_CONF.has(g.away_conference || "");
+        const included = isFbsByTeam || isFbsByConf;
+        if (included) debug.includedFbs++;
+        games.push({
+          home: g.home_team || "", away: g.away_team || "",
+          homeAbbr: null, awayAbbr: null,
+          homeRank: null, awayRank: null,
+          startTimeStr: g.start_date || "", included
+        });
+      }
+    }
+  }
+
+  // --- If still nothing included, try ESPN (FBS only, groups=80)
+  if (!games.length || games.every(g => !g.included)) {
+    debug.sourceTried.push("ESPN");
+    games = [];
+    const espnUrl = `https://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard?year=${year}&week=${week}&seasontype=2&groups=80`;
+    let res = await fetchJson(espnUrl);
+    if (res.ok && res.data) {
+      const ev = res.data.events || [];
+      debug.espnDirect = ev.length;
+      const mapped = mapEspnEventsToGames(ev);
+      for (const m of mapped) games.push({ ...m, included: true }); // ESPN FBS only
+      debug.includedFbs += mapped.length;
+    } else {
+      debug.sourceTried.push("ESPN(proxy)");
+      const prox = `https://r.jina.ai/http://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard?year=${year}&week=${week}&seasontype=2&groups=80`;
+      res = await fetchJson(prox);
+      if (res.ok && res.data) {
+        const ev = res.data.events || [];
+        debug.espnProxy = ev.length;
+        const mapped = mapEspnEventsToGames(ev);
+        for (const m of mapped) games.push({ ...m, included: true });
+        debug.includedFbs += mapped.length;
+      }
+    }
+  }
+
+  // --- Merge ESPN week (FBS) to fill gaps
+  await mergeEspnWeek({ year, week, games, debug, fetchJson });
+// --- Write what we have (don't delete old docs unless we wrote something)
+  // --- Ensure ESPN week merge + debug before write
+  await mergeEspnWeek({ year, week, games, debug, fetchJson });
+  console.info("[Pickems] import debug", {
+    sourceTried: debug.sourceTried, cfbdGames: debug.cfbdGames,
+    espnDirect: debug.espnDirect, espnProxy: debug.espnProxy,
+    includedFbs: debug.includedFbs, preWriteCount: games.length
+  });
+  window._importDebug = { debug, games };
+  // Stamp persistent ESPN order index on each game
+    // Stamp ESPN order per WEEK and per DAY (ET)
+  {
+    const fmt = new Intl.DateTimeFormat("en-CA",{timeZone:"America/New_York",year:"numeric",month:"2-digit",day:"2-digit"});
+    const perDay = new Map(); // "YYYY-MM-DD" (ET) -> next index (1-based)
+    games.forEach((g, i) => {
+      g.order = i + 1; // ESPN week order
+      // prefer helper-provided per-day index, else compute
+      if (Number.isFinite(g._orderDay)) {
+        g.orderDay = g._orderDay;
+      } else {
+        const d = g.startTimeStr ? new Date(g.startTimeStr) : null;
+        const key = (d && !Number.isNaN(+d)) ? fmt.format(d) : "tbd";
+        const next = (perDay.get(key) || 0) + 1;
+        perDay.set(key, next);
+        g.orderDay = next;
+      }
+    });
+  }
+  for (const g of games) {
+    const id = `${year}_W${week}_${g.away}_at_${g.home}`.replace(/[^\w\-@.]+/g, "_");
+    keepIds.add(id);
+    batch.set(doc(db, "games", id), {
+      id, year, week,
+      away: g.away, home: g.home,
+      awayAbbr: g.awayAbbr ?? null, homeAbbr: g.homeAbbr ?? null,
+      awayRank: g.awayRank ?? null, homeRank: g.homeRank ?? null,
+      included: (g.included ?? true),
+      startTimeStr: g.startTimeStr ?? null,
+      order: (g.order ?? g._order ?? null),
+      orderDay: (g.orderDay ?? null),
+    }, { merge: true });
+  }
+  if (games.length > 0) {
+    const existingSnap = await getDocs(query(collection(db, "games"),
+      where("year","==",year), where("week","==",week)));
+    existingSnap.forEach(d => { if (!keepIds.has(d.id)) batch.delete(d.ref); });
+  }
+  await batch.commit();
+
+  debug.writtenTotal = games.length;
+  return debug;
+}
+
+// ---------- pages ----------
+
+// ---- helpers: strip mascot from team name ----
+function stripMascot(name) {
+  const s = String(name || "").trim();
+  if (!s) return "";
+  const parts = s.split(/\s+/);
+  if (parts.length <= 2) return s;
+
+  const keepers = new Set(["State","Tech","A&M","&","University","College","Institute"]);
+  const adj = new Set(["Tar","Nittany","Fighting","Ragin'","Mean","Golden","Black","Blue","Green","Crimson","Scarlet","Red","Orange","Rainbow","War","Great","Lady"]);
+
+  let removed = 0;
+  while (parts.length > 1) {
+    const last = parts[parts.length - 1];
+    if (keepers.has(last) || /\)/.test(last)) break;
+    parts.pop(); removed++;
+    while (parts.length > 1 && adj.has(parts[parts.length - 1])) { parts.pop(); removed++; }
+    if (removed > 0 && parts.length <= 2) break;
+  }
+  return parts.join(" ");
+}
+
+function teamLabelNoMascot(name, rank) { if (String(rank) === "99" || Number(rank) === 99) rank = null; 
+  const base = stripMascot(name);
+
+  async function loadByCode() {
+    setMsg("");
+    const c = (loadCode || "").trim();
+    const ln = (loadLastName || "").trim().toLowerCase();
+    if (!/^\d{6}$/.test(c) || ln.length === 0) {
+      setMsg("Enter your 6-digit code and last name."); return;
+    }
+    const id = year + "_W" + week + "_" + c;
+    try {
+      const ref = doc(db, "picks", id);
+      const snap = await getDoc(ref);
+      if (!snap.exists()) { setMsg("No picks found for that code."); return; }
+      const d = snap.data();
+      const storedLower = (d.lastNameLower || (d.lastName || "").toLowerCase().trim());
+      if (storedLower !== ln) { setMsg("Code and last name do not match."); return; }
+
+      setForm(f => ({
+        ...f,
+        firstName: d.firstName || "",
+        lastName: d.lastName || "",
+        phone: d.phone || "", venmo: d.venmo || ""
+      }));
+      setPicks(d.picks || {});
+      setCode(c);
+      setEditing(true);
+      setMsg("Loaded. Editing code " + c + ".");
+    } catch (e) {
+      const m = (e && e.message) ? String(e.message) : String(e);
+      setMsg("Load failed: " + m);
+    }
+  }
+  return (rank ? `#${rank} ` : "") + base;
+}
+// ---- end helpers ----
+function PicksPage({ user, isAdmin, setPage }) {
+  // --- Subscribe to live week (config/live) and mirror into local state ---
+
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, "config", "live"), (s) => {
+      const d = s.data() || {};
+      setLive(d);
+    });
+
+  async function loadByCode() {
+    setMsg("");
+    const c = (loadCode || "").trim();
+    const ln = (loadLastName || "").trim().toLowerCase();
+    if (!/^\d{6}$/.test(c) || ln.length === 0) {
+      setMsg("Enter your 6-digit code and last name."); return;
+    }
+    const id = year + "_W" + week + "_" + c;
+    try {
+      const ref = doc(db, "picks", id);
+      const snap = await getDoc(ref);
+      if (!snap.exists()) { setMsg("No picks found for that code."); return; }
+      const d = snap.data();
+      const storedLower = (d.lastNameLower || (d.lastName || "").toLowerCase().trim());
+      if (storedLower !== ln) { setMsg("Code and last name do not match."); return; }
+
+      setForm(f => ({
+        ...f,
+        firstName: d.firstName || "",
+        lastName: d.lastName || "",
+        phone: d.phone || "", venmo: d.venmo || ""
+      }));
+      setPicks(d.picks || {});
+        setTiebreaker(d.tiebreaker ? { gameId: d.tiebreaker.gameId || null, total: String(d.tiebreaker.total ?? "") } : { gameId: null, total: "" });
+      setCode(c);
+      setEditing(true);
+      setMsg("Loaded. Editing code " + c + ".");
+    } catch (e) {
+      const m = (e && e.message) ? String(e.message) : String(e);
+      setMsg("Load failed: " + m);
+    }
+  }
+  return () => unsub();
+
+
+  }, []);
+  const [year, setYear] = useState(new Date().getFullYear());
+  const [week, setWeek] = useState(null);
+  // One-time copy of live {year,week} to local state (prevents flicker)
+
+  const [live, setLive] = useState({ year: null, week: null });
+  const initFromLiveRef = useRef(false);
+  useEffect(() => {
+    if (!initFromLiveRef.current && live?.year && live?.week) {
+      setYear(live.year);
+      setWeek(live.week);
+      initFromLiveRef.current = true;
+    }
+  }, [live]);
+  // Default Admin to live Year/Week exactly once
+  const liveSyncedRef = useRef(false);
+  const [games, setGames] = useState([]);
+  // INITIAL_LIVE_AUTOLOAD: on first mount, load games for the live week (config/live)
+  useEffect(() => {
+        try {
+      const ref = doc(db, "config", "live");
+      // Subscribe once, then auto-unsub after we apply the first live week load
+      const unsub = onSnapshot(ref, async (s) => {
+        const d = s.data() || {};
+        const y = Number(d.year), w = Number(d.week);
+        setLive({ year: y, week: w });
+        if (!y || !w) { return; }
+
+        // Keep Admin controls consistent, but the important part is we load the live week now:
+        setYear(y);
+        setWeek(w);
+
+        try {
+          const gs = await listGames({ year: y, week: w, includedOnly: false });
+          setGames(gs);
+        } catch (e) {
+          console.error(e);
+        } finally {
+          // We only need this once on entry; further changes can be manual
+          unsub();
+        }
+      });
+      return () => { try { unsub(); } catch {} };
+    } catch (e) {
+      console.error(e);
+    }
+  }, []);
+const [form, setForm] = useState({ firstName:"", lastName:"", email:"", phone:"", venmo:"", venmoConfirmed:false })
+  const [errors, setErrors] = useState({});
+  const [touchedSubmit, setTouchedSubmit] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
+  const [showRules, setShowRules] = useState(false);
+  const [pending, setPending] = useState(null);
+  const [receipt, setReceipt] = useState(null);;
+  const [picks, setPicks] = useState({});
+  useEffect(() => { window._picks = picks; window._setPicks = setPicks; }, [picks]);
+  const [msg, setMsg] = useState("");
+  // Submissions lock (config/app.picksLocked)
+  const [picksLocked, setPicksLocked] = useState(false);
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, "config", "app"), (s) => {
+      const d = s.data() || {};
+      setPicksLocked(!!d.picksLocked);
+    });
+    return () => unsub && unsub();
+  }, []);
+
+// Weeks dropdown: populate from games in the selected year
+const [weeksForYear, setWeeksForYear] = useState([]);
+useEffect(() => {
+  (async () => {
+    try {
+      const q = query(collection(db, "games"), where("year", "==", Number(year)));
+      const snap = await getDocs(q);
+      const uniq = new Set();
+      snap.forEach(d => {
+        const w = d.data()?.week;
+        if (Number.isFinite(+w)) uniq.add(Number(w));
+      });
+      setWeeksForYear([...uniq].sort((a,b)=>a-b));
+    } catch (err) {
+      console.error("weeksForYear load failed", err);
+      setWeeksForYear([]);
+    }
+  })();
+}, [year]);const [tiebreaker, setTiebreaker] = useState({ gameId: null, total: "" });
+
+    // Put College GameDay at the end of the list
+  const gameday = (Array.isArray(games) ? games.find(x => x && x.gameday) : null);
+  const displayGames = gameday ? [...games.filter(x => x && x.id !== gameday.id), gameday] : games;
+  const pickGroups = useMemo(
+    () => groupGamesByDate(displayGames || [], { timeZone: "America/New_York" }),
+    [displayGames]
+  );
+  // Earliest included kickoff (for deadline label on Picks)
+  const earliestGame = useMemo(() => {
+    const arr = (displayGames || [])
+      .map(g => ({ g, d: kickoffDate(g) }))
+      .filter(x => x.d instanceof Date && !isNaN(x.d));
+    arr.sort((a,b) => a.d - b.d);
+    return arr[0]?.g || null;
+  }, [displayGames]);
+  // Mobile-only layout flag for small view tweaks
+  const [isMobile, setIsMobile] = useState(() => (typeof window !== "undefined" ? window.innerWidth <= 560 : false));
+  useEffect(() => {
+    const onResize = () => setIsMobile(typeof window !== "undefined" ? window.innerWidth <= 560 : false);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  const badgeSize  = isMobile ? 40 : 72;
+  const badgeTop   = isMobile ? 4  : 6;
+  const badgeRight = isMobile ? 4  : 6;
+const [code, setCode] = useState("");
+  const [loadCode, setLoadCode] = useState("");
+  const [loadLastName, setLoadLastName] = useState("");
+  const [editing, setEditing] = useState(false);
+  const [showLoad, setShowLoad] = useState(false);
+
+
+  const email = (user?.email || "").toLowerCase();
+
+  const load = async () => {
+    setMsg("Loading games...");
+    let items; try { items = await listGames({ year, week, includedOnly: true }); } catch (e) { console.error("listGames failed:", e); setMsg("Failed to load games: " + (e?.message || e)); return; }
+    setGames(items);
+    window._logoGames = items; // temp: expose games for the logo audit
+    setMsg(items.length ? "" : "No games yet for that week.");
+    if (email) {
+      const s = await getDoc(doc(db, "picks", picksDocId(year, week, email)));
+      if (s.exists()) {
+        const d = s.data();
+        setForm({ firstName: d.firstName||"", lastName: d.lastName||"", email: (d.email || "").toLowerCase(), phone: d.phone || "", venmo: d.venmo || "" });
+        setPicks(d.picks || {});
+        setTiebreaker(d.tiebreaker ? { gameId: d.tiebreaker.gameId || null, total: String(d.tiebreaker.total ?? "") } : { gameId: null, total: "" });
+      } else {
+        setPicks({}); setTiebreaker({ gameId: null, total: "" });
+      }
+    }
+  };
+
+  useEffect(() => {
+  if (!(Number.isFinite(Number(year)) && Number.isFinite(Number(week)) && Number(week) > 0)) return;
+  load();
+  /* eslint-disable-next-line */
+}, [year, week, email]);
+
+    // --- Step 4: validation & submit gating (Pickems Coach) ---
+  const validatePicks = (opts = {}) => {
+    const errs = {};
+    const needIncludedFlag = games.some(g => Object.prototype.hasOwnProperty.call(g, "included"));
+    const requiredGames = needIncludedFlag ? games.filter(g => !!g.included) : games;
+
+    if (!String(form.firstName || "").trim()) errs.firstName = "First name is required";
+    if (!String(form.lastName  || "").trim()) errs.lastName  = "Last name is required";
+    if (!String(form.phone     || "").trim()) errs.phone     = "Phone is required";
+    if (!String(form.venmo     || "").trim()) errs.venmo     = "Venmo is required";
+    if (!form.venmoConfirmed) errs.venmoConfirmed = "Please confirm your Venmo is correct";
+
+    const missingGames = [];
+    for (const g of requiredGames) {
+      const pick = picks && picks[g.id];
+      if (!(pick === g.home || pick === g.away)) missingGames.push(g);
+    }
+    if (missingGames.length) {
+      errs.picks = missingGames.length + " game" + (missingGames.length>1?"s":"") + " not selected";
+    }
+
+    const ok = Object.keys(errs).length === 0;
+    const parts = [];
+    if (errs.firstName) parts.push("first name");
+    if (errs.lastName) parts.push("last name");
+    if (errs.phone) parts.push("phone");
+    if (errs.venmo) parts.push("venmo");
+    if (errs.venmoConfirmed) parts.push("venmo confirmation");
+    if (missingGames.length) parts.push(missingGames.length + " game picks");
+    const message = ok ? "" : (parts.join(", ") + " required.");
+
+    if (!opts.silent && typeof setErrors === "function") setErrors(errs);
+
+    const focus = () => {
+      try {
+        if (errs.firstName) { var el = document.querySelector('input[name="firstName" aria-invalid={touchedSubmit && !!errors.firstName}]'); if (el) el.focus(); return; }
+        if (errs.lastName)  { var el2 = document.querySelector('input[name="lastName" aria-invalid={touchedSubmit && !!errors.lastName}]'); if (el2) el2.focus(); return; }
+        if (errs.phone)     { var el3 = document.querySelector('input[name="phone" aria-invalid={touchedSubmit && !!errors.phone}]'); if (el3) el3.focus(); return; }
+        if (errs.venmo)     { var el4 = document.querySelector('input[name="venmo" aria-invalid={touchedSubmit && !!errors.venmo}]'); if (el4) el4.focus(); return; }
+        if (errs.venmoConfirmed) { var el5 = document.querySelector('input[aria-label="venmo"]'); if (el5) el5.focus(); return; }
+        if (missingGames[0]) {
+          var firstId = missingGames[0].id;
+          var card = document.querySelector('[data-game-id="' + firstId + '"]');
+          if (card) { try { card.scrollIntoView({behavior:"smooth", block:"center"}); } catch (e) { card.scrollIntoView(true); } }
+        }
+      } catch (e) {}
+    };
+    return { ok, errors: errs, message, missingGames, focus };
+  };
+
+  const isValid = useMemo(function(){ return validatePicks({ silent: true }).ok; }, [form, picks, games]);
+
+    // Keep validation errors updated after a submit attempt
+  useEffect(() => {
+    if (touchedSubmit) {
+      const r = validatePicks({ silent: true });
+      if (typeof setErrors === "function") setErrors(r.errors);
+    }
+  }, [form, picks, games, touchedSubmit]);
+const normEmail = (s) => String(s||"").trim().toLowerCase();
+const normPhone = (s) => String(s||"").replace(/[^0-9]/g, "");
+const normVenmo = (s) => String(s||"").trim().toLowerCase().replace(/^@+/, "");const confirmAndSubmit = async () => { if (picksLocked) { if (typeof setMsg==="function") setMsg("Submissions are locked right now."); return; }
+  if (!pending) return;
+  setMsg("Saving...");
+  try {
+    const year = pending.year;
+    const week = pending.week;
+    const form = pending.form;
+    const picks = pending.picks;
+    const code = pending.code;
+    const id = year + "_W" + week + "_" + code;
+
+        const gd = (Array.isArray(games) ? games.find(x => x && x.gameday) : null);
+    const payload = {
+      id, year, week, code,
+      // keep your existing identity fields:
+      firstName: form.firstName,
+      lastName: form.lastName,
+      lastNameLower: (form.lastName || "").toLowerCase().trim(),
+      phone: form.phone || "",
+      venmo: form.venmo || "",
+      email: (form.email || "").toLowerCase(),
+      venmoConfirmed: !!form.venmoConfirmed,
+      // picks & timestamps:
+      picks,
+      updatedAt: serverTimestamp()
+    };
+    if (gd) {
+      if (!tiebreaker || tiebreaker.total === "" || isNaN(Number(tiebreaker.total))) {
+        setMsg("Enter total points for the College GameDay tiebreaker.");
+        return;
+      }
+      payload.tiebreaker = { gameId: gd.id, total: Number(tiebreaker.total) };
+    }
+    try {
+  await runTransaction(db, async (tx) => {
+    const locks = [];
+    const eKey = normEmail(form.email);
+    const pKey = normPhone(form.phone);
+    const vKey = normVenmo(form.venmo);
+    if (eKey) locks.push({ ref: doc(db, "keys", `${year}_W${week}_email_${eKey}`), type: "email", value: eKey });
+    if (pKey) locks.push({ ref: doc(db, "keys", `${year}_W${week}_phone_${pKey}`), type: "phone", value: pKey });
+    if (vKey) locks.push({ ref: doc(db, "keys", `${year}_W${week}_venmo_${vKey}`), type: "venmo", value: vKey });
+
+    // If any lock exists and points to a different submission, block
+    for (const l of locks) {
+      const s = await tx.get(l.ref);
+      const existing = s.exists() ? s.data() : null;
+      if (existing && existing.picksId !== id) {
+        throw new Error("DUPLICATE_LOCK");
+      }
+    }
+
+    // Create/update locks for this submission, then write the picks
+    for (const l of locks) {
+      tx.set(l.ref, { year, week, type: l.type, value: l.value, picksId: id, code, createdAt: serverTimestamp() }, { merge: true });
+    }
+    tx.set(doc(db, "picks", id), payload, { merge: true });
+  });
+} catch (e2) {
+  const msg = String((e2 && e2.message) || e2 || "");
+  if (msg === "DUPLICATE_LOCK") {
+    setMsg("this email/number/venmo is already associated with a submission, if you feel this was reached in error contact zslay@live.com");
+    return;
+  }
+  throw e2;
+}// show SUCCESS in the same style box (receipt overlay)
+    setReceipt({ year: year, week: week, code: code, form: form, picks: picks });
+    setShowConfirm(false);     // close the review popup
+    setMsg("");                // clear page toast
+  } catch (e) {
+    setMsg("Save failed: " + (e?.message || String(e)));
+  }
+};
+const onSubmitPicks = function(e){ e.preventDefault(); if (picksLocked) { if (typeof setMsg==="function") setMsg("Submissions are locked right now."); return; }
+    const result = validatePicks();
+    if (!result.ok) { 
+      if (typeof setMsg === "function") setMsg(result.message || "Please complete all required fields and picks.");
+      if (result.focus) result.focus();
+      return;
+    }
+    // Reuse 6-digit code when editing; otherwise generate
+  const nextCode = (editing && typeof code === "string" && /^\d{6}$/.test(code))
+    ? code
+    : String(Math.floor(100000 + Math.random() * 900000));
+  if (typeof setCode === "function") setCode(nextCode);
+
+  const p = {
+    year, week,
+    form: { ...form, lastNameLower: (form.lastName || "").toLowerCase().trim() },
+    picks,
+    code: nextCode,
+    editing: !!editing
+  };
+  try { if (typeof tiebreaker !== "undefined") { p.tiebreaker = tiebreaker; } localStorage.setItem("pending", JSON.stringify(p)); } catch (_){}
+if (typeof setPage === "function") setPage("confirm");
+if (typeof window !== "undefined") window.location.hash = "#/confirm";
+  setMsg("");
+  return; // no write here; Confirm button will write
+};
+const save = async (e) => {
+    e.preventDefault();
+    
+    if (!form.firstName || !form.lastName) { setMsg("Enter first and last name."); return; }
+    let nextCode = (code && /^[0-9]{6}$/.test(code)) ? code : String(Math.floor(100000 + Math.random() * 900000));
+setCode(nextCode);
+const id = `${year}_W${week}_${nextCode}`;
+    const gd = (Array.isArray(games) ? games.find(x => x && x.gameday) : null);
+    const payload = {
+      id, year, week, code: nextCode,
+      // keep your existing identity fields:
+      firstName: form.firstName,
+      lastName: form.lastName,
+      lastNameLower: (form.lastName || "").toLowerCase().trim(),
+      phone: form.phone || "",
+      venmo: form.venmo || "",
+      email: (form.email || "").toLowerCase(),
+      venmoConfirmed: !!form.venmoConfirmed,
+      // picks & timestamps:
+      picks,
+      updatedAt: serverTimestamp()
+    };
+    if (gd) {
+      if (!tiebreaker || tiebreaker.total === "" || isNaN(Number(tiebreaker.total))) {
+        setMsg("Enter total points for the College GameDay tiebreaker.");
+        return;
+      }
+      payload.tiebreaker = { gameId: gd.id, total: Number(tiebreaker.total) };
+    }
+    try {
+  await runTransaction(db, async (tx) => {
+    const locks = [];
+    const eKey = normEmail(form.email);
+    const pKey = normPhone(form.phone);
+    const vKey = normVenmo(form.venmo);
+    if (eKey) locks.push({ ref: doc(db, "keys", `${year}_W${week}_email_${eKey}`), type: "email", value: eKey });
+    if (pKey) locks.push({ ref: doc(db, "keys", `${year}_W${week}_phone_${pKey}`), type: "phone", value: pKey });
+    if (vKey) locks.push({ ref: doc(db, "keys", `${year}_W${week}_venmo_${vKey}`), type: "venmo", value: vKey });
+
+    // If any lock exists and points to a different submission, block
+    for (const l of locks) {
+      const s = await tx.get(l.ref);
+      const existing = s.exists() ? s.data() : null;
+      if (existing && existing.picksId !== id) {
+        throw new Error("DUPLICATE_LOCK");
+      }
+    }
+
+    // Create/update locks for this submission, then write the picks
+    for (const l of locks) {
+      tx.set(l.ref, { year, week, type: l.type, value: l.value, picksId: id, code, createdAt: serverTimestamp() }, { merge: true });
+    }
+    tx.set(doc(db, "picks", id), payload, { merge: true });
+  });
+} catch (e2) {
+  const msg = String((e2 && e2.message) || e2 || "");
+  if (msg === "DUPLICATE_LOCK") {
+    setMsg("this email/number/venmo is already associated with a submission, if you feel this was reached in error contact zslay@live.com");
+    return;
+  }
+  throw e2;
+}setMsg("Saved! Your edit code is " + nextCode + ". You can update any time before kickoff.");
+  };
+
+  async function loadByCode() {
+    setMsg("");
+    const c = (loadCode || "").trim();
+    const ln = (loadLastName || "").trim().toLowerCase();
+    if (!/^\d{6}$/.test(c) || ln.length === 0) {
+      setMsg("Enter your 6-digit code and last name."); return;
+    }
+    const id = year + "_W" + week + "_" + c;
+    try {
+      const ref = doc(db, "picks", id);
+      const snap = await getDoc(ref);
+      if (!snap.exists()) { setMsg("No picks found for that code."); return; }
+      const d = snap.data();
+      const storedLower = (d.lastNameLower || (d.lastName || "").toLowerCase().trim());
+      if (storedLower !== ln) { setMsg("Code and last name do not match."); return; }
+
+      setForm(f => ({
+        ...f,
+        firstName: d.firstName || "",
+        lastName: d.lastName || "",
+        phone: d.phone || "", venmo: d.venmo || ""
+      }));
+      setPicks(d.picks || {});
+        setTiebreaker(d.tiebreaker ? { gameId: d.tiebreaker.gameId || null, total: String(d.tiebreaker.total ?? "") } : { gameId: null, total: "" });
+      setCode(c);
+      setEditing(true);
+      setMsg("Loaded. Editing code " + c + ".");
+    } catch (e) {
+      const m = (e && e.message) ? String(e.message) : String(e);
+      setMsg("Load failed: " + m);
+    }
+  }
+    // Clear selected week if it has NO picks (safety guard)
+  const clearWeekIfNoPicks = async () => {
+    try {
+      const Y = Number(year), W = Number(week);
+      setMsg(`Checking picks for ${Y} / W${W}ï¿½`);
+
+      // Check both numeric-typed and string-typed year/week (defensive for any older docs)
+      const qNum = query(collection(db, "picks"), where("year","==", Y), where("week","==", W));
+      const sNum = await getDocs(qNum);
+      let pickCount = sNum.size;
+      if (pickCount === 0) {
+        const qStr = query(collection(db, "picks"), where("year","==", String(Y)), where("week","==", String(W)));
+        const sStr = await getDocs(qStr);
+        pickCount = sStr.size;
+      }
+      if (pickCount > 0) { setMsg(`Aborted: found ${pickCount} pick(s) for ${Y} / W${W}.`); return; }
+
+      // No picks -> remove all games and their results for this week
+      const qGames = query(collection(db, "games"), where("year","==", Y), where("week","==", W));
+      const gsSnap = await getDocs(qGames);
+      const gameIds = gsSnap.docs.map(d => d.id);
+
+      if (gsSnap.size === 0) { setMsg(`Nothing to delete for ${Y} / W${W}.`); return; }
+      if (!window.confirm(`Delete ${gsSnap.size} game(s) and ${gameIds.length} result(s) for ${Y} / W${W}? This will abort if any picks exist.`)) return;
+
+      const batch = writeBatch(db);
+      gsSnap.forEach(d => batch.delete(d.ref));
+      gameIds.forEach(id => batch.delete(doc(db, "results", id)));
+      await batch.commit();
+
+      // Refresh list + toast
+      const leftGames = (await getDocs(qGames)).size;
+      setGames(await listGames({ year: Y, week: W, includedOnly: false }));
+      setMsg(`Cleared ${Y} / W${W}. Deleted games: ${gsSnap.size} -> ${leftGames}. Results deleted: ${gameIds.length}.`);
+    } catch (err) {
+      console.error("clearWeekIfNoPicks failed:", err);
+      setMsg("Clear failed: " + (err && err.message ? err.message : String(err)));
+    }
+  };
+
+  return (<Container>
+<Header user={user} isAdmin={isAdmin} setPage={setPage} />
+      <Card style={{ background:"#121a2b" , position:"relative" }}>
+  <div style={{ position:"absolute", top:8, right:8, zIndex:2 }}>
+    <button onClick={()=>setShowRules(true)} type="button">Rules</button>
+  </div>
+<Row style={{ justifyContent: "space-between" }}>
+  <div style={{ margin:"20px 0 2px", lineHeight:1.25, textAlign:"center", padding:"20px 16px", width:"100%" , position:"relative", paddingBottom:0  }}>
+<div style={{ minHeight: 40 }}>
+  <div style={{ fontWeight:800, fontSize:30, textDecoration:"underline", opacity:(week==null?0:1), transition:"opacity 150ms ease" }}>
+    {week == null ? "" : ("Welcome to Week " + week + "!")}
+  </div>
+</div>
+    <div style={{ opacity:.85 }}>
+      Deadline to submit: {earliestGame ? kickoffLabel(earliestGame, { timeZone: "America/New_York" }) : "TBD"}
+    </div>
+    <div style={{ marginTop:10, display:"grid", rowGap: 0, justifyItems:"center", width:"100%", marginBottom: 0 }}>
+  <div style={{ display:"inline-flex", alignItems:"center", gap:6 }}>
+    <span style={{ opacity:.85, fontStyle:"italic", fontSize:13 }}>Already submitted for this week?</span>
+    <button onClick={()=>setShowLoad(v=>!v)} style={{ background:"transparent", border:"none", padding:0, height:"auto", width:"auto", fontSize:14, textDecoration:"underline", color:"inherit", cursor:"pointer" }}>Edit here</button>
+  </div>
+</div>
+    <div style={{ marginTop:8, display:"flex", gap:8, justifyContent:"center", flexWrap:"wrap" }}>
+      </div>
+  </div>
+          <div style={{ display:"flex", alignItems:"baseline", gap:12 }}></div>
+          
+        </Row>
+
+        {showLoad && (
+  <>
+    <Row style={{ marginBottom: 14, gap: 14, alignItems:"stretch" }}>
+      <div style={{ fontWeight:600, flexBasis:"100%" }}>Load by code</div>
+
+      <Field label="Code" style={{ justifyContent:"flex-end" }}>
+        <input
+          style={inputStyle}
+          name="loadCode"
+          value={loadCode}
+          onChange={e=>setLoadCode(e.target.value)}
+          maxLength={6}
+          inputMode="numeric"
+          pattern="[0-9]*"
+          placeholder="123456"
+        />
+      </Field>
+
+      <Field label="Last name" style={{ justifyContent:"flex-end" }}>
+        <input
+          style={inputStyle}
+          name="loadLastName"
+          value={loadLastName}
+          onChange={e=>setLoadLastName(e.target.value)}
+          placeholder="Smith"
+        />
+      </Field>
+
+      <button
+        type="button"
+        onClick={loadByCode} style={{top:-14, position:"relative", alignSelf:"flex-end",  padding:"8px 10px", fontSize:12, borderRadius:8, width:72, marginLeft:8}}
+      >
+        Load
+      </button>
+    </Row>
+
+    {editing && (
+      <div style={{marginBottom:8,fontSize:13,color:"#64748b"}}>
+        Editing mode ? code <b>{code}</b>
+        <button
+          type="button"
+          style={{marginLeft:8}}
+          onClick={()=>{
+            setEditing(false);
+            setCode("");
+            setLoadCode("");
+            setLoadLastName("");
+            setShowLoad(false);
+            setMsg("");
+          }}
+        >Clear</button>
+      </div>
+    )}
+  </>
+)}
+<LeaderboardPage user={user} isAdmin={isAdmin} setPage={setPage} /></>)}
+      {page === "admin" && <AdminPage user={user} isAdmin={isAdmin} setPage={setPage} />}
+      {page === "adminpicks" && <AdminPicksPage user={user} isAdmin={isAdmin} setPage={setPage} />}
+      {page === "confirm" && <ModalOverlay><ConfirmPage setPage={setPage} /></ModalOverlay>}
+      {page === "receipt" && <ModalOverlay><ReceiptPage setPage={setPage} /></ModalOverlay>}
+    </>
+  );
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/* ===== Admin: group games into date sections (ESPN-style) ===== */
+const _tzDefault = "America/New_York";
+
+const _maybeDate = (g) => {
+  try { if (typeof kickoffDate === "function") return kickoffDate(g); } catch {}
+  if (g?.kickoff?.seconds) return new Date(g.kickoff.seconds * 1000);
+  if (g?.kickoff?.toDate) return g.kickoff.toDate();
+  const cand = g?.kickoff ?? g?.start ?? g?.startTime ?? g?.start_time ?? g?.startDate ?? g?.start_date ?? g?.date ?? g?.startTimeStr;
+  return cand ? new Date(cand) : null;
+};
+
+const _kickoffLabel = (g, { timeZone = _tzDefault } = {}) => {
+  try { if (typeof kickoffLabel === "function") return kickoffLabel(g, { timeZone }); } catch {}
+  const d = _maybeDate(g);
+  if (!d || isNaN(+d)) return "TBD";
+  return new Intl.DateTimeFormat("en-US", {
+    weekday: "short", month: "short", day: "numeric",
+    hour: "numeric", minute: "2-digit", hour12: true, timeZone
+  }).format(d);
+};
+
+function _ymdKey(d, timeZone = _tzDefault) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone, year: "numeric", month: "2-digit", day: "2-digit"
+  }).formatToParts(d);
+  const yyyy = parts.find(p => p.type === "year")?.value;
+  const mm   = parts.find(p => p.type === "month")?.value;
+  const dd   = parts.find(p => p.type === "day")?.value;
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function groupGamesByDate(games = [], { timeZone = _tzDefault } = {}) {
+  const map = new Map();
+  for (const g of games) {
+    const d = kickoffDate(g);
+    if (!d || isNaN(+d)) continue;
+    const key = _ymdKey(d, timeZone);
+    const header = new Intl.DateTimeFormat("en-US", { timeZone, weekday: "long", month: "long", day: "numeric" }).format(d);
+    if (!map.has(key)) map.set(key, { key, header, items: [] });
+    map.get(key).items.push(g);
+  }
+  return [...map.values()].sort((a, b) => a.key.localeCompare(b.key));
+}
+
+// JSX renderer: call with your existing row renderer to keep current controls
+function renderGamesGroupedByDate(games, { timeZone = _tzDefault, renderRow } = {}) {
+  const groups = groupGamesByDate(games, { timeZone });
+groups.forEach(g => { if (Array.isArray(g.items)) g.items.sort((a,b)=>((a.orderDay ?? 1e9)-(b.orderDay ?? 1e9)) || ((a.order ?? 1e9)-(b.order ?? 1e9))); });
+groups.forEach(g => { if (Array.isArray(g.items)) g.items.sort((a,b)=>((a.orderDay ?? 1e9)-(b.orderDay ?? 1e9)) || ((a.order ?? 1e9)-(b.order ?? 1e9))); });
+
+  async function loadByCode() {
+    setMsg("");
+    const c = (loadCode || "").trim();
+    const ln = (loadLastName || "").trim().toLowerCase();
+    if (!/^\d{6}$/.test(c) || ln.length === 0) {
+      setMsg("Enter your 6-digit code and last name."); return;
+    }
+    const id = year + "_W" + week + "_" + c;
+    try {
+      const ref = doc(db, "picks", id);
+      const snap = await getDoc(ref);
+      if (!snap.exists()) { setMsg("No picks found for that code."); return; }
+      const d = snap.data();
+      const storedLower = (d.lastNameLower || (d.lastName || "").toLowerCase().trim());
+      if (storedLower !== ln) { setMsg("Code and last name do not match."); return; }
+
+      setForm(f => ({
+        ...f,
+        firstName: d.firstName || "",
+        lastName: d.lastName || "",
+        phone: d.phone || "", venmo: d.venmo || ""
+      }));
+      setPicks(d.picks || {});
+      setCode(c);
+      setEditing(true);
+      setMsg("Loaded. Editing code " + c + ".");
+    } catch (e) {
+      const m = (e && e.message) ? String(e.message) : String(e);
+      setMsg("Load failed: " + m);
+    }
+  }
+  return (
+    <div className="space-y-10">
+      {groups.map(grp => (
+        <section key={grp.key} style={{ marginBottom: 48 }}>
+          <div style={{ fontWeight: 600, fontSize: 18, marginBottom: 8 }}>{grp.header}</div>
+          <div className="space-y-2">
+            {grp.items
+              .sort((a,b)=>((a.orderDay ?? 1e9)-(b.orderDay ?? 1e9)) || ((a.order ?? 1e9)-(b.order ?? 1e9)))
+              .map((g, i) =>
+                renderRow
+                  ? renderRow(g, i, { timeZone, kickoffLabel: _kickoffLabel })
+                  : (
+                    <div key={g.id || i} className="rounded-2xl shadow p-3 flex items-center justify-between">
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        {/* Optional logos here */}
+                        <div>{g.away?.name ?? g.away}</div>
+                        <div>@</div>
+                        <div>{g.home?.name ?? g.home}</div>
+                      </div>
+                      <div style={{ opacity: 0.8 }}>{_kickoffLabel(g, { timeZone })}</div>
+                    </div>
+                  )
+              )}
+          </div>
+        </section>
+      ))}
+    </div>
+  );
+}
+/* ===== /group games by date ===== */
+
+
+/* === Admin: time-only label for grouped rows === */
+function timeLabelOnly(g, { timeZone = _tzDefault } = {}) {
+  const d = _maybeDate(g);
+  if (!d || isNaN(+d)) return "TBD";
+  return new Intl.DateTimeFormat("en-US", {
+    hour: "numeric", minute: "2-digit", hour12: true, timeZone
+  }).format(d);
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// restore Admin-SetGamedayBtn 2025-08-29T01:53:49
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  
+// === Doc ID helper: {year}_W{week}_{last2}-{hash8} ===
+// Only last 2 digits of the 6-digit code appear in the ID; hash prevents collisions.
+async function computePickDocId(year, week, code, lastNameLower) {
+  try {
+    const last2 = String(code).slice(-2);
+    const input = `${year}|${week}|${String(code)}|${String((lastNameLower||"")).toLowerCase()}`;
+    const enc = new TextEncoder().encode(input);
+    const buf = await crypto.subtle.digest("SHA-256", enc);
+    const hash8 = Array.from(new Uint8Array(buf).slice(0,4))
+      .map(b => b.toString(16).padStart(2,"0"))
+      .join("");
+    return `${year}_W${week}_${last2}-${hash8}`;
+  } catch (e) {
+    console.error("computePickDocId failed, falling back to legacy id:", e);
+    return `${year}_W${week}_${code}`; // safe fallback (legacy id)
+  }
+}
+
+
+
+
+
+
+
+//
+// ==== DEBUG HELPERS (temporary) ====
+if (typeof window !== "undefined") {
+  window._lbDebug = {
+    live: async () => {
+      try {
+        const s = await getDoc(doc(db, "config", "live"));
+        console.log("[_lbDebug.live]", s.exists() ? s.data() : null);
+        return s.exists() ? s.data() : null;
+      } catch (e) { console.error(e); return null; }
+    },
+    games: async (Y, W) => {
+      try {
+        const g = await listGames({ year: Y, week: W, includedOnly: true });
+        console.table(g.map(x => ({ id: x.id, away: x.away, home: x.home, included: x.included })));
+        return g;
+      } catch (e) { console.error(e); return []; }
+    },
+    results: async (ids) => {
+      try {
+        const r = await getResultsMap(ids);
+        console.log("[_lbDebug.results]", r);
+        return r;
+      } catch (e) { console.error(e); return {}; }
+    },
+  };
+  console.log("%c_lbDebug ready. Try: await _lbDebug.live()", "font-weight:bold");
+}
+if (typeof window !== "undefined" && window._lbDebug) {
+  window._lbDebug.picks = async (Y, W) => {
+    try {
+      const P = await loadPicks(Y, W);
+      console.log("[_lbDebug.picks]", P);
+      return P;
+    } catch (e) { console.error(e); return []; }
+  };
+  window._lbDebug.score = (p, G, R) =>
+    G.reduce((acc, g) => {
+      const pick = p.picks?.[g.id];
+      const win  = R[g.id]?.winner;
+      return acc + (pick && win && pick === win ? 1 : 0);
+    }, 0);
+}
+if (typeof window !== "undefined" && window._lbDebug) {
+  // Self-contained picks fetch (no dependency on loadPicks)
+  window._lbDebug.picks = async (Y, W) => {
+    try {
+      const picksCol = collection(db, "picks");
+      const qy = query(picksCol, where("year","==",Y), where("week","==",W));
+      const s = await getDocs(qy);
+      const arr = [];
+      s.forEach(d => arr.push({ id: d.id, ...d.data() }));
+      console.log("[_lbDebug.picks]", arr);
+      return arr;
+    } catch (e) { console.error(e); return []; }
+  };
+  window._lbDebug.score = (p, G, R) =>
+    G.reduce((acc, g) => {
+      const pick = p.picks?.[g.id];
+      const win  = R[g.id]?.winner;
+      return acc + (pick && win && pick === win ? 1 : 0);
+    }, 0);
+}
+if (typeof window !== "undefined" && window._lbDebug) {
+  window._lbDebug.setWinner = async (gid, side) => {
+    try {
+      const gs = await getDoc(doc(db, "games", gid));
+      if (!gs.exists()) throw new Error("No game: " + gid);
+      const g = { id: gid, ...gs.data() };
+      const val = String(side).trim().toLowerCase();
+      let w = null;
+      if (val === "home" || val === g.home.toLowerCase()) w = g.home;
+      else if (val === "away" || val === g.away.toLowerCase()) w = g.away;
+      else throw new Error('Use "home" or "away" (or exact team name)');
+      await setDoc(doc(db, "results", gid), { winner: w, updatedAt: serverTimestamp() }, { merge: true });
+      console.log("setWinner OK:", gid, "?", w);
+      return { gid, winner: w };
+    } catch (e) { console.error("setWinner ERR:", e); return null; }
+  };
+}
+
+if (typeof window !== "undefined") {
+  window._lbDebug = window._lbDebug || {};
+  window._lbDebug.auth = {
+    signIn: async () => {
+      const auth = getAuth();
+      const prov = new GoogleAuthProvider();
+      const res = await signInWithPopup(auth, prov);
+      console.log("[auth] signed in:", res.user.uid, res.user.email);
+      return res.user;
+    },
+    signOut: () => signOut(getAuth()),
+    me: () => {
+      const u = getAuth().currentUser;
+      const who = u ? { uid: u.uid, email: u.email } : null;
+      console.log("[auth] me:", who);
+      return who;
+    },
+  };
+  console.log("_lbDebug.auth ready ? try: await _lbDebug.auth.signIn()");
+}
+
+/* ==== Minimal auth helpers (use ./firebase wrappers) ==== */
+if (typeof window !== "undefined") {
+  // Trigger Google popup (same as Headerï¿½s ï¿½Admin Loginï¿½)
+  window._signin = () => googleLogin();
+  window._signout = () => logout();
+
+  // Keep a live copy of the current user; _whoami() returns { uid, email } or null
+  window._whoami = (() => {
+    let last = null;
+    try {
+      onAuth(u => {
+        last = u || null;
+        if (u) console.log("[auth] signed in:", u.uid, (u.email || "").toLowerCase());
+        else console.log("[auth] signed out");
+      });
+    } catch (_) {}
+    return () => (last ? { uid: last.uid, email: (last.email || "").toLowerCase() } : null);
+  })();
+
+  console.log("_signin/_whoami ready ? click 'Admin Login' in the header, then run _whoami()");
+}
+/* ==== end auth helpers ==== */
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/* === LIVE DEMO GENERATOR (fixture JSON) — appended === */
+async function makeLiveDemoFromGames(games = [], opts = {}) {
+  try {
+    const seed = (opts.seed ?? Date.now()) % 1000;
+    let x = (seed || 1) >>> 0;
+    const rnd = () => { x ^= x<<13; x ^= x>>>17; x ^= x<<5; return ((x>>>0)/0xffffffff); };
+
+    const scenarios = [
+      { status: "scheduled",    period: 0, clock: "",       style: "none"  },
+      { status: "in_progress",  period: 1, clock: "12:34",  style: "low"   },
+      { status: "halftime",     period: 2, clock: "",       style: "mid"   },
+      { status: "in_progress",  period: 3, clock: "06:21",  style: "mid"   },
+      { status: "in_progress",  period: 4, clock: "02:03",  style: "high"  },
+      { status: "final",        period: 4, clock: "",       style: "final" },
+      { status: "final",        period: 5, clock: "",       style: "ot"    }, // FINAL/OT
+    ];
+    const pickStyle = () => scenarios[Math.floor(rnd() * scenarios.length)];
+
+    const mkScore = (style) => {
+      if (style === "none")  return [0, 0];
+      if (style === "low")   return [Math.floor(rnd()*7), Math.floor(rnd()*7)];
+      if (style === "mid")   return [7 + Math.floor(rnd()*14), 7 + Math.floor(rnd()*14)];
+      if (style === "high")  return [20 + Math.floor(rnd()*21), 17 + Math.floor(rnd()*21)];
+      if (style === "final") { let a = 10 + Math.floor(rnd()*31), h = 10 + Math.floor(rnd()*31); if (a === h) a += 3; return [a, h]; }
+      if (style === "ot")    { let a = 24 + Math.floor(rnd()*24), h = 24 + Math.floor(rnd()*24); if (a === h) a += (rnd()<0.5?2:3); return [a, h]; }
+      return [0, 0];
+    };
+
+    const demo = (Array.isArray(games) ? games : []).slice(0, 24).map((g, i) => {
+      const awayTeam = String(g?.away || g?.awayTeam || "");
+      const homeTeam = String(g?.home || g?.homeTeam || "");
+      const sc = pickStyle();
+      const [awayPoints, homePoints] = mkScore(sc.style);
+      const possession = (sc.status === "in_progress" && rnd() < 0.5) ? (rnd() < 0.5 ? "away" : "home") : null;
+
+      const awayRank = Number.isFinite(+g?.awayRank) ? +g.awayRank : null;
+      const homeRank = Number.isFinite(+g?.homeRank) ? +g.homeRank : null;
+
+      const kickDate = new Date(Date.now() + (i * 35 * 60 * 1000));
+      const kickoffLabel = new Intl.DateTimeFormat("en-US", {
+        weekday: "short", month: "short", day: "numeric",
+        hour: "numeric", minute: "2-digit", hour12: true, timeZone: "America/New_York"
+      }).format(kickDate);
+
+      return { awayTeam, homeTeam, awayRank, homeRank, status: sc.status, period: sc.period, clock: sc.clock, awayPoints, homePoints, possession, kickoffLabel };
+    });
+
+    const json = JSON.stringify(demo, null, 2);
+
+    // Clipboard (best effort)
+    try { await navigator.clipboard.writeText(json); console.info("[demo] JSON copied to clipboard"); } catch {}
+
+    // Download as fallback
+    try {
+      const blob = new Blob([json], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a"); a.href = url; a.download = "scoreboard-demo.json";
+      document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 3000);
+    } catch {}
+
+    window.__DEMO_FIXTURE__ = demo;
+    alert("Demo created:\n\n1) File downloaded and JSON copied.\n2) Replace /public/dev/scoreboard-demo.json with it.\n3) Toggle Fixture: ON to preview.");
+  } catch (e) {
+    console.error("makeLiveDemoFromGames failed", e);
+    alert("Failed to build demo: " + (e?.message || e));
+  }
+}
+/* === end LIVE DEMO GENERATOR === */
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/* === DEV: load + merge Firestore results (week doc + legacy per-game) === */
+if (typeof window !== "undefined") {
+  window._loadResults = async function() {
+    try {
+      // uses already-imported Firestore symbols in App.jsx (db, getDoc, getDocs, doc, collection)
+      const appSnap = await getDoc(doc(db, "config", "app"));
+      const app = appSnap.exists() ? appSnap.data() : {};
+      const year = app?.currentYear;
+      const week = app?.currentWeek;
+      if (!year || !week) { console.warn("[fs results] missing currentYear/currentWeek"); return null; }
+
+      const normalizeKey = (name) => {
+        if (!name) return "";
+        let s = String(name).toLowerCase();
+        s = s.replace(/\ba\s*&\s*m\b|\ba\s*and\s*m\b/gi, "a&m");
+        s = s.normalize("NFKD").replace(/[\u0300-\u036f]/g,"").replace(/[^a-z0-9]/g,"");
+        if (s === "texasam" || s === "texasa&m") s = "texasam";
+        return s;
+      };
+      const gid = (home, away) => normalizeKey(away) + "__" + normalizeKey(home);
+
+      // 1) New format: results/{year}_W{week}.games
+      const weekId = year + "_W" + week;
+      const weekSnap = await getDoc(doc(db, "results", weekId));
+      const merged = {};
+      if (weekSnap.exists()) {
+        const data = weekSnap.data() || {};
+        const games = data.games || {};
+        for (const [k, v] of Object.entries(games)) {
+          merged[k] = { ...v, source: "weekdoc" };
+        }
+      }
+
+      // 2) Legacy per-game docs: results/{year}_W{week}_<Home>_at_<Away>
+      const all = await getDocs(collection(db, "results"));
+      const prefix = year + "_W" + week + "_";
+      all.forEach((d) => {
+        const id = d.id || "";
+        if (!id.startsWith(prefix)) return;
+        const r = d.data() || {};
+        // derive teams from fields or doc id
+        const byIdHome = id.split("_at_")[0]?.replace(prefix, "").replace(/_/g," ") || "";
+        const byIdAway = id.split("_at_")[1]?.replace(/_/g," ") || "";
+        const home = r.home || r.homeTeam || r.home_team || byIdHome;
+        const away = r.away || r.awayTeam || r.away_team || byIdAway;
+        const hp = (r.homePoints ?? r.home_points ?? r.homeScore ?? null);
+        const ap = (r.awayPoints ?? r.away_points ?? r.awayScore ?? null);
+        let winner = r.winner || null;
+        if (winner == null && hp != null && ap != null) {
+          winner = (+hp > +ap) ? normalizeKey(home) : ((+ap > +hp) ? normalizeKey(away) : "tie");
+        }
+        const key = gid(home, away);
+        merged[key] = {
+          ...(merged[key] || {}),
+          winner,
+          homePoints: (hp != null ? +hp : null),
+          awayPoints: (ap != null ? +ap : null),
+          status: r.status ?? null,
+          period: r.period ?? null,
+          source: (merged[key]?.source ? (merged[key].source + "+legacy") : "legacy"),
+          finalizedAt: merged[key]?.finalizedAt || r.finalizedAt || null
+        };
+      });
+
+      window.__FS_RESULTS = merged;
+      console.info("[fs results] merged", { weekId, count: Object.keys(merged).length, keys: Object.keys(merged).slice(0,6) });
+      return merged;
+    } catch (e) {
+      console.error("[_loadResults] failed", e);
+      return null;
+    }
+  };
+}
+
+
+
+
+/* === Bridge: copy winners from results/{year}_W{week}.games -> results/{gameId} (per-game) with backup === */
+async function copyWinnersFromWeekToPerGame() {
+  try {
+    const appSnap = await getDoc(doc(db, "config", "app"));
+    const app = appSnap.exists() ? appSnap.data() : {};
+    const y = app?.currentYear;
+    const w = app?.currentWeek;
+    if (!y || !w) { alert("currentYear/currentWeek missing (config/app)."); return; }
+
+    const normalizeKey = (name) => {
+      if (!name) return "";
+      let s = String(name).toLowerCase();
+      s = s.replace(/\ba\s*&\s*m\b|\ba\s*and\s*m\b/gi, "a&m");
+      s = s.normalize("NFKD").replace(/[\u0300-\u036f]/g,"").replace(/[^a-z0-9]/g,"");
+      if (s === "texasam" || s === "texasa&m") s = "texasam";
+      return s;
+    };
+    const keyFrom = (home, away) => `${normalizeKey(away)}__${normalizeKey(home)}`;
+
+    const weekId = `${y}_W${w}`;
+    const weekSnap = await getDoc(doc(db, "results", weekId));
+    if (!weekSnap.exists()) { alert(`No week results found at results/${weekId}. Run "Write Winners (CFBD)" first.`); return; }
+    const gamesMap = (weekSnap.data() || {}).games || {};
+    const haveKeys = Object.keys(gamesMap);
+    if (haveKeys.length === 0) { alert("Week results has no games map."); return; }
+
+    const qGames = query(collection(db, "games"), where("year","==", Number(y)), where("week","==", Number(w)));
+    const gsSnap = await getDocs(qGames);
+    if (gsSnap.size === 0) { alert(`No games found for ${y}/W${w}.`); return; }
+    const byGameId = {};
+    gsSnap.forEach(d => {
+      const g = d.data() || {};
+      byGameId[d.id] = { id: d.id, home: g.home || g.homeTeam || "", away: g.away || g.awayTeam || "" };
+    });
+
+    const perGameIds = Object.keys(byGameId);
+    const backup = {};
+    for (const gid of perGameIds) {
+      const rs = await getDoc(doc(db, "results", gid));
+      if (rs.exists()) backup[gid] = rs.data();
+    }
+
+    const backupId = `${y}_W${w}_` + Date.now();
+    await setDoc(doc(db, "results_backups", backupId), {
+      id: backupId, year: y, week: w, createdAt: serverTimestamp(), perGame: backup
+    }, { merge: true });
+
+    const batch = writeBatch(db);
+    let writes = 0, skips = 0;
+    for (const gid of perGameIds) {
+      const { home, away } = byGameId[gid];
+      if (!home || !away) { skips++; continue; }
+      const k = keyFrom(home, away);
+      const r = gamesMap[k];
+      if (!r || !r.winner || r.winner === "tie") { skips++; continue; }
+
+      batch.set(doc(db, "results", gid), {
+        id: gid, year: y, week: w, home, away,
+        winner: r.winner,
+        homePoints: (Number.isFinite(+r.homePoints) ? +r.homePoints : null),
+        awayPoints: (Number.isFinite(+r.awayPoints) ? +r.awayPoints : null),
+        status: r.status || (r.winner ? "final" : null),
+        period: (typeof r.period === "number" ? r.period : null),
+        source: (r.source ? (String(r.source) + "+bridge") : "bridge"),
+        updatedAt: serverTimestamp(),
+        finalizedAt: r.finalizedAt || null
+      }, { merge: true });
+      writes++;
+    }
+
+    if (writes === 0) {
+      alert(`Nothing to write. (Matched ${perGameIds.length} game(s), ${skips} skipped.)`);
+      return;
+    }
+
+    await batch.commit();
+    alert(`Applied winners to per-game results.\n\nWeek ${w}, ${y}\nWrote: ${writes}\nSkipped: ${skips}\nBackup: results_backups/${backupId}`);
+  } catch (err) {
+    console.error("[Bridge: copyWinnersFromWeekToPerGame] failed", err);
+    alert("Bridge failed: " + (err?.message || String(err)));
+  }
+}
+/* === end bridge === */
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

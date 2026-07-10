@@ -1,0 +1,62 @@
+# Node / Vite
+node_modules/
+dist/
+.vite/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Firebase
+.firebase/
+.firebasehosting.*
+.firebaserc.local
+
+# Env files (keep keys local)
+.env
+.env.local
+.env.*
+!.env.example
+
+# Build artifacts
+coverage/
+*.tsbuildinfo
+# Local backups & large archives
+backup/
+*.zip
+*.7z
+*.rar
+# --- repo hygiene (added 2025-09-30) ---
+# Local trash & backups
+_Trash_*/
+backup/
+backups/
+
+# Editor/backup artifacts
+*.bak
+*.old
+*.orig
+*.tmp
+*~
+*.swp
+*.swo
+
+# Logs & archives
+*.log
+*.zip
+*.7z
+*.rar
+
+# Source maps (we don't need to version them)
+*.map
+
+# Accidental broken-source snapshots
+*.broken-*.jsx
+*.broken-*.js

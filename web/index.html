@@ -1,0 +1,48 @@
+
+<!doctype html>
+<html>
+  <head>
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon.png?v=20250904003521">
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CFB Pick'em</title>
+    <style>
+      :root { --bg:#0b1220; --card:#121a2b; --text:#eef2ff; --muted:#9aa4c7; --accent:#6aa2ff; --border:#1f2a44; }
+      * { box-sizing: border-box; font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+      body { margin:0; background:var(--bg); color:var(--text); }
+      a { color: var(--accent); text-decoration: none; }
+      .container { max-width: 960px; margin: 0 auto; padding: 24px; }
+      .header { display:flex; align-items:center; justify-content:space-between; margin-bottom:16px; }
+      .header h1 { font-size: 20px; margin:0; }
+      nav a { margin-left: 16px; }
+      .card { background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 16px; box-shadow: 0 10px 24px rgba(0,0,0,.25); }
+      .row { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+      .between { justify-content: space-between; }
+      .end { justify-content: flex-end; }
+      label { display:flex; flex-direction:column; font-size: 14px; gap:6px; }
+      input[type="text"], input[type="email"], input[type="number"], input[type="tel"] { background:#0c1426; color:#fff; border:1px solid var(--border); padding:10px 12px; border-radius: 10px; }
+      button { background: var(--accent); color:#07152b; border:0; padding:10px 14px; border-radius: 10px; font-weight: 600; cursor:pointer; }
+      button:disabled { opacity:.6; cursor:not-allowed; }
+      .game { border:1px dashed var(--border); padding:12px; border-radius:12px; margin:10px 0; }
+      .muted { color: var(--muted); font-size: 13px; }
+      .table-wrap { overflow:auto; }
+      table { width:100%; border-collapse: collapse; }
+      th, td { border-bottom:1px solid var(--border); padding:8px 10px; text-align:left; }
+      thead th { position: sticky; top: 0; background: #0e1830; }
+    </style>
+    <script>document.title = "CFB Pick'em";</script>
+
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
+
+
+
+
+
+
+
+
+

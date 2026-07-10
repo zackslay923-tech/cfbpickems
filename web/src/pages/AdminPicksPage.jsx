@@ -1,0 +1,272 @@
+/* eslint-disable no-console */
+// src/lib/useScoreboard.js — clean v10
+// Polls CFBD /scoreboard (or a fixture) and returns:
+//   { map, lastUpdatedEt, isPaused, refresh }
+// Map is keyed by "away__home" and each value is:
+//   { status, period, clock, homePoints, awayPoints, possession, startTime }
+
+import { useEffect, useMemo, useRef, useState } from "react";
+
+const DEV = typeof import.meta !== "undefined" && import.meta.env && import.meta.env.DEV;
+
+// ---------- helpers ----------
+function toLabel(t) {
+  if (t == null) return "";
+  if (typeof t === "string") return t;
+  if (typeof t === "object") {
+    return (
+      t.school || t.name || t.displayName || t.team ||
+      (t.id ? String(t.id) : String(t))
+    );
+  }
+  return String(t);
+}
+
+function normStr(s) {
+  return String(s)
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]/g, "");
+}
+
+export function matchupKeys(away, home) {
+  const a = normStr(toLabel(away));
+  const h = normStr(toLabel(home));
+  return [a + "__" + h, h + "__" + a];
+}
+
+function toNum(v) {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+// ---------- map builder ----------
+function itemsToMap(items) {
+  const map = new Map();
+  const len = Array.isArray(items) ? items.length : 0;
+
+  for (let i = 0; i < len; i++) {
+    const it = items[i];
+
+    // Prefer nested team names when available
+    const awayName =
+      (it?.awayTeam?.name ?? it?.awayTeam?.school ?? it?.awayTeam?.displayName) ??
+      it?.away ?? it?.away_team ??
+      it?.teams?.away ?? it?.teams?.visitor ?? "";
+
+    const homeName =
+      (it?.homeTeam?.name ?? it?.homeTeam?.school ?? it?.homeTeam?.displayName) ??
+      it?.home ?? it?.home_team ??
+      it?.teams?.home ?? it?.teams?.homeTeam ?? "";
+
+    // Status / period / clock
+    const statusVal =
+      it?.status ??
+      it?.gameStatus ??
+      (it?.final === true ? "final" : (it?.inProgress ? "in_progress" : null));
+
+    const periodRaw =
+      (typeof it?.period !== "undefined" ? it.period :
+       (typeof it?.quarter !== "undefined" ? it.quarter : null));
+
+    const clockRaw = it?.clock ?? it?.timeRemaining ?? it?.time ?? null;
+    let clockVal = clockRaw;
+    // cosmetic HALF when Q2 00:00
+    if (toNum(periodRaw) === 2 && clockRaw && /^0+:?0{2}$/.test(String(clockRaw))) {
+      clockVal = "HALF";
+    }
+
+    // Points: prefer nested .*.points; use nullish coalescing so 0 stays 0
+    const homePts = toNum(
+      (it?.homeTeam?.points ?? it?.homeTeam?.score ??
+       it?.homePoints       ?? it?.home_points     ?? it?.homeScore ??
+       it?.home?.points     ?? it?.home?.score     ?? null)
+    );
+
+    const awayPts = toNum(
+      (it?.awayTeam?.points ?? it?.awayTeam?.score ??
+       it?.awayPoints       ?? it?.away_points     ?? it?.awayScore ??
+       it?.away?.points     ?? it?.away?.score     ?? null)
+    );
+
+    // Possession (string "home"/"away" if available)
+    const possession =
+      (it?.possession === "home" || it?.possession === "away")
+        ? it.possession
+        : (it?.possessionTeamId ?? null);
+
+    // Kick time
+    const startTime =
+      (it?.start ?? it?.startTime ?? it?.start_time ??
+       it?.startDate ?? it?.start_date ?? it?.kickoff ?? null);
+
+    const live = {
+      status: statusVal,
+      period: toNum(periodRaw),
+      clock: clockVal,
+      homePoints: homePts,
+      awayPoints: awayPts,
+      possession,
+      startTime
+    };
+
+    const keys = matchupKeys(awayName, homeName);
+    for (let j = 0; j < keys.length; j++) map.set(keys[j], live);
+  }
+
+  return map;
+}
+
+// ---------- sources ----------
+async function fetchFixture(path) {
+  const res = await fetch(path, { cache: "no-store" });
+  if (!res.ok) throw new Error("fixture " + res.status);
+  const json = await res.json();
+  const list = Array.isArray(json) ? json : (json.items || json.games || []);
+  return itemsToMap(list);
+}
+
+export async function fetchCfbdScoreboard(opts) {
+  const token = opts && (opts.token || opts.cfbdToken);
+  if (!token) throw new Error("Missing CFBD token");
+
+  const params = Object.assign(
+    { groups: 80, seasonType: "regular" },
+    (opts && (opts.params || opts.cfbdParams)) || {}
+  );
+
+  const qs = new URLSearchParams();
+  Object.keys(params).forEach((k) => {
+    const v = params[k];
+    if (v === undefined || v === null || v === "") return;
+    qs.set(k, String(v));
+  });
+
+  let url = "https://api.collegefootballdata.com/scoreboard";
+  const q = qs.toString();
+  if (q) url += "?" + q;
+
+  const res = await fetch(url, {
+    headers: { Authorization: "Bearer " + token, Accept: "application/json" },
+    cache: "no-store"
+  });
+  if (!res.ok) throw new Error("cfbd " + res.status);
+  const json = await res.json();
+
+  const list = Array.isArray(json) ? json : (json.games || []);
+  return itemsToMap(list);
+}
+
+async function fetchCfbdMap(opts) {
+  return fetchCfbdScoreboard(opts || {});
+}
+
+// ---------- main hook ----------
+export default function useScoreboard(options) {
+  const source          = (options && options.source) || "none";
+  const fixturePath     = (options && options.fixturePath) || "/fixtures/scoreboard.json";
+  const intervalSec     = (options && typeof options.intervalSec !== "undefined") ? options.intervalSec : 60;
+  const pauseWhenHidden = (options && typeof options.pauseWhenHidden !== "undefined") ? options.pauseWhenHidden : true;
+  const token           = (options && (options.token || options.cfbdToken)) || null;
+  const cfbdParams      = (options && options.cfbdParams) || null;
+
+  const [map, setMap]               = useState(new Map());
+  const [lastUpdatedEt, setLastUpdatedEt] = useState(null);
+  const [isPaused, setIsPaused]     = useState(false);
+  const refreshRef                  = useRef(null);
+
+  const fetcher = useMemo(() => {
+    if (source === "fixture") {
+      return async () => fetchFixture(fixturePath);
+    }
+    if (source === "cfbd") {
+      return async () => fetchCfbdMap({ token, cfbdParams });
+    }
+    return async () => new Map();
+  }, [source, fixturePath, token, cfbdParams]);
+
+  // expose refresh
+  useEffect(() => {
+    refreshRef.current = async () => {
+      try {
+        const nextMap = await fetcher();
+        setMap(nextMap);
+
+        if (DEV && typeof localStorage !== "undefined" && localStorage.getItem("sbVerbose") === "1") {
+          const keys = Array.from(nextMap.keys());
+          if (typeof window !== "undefined") {
+            window.__SB_KEYS = keys;
+            window.__SB_MAP  = nextMap;
+          }
+          console.debug("[useScoreboard] exported debug keys:", keys.length);
+        }
+
+        // timestamp in ET
+        const now = new Date();
+        const fmt = new Intl.DateTimeFormat("en-US", {
+          hour: "numeric",
+          minute: "2-digit",
+          second: "2-digit",
+          timeZone: "America/New_York"
+        });
+        setLastUpdatedEt(fmt.format(now));
+      } catch (err) {
+        if (DEV) console.warn("[useScoreboard] refresh error:", err && err.message);
+      }
+    };
+  }, [fetcher]);
+
+  // polling (leading edge + interval)
+  useEffect(() => {
+    if (source === "none") return;
+    if (source === "cfbd" && !token) { try { setIsPaused(true); } catch {} return; }
+
+    let active = true;
+    let timer = null;
+
+    async function tick() {
+      if (!active) return;
+      try {
+        if (refreshRef.current) await refreshRef.current();
+        setIsPaused(false);
+      } catch (e) {
+        if (DEV) console.warn("[useScoreboard] tick error:", e?.message || e);
+      } finally {
+        if (!active) return;
+        const ms = Math.max(30, Number(intervalSec || 60)) * 1000;
+        timer = setTimeout(tick, ms);
+      }
+    }
+
+    // Leading edge
+    tick();
+
+    return () => {
+      active = false;
+      if (timer) { try { clearTimeout(timer); } catch {} }
+    };
+  }, [source, token, intervalSec, pauseWhenHidden, fetcher]);
+
+  // pause indicator when hidden (optional)
+  useEffect(() => {
+    if (!pauseWhenHidden) return;
+    function onVis() {
+      try { setIsPaused(document.visibilityState === "hidden"); } catch {}
+    }
+    document.addEventListener("visibilitychange", onVis);
+    onVis();
+    return () => { document.removeEventListener("visibilitychange", onVis); };
+  }, [pauseWhenHidden]);
+
+  return {
+    map,
+    lastUpdatedEt,
+    isPaused,
+    refresh: useMemo(() => {
+      return async () => { if (refreshRef.current) await refreshRef.current(); };
+    }, [])
+  };
+}
+

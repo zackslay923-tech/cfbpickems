@@ -1,0 +1,33 @@
+/* Picks: breathing room under First/Last name fields */
+input[name*="first" i], input[name*="last" i],
+input[placeholder*="first" i], input[placeholder*="last" i] { margin-bottom: 12px; }
+/* === Leaderboard scrollbar theme === */
+#lbTopScroll, #lbGrid {
+  scrollbar-width: thin;                  /* Firefox */
+  scrollbar-color: #2b3a63 #0a1226;       /* thumb track */
+}
+
+/* WebKit browsers */
+#lbTopScroll::-webkit-scrollbar,
+#lbGrid::-webkit-scrollbar {
+  height: 10px;                           /* matches our slim top bar */
+}
+
+#lbTopScroll::-webkit-scrollbar-track,
+#lbGrid::-webkit-scrollbar-track {
+  background: #0a1226;                    /* near table bg */
+  border: 1px solid #1f2a44;              /* matches table border */
+  border-radius: 12px;
+}
+
+#lbTopScroll::-webkit-scrollbar-thumb,
+#lbGrid::-webkit-scrollbar-thumb {
+  background: #233053;                    /* thumb color */
+  border: 1px solid #2f3d64;              /* subtle edge */
+  border-radius: 12px;
+}
+
+#lbTopScroll::-webkit-scrollbar-thumb:hover,
+#lbGrid::-webkit-scrollbar-thumb:hover {
+  background: #2b3a63;
+}

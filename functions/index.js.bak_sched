@@ -1,0 +1,175 @@
+import admin from "firebase-admin";
+import * as logger from "firebase-functions/logger";
+import { onSchedule } from "firebase-functions/v2/scheduler";
+import { initializeApp, getApps, cert } from "firebase-admin/app";
+import { getFirestore } from "firebase-admin/firestore";
+import { onRequest } from "firebase-functions/v2/https";
+import fetch from "node-fetch";
+
+if (getApps().length === 0) {
+  initializeApp(); // uses default service account in Firebase project
+}
+
+const db = getFirestore();
+
+export const cfbdScoreboard = onRequest(
+  { cors: true, region: "us-central1" },
+  async (req, res) => {
+    try {
+      const { year, week, seasonType = "regular", division = "fbs", date } = req.query;
+
+      // 1) Read CFBD token from Firestore (server-side, safe)
+      const snap = await db.doc("config/cfbd").get();
+      const token = snap.exists ? (snap.data().apiKey || snap.data().key || snap.data().token || snap.data().cfbdKey) : null;
+      if (!token) {
+        res.status(500).json({ error: "CFBD token missing in config/cfbd" });
+        return;
+      }
+
+      // 2) Build CFBD URL (support week or date; prefer week when present)
+      let url;
+      if (year && week) {
+        const qs = new URLSearchParams({
+          year: String(year),
+          week: String(week),
+          seasonType: String(seasonType || "regular"),
+          division: String(division || "fbs")
+        });
+        url = `https://api.collegefootballdata.com/games?${qs}`;
+      } else if (date) {
+        const qs = new URLSearchParams({
+          groups: "80",
+          year: String(year || ""),
+          seasonType: String(seasonType || "regular"),
+          date: String(date)
+        });
+        url = `https://api.collegefootballdata.com/scoreboard?${qs}`;
+      } else {
+        res.status(400).json({ error: "Missing year/week or date" });
+        return;
+      }
+
+      // 3) Fetch from CFBD
+      const cf = await fetch(url, {
+        headers: { Authorization: `Bearer ${token}`, Accept: "application/json" }
+      });
+      const text = await cf.text();
+      if (!cf.ok) {
+        res.status(cf.status).send(text || `CFBD HTTP ${cf.status}`);
+        return;
+      }
+
+      // 4) Pass through JSON
+      res.setHeader("Cache-Control", "no-store");
+      res.type("application/json").send(text);
+    } catch (err) {
+      res.status(500).json({ error: String(err && err.message || err) });
+    }
+  }
+);
+/**
+ * Scheduled publisher: fetch CFBD using the private token and publish a tokenless snapshot
+ * to Firestore at config/liveMap every minute. Viewers (logged out) just read this doc.
+ */
+export const publishLiveScores = onSchedule(
+  { schedule: "every 1 minutes", timeZone: "America/New_York", retryCount: 0 },
+  async () => {
+    const db = admin.firestore();
+
+    // Helpers (scoped here to avoid conflicts)
+    const norm = (label = "") =>
+      label.toString().normalize("NFKD").replace(/[\u0300-\u036f]/g, "")
+           .toLowerCase().replace(/[^a-z0-9]/g, "");
+
+    const toPublicItem = (g) => {
+      const homeName = g.home_team ?? g.homeTeam ?? g.home ?? "";
+      const awayName = g.away_team ?? g.awayTeam ?? g.away ?? "";
+      const hk = norm(homeName), ak = norm(awayName);
+
+      const status = g.status ?? g.Notes ?? g.game_status ?? null;
+      const period = Number.isFinite(+g.period) ? +g.period
+                   : Number.isFinite(+g.current_period) ? +g.current_period
+                   : null;
+      const clock  = typeof g.clock === "string" ? g.clock
+                   : typeof g.time_remaining === "string" ? g.time_remaining
+                   : null;
+
+      const homePoints = Number.isFinite(+g.home_points) ? +g.home_points
+                        : Number.isFinite(+g.home_score) ? +g.home_score
+                        : Number.isFinite(+g.home_points_total) ? +g.home_points_total
+                        : null;
+
+      const awayPoints = Number.isFinite(+g.away_points) ? +g.away_points
+                        : Number.isFinite(+g.away_score) ? +g.away_score
+                        : Number.isFinite(+g.away_points_total) ? +g.away_points_total
+                        : null;
+
+      const poss = (g.possession ?? g.pos_team ?? g.possession_text ?? "").toString().toLowerCase();
+      const possession = poss.includes("home") ? "home" : poss.includes("away") ? "away" : null;
+
+      return {
+        key: (ak && hk) ? `${ak}__${hk}` : undefined, // away__home
+        awayTeam: awayName || null,
+        homeTeam: homeName || null,
+        status, period, clock, awayPoints, homePoints, possession,
+        startTime: g.start ?? g.start_time ?? g.kickoff ?? g.startDate ?? null,
+      };
+    };
+
+    const fetchCfbdScores = async () => {
+      // Read private token from Firestore (Admin SDK ignores client rules)
+      const cfbdSnap = await db.doc("config/cfbd").get();
+      const token = cfbdSnap.exists ? (cfbdSnap.get("token") || cfbdSnap.get("apiKey") || null) : null;
+      if (!token) throw new Error("CFBD token not found in config/cfbd");
+
+      // Pull optional year/week context from config/app
+      let year = null, week = null, seasonType = "regular";
+      try {
+        const appSnap = await db.doc("config/app").get();
+        if (appSnap.exists) {
+          const sb = appSnap.get("scoreboard") || {};
+          year = appSnap.get("year") ?? sb.year ?? null;
+          week = appSnap.get("week") ?? sb.week ?? null;
+          seasonType = appSnap.get("seasonType") ?? "regular";
+        }
+      } catch {}
+
+      const base = "https://api.collegefootballdata.com";
+      const url = (year && week)
+        ? `${base}/scoreboard?year=${encodeURIComponent(year)}&week=${encodeURIComponent(week)}&seasonType=${encodeURIComponent(seasonType)}`
+        : `${base}/scoreboard`;
+
+      const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+      if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        throw new Error(`CFBD fetch failed: ${res.status} ${res.statusText} ${body.slice(0, 256)}`);
+      }
+      const data = await res.json();
+      return Array.isArray(data) ? data : Array.isArray(data?.games) ? data.games : [];
+    };
+
+    try {
+      const games = await fetchCfbdScores();
+      const items = [];
+
+      for (const g of games) {
+        const item = toPublicItem(g);
+        if (item.key) items.push(item);
+        if (item.awayTeam && item.homeTeam) {
+          // add reverse key for convenience: home__away
+          items.push({ ...item, key: `${norm(item.homeTeam)}__${norm(item.awayTeam)}` });
+        }
+      }
+
+      await db.doc("config/liveMap").set(
+        { items, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
+        { merge: true }
+      );
+
+      logger.info(`[publishLiveScores] wrote ${items.length} items`);
+    } catch (err) {
+      logger.error("[publishLiveScores] failed", err);
+      throw err;
+    }
+  }
+);

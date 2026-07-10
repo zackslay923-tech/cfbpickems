@@ -1,0 +1,69 @@
+﻿
+  src\App.jsx:67:async function listGames({ year, week, includedOnly }) {
+  src\App.jsx:68:  const col = collection(db, "games");
+> src\App.jsx:69:  const q = query(col, where("year", "==", year), where("week", "==", 
+week), ...(includedOnly ? [where("included", "==", true)] : []));
+  src\App.jsx:70:  const snap = await getDocs(q);
+  src\App.jsx:71:  const items = [];
+  src\App.jsx:74:  return items;
+  src\App.jsx:75:}
+> src\App.jsx:76:async function setGameIncluded(gameId, included) {
+> src\App.jsx:77:  await setDoc(doc(db, "games", gameId), { included: !!included }, { 
+merge: true });
+  src\App.jsx:78:}
+  src\App.jsx:79:async function setResult(gameId, winner, totalPoints) {
+  src\App.jsx:210:        const isFbsByTeam = fbsSet.has(homeN) || fbsSet.has(awayN);
+  src\App.jsx:211:        const isFbsByConf = FBS_CONF.has(g.home_conference || "") || 
+FBS_CONF.has(g.away_conference || "");
+> src\App.jsx:212:        const included = isFbsByTeam || isFbsByConf;
+> src\App.jsx:213:        if (included) debug.includedFbs++;
+  src\App.jsx:214:        games.push({
+  src\App.jsx:215:          home: g.home_team || "", away: g.away_team || "",
+  src\App.jsx:216:          homeAbbr: null, awayAbbr: null,
+  src\App.jsx:217:          homeRank: null, awayRank: null,
+> src\App.jsx:218:          startTimeStr: g.start_date || "", included
+  src\App.jsx:219:        });
+  src\App.jsx:220:      }
+  src\App.jsx:222:  }
+  src\App.jsx:223:
+> src\App.jsx:224:  // --- If still nothing included, try ESPN (FBS only, groups=80)
+> src\App.jsx:225:  if (!games.length || games.every(g => !g.included)) {
+  src\App.jsx:226:    debug.sourceTried.push("ESPN");
+  src\App.jsx:227:    games = [];
+  src\App.jsx:232:      debug.espnDirect = ev.length;
+  src\App.jsx:233:      const mapped = mapEspnEventsToGames(ev);
+> src\App.jsx:234:      for (const m of mapped) games.push({ ...m, included: true }); // 
+ESPN FBS only
+  src\App.jsx:235:      debug.includedFbs += mapped.length;
+  src\App.jsx:236:    } else {
+  src\App.jsx:242:        debug.espnProxy = ev.length;
+  src\App.jsx:243:        const mapped = mapEspnEventsToGames(ev);
+> src\App.jsx:244:        for (const m of mapped) games.push({ ...m, included: true });
+  src\App.jsx:245:        debug.includedFbs += mapped.length;
+  src\App.jsx:246:      }
+  src\App.jsx:451:    setPlayers(rows);
+  src\App.jsx:452:    const played = ids.filter(id => !!r[id]?.winner).length;
+> src\App.jsx:453:    setMsg(`Week ${week} • Included games: ${g.length} • Finished: 
+${played}`);
+  src\App.jsx:454:  };
+  src\App.jsx:455:
+  src\App.jsx:648:      const d = await importWeek({ year, week });
+  src\App.jsx:649:      const all = await listGames({ year, week, includedOnly: false });
+> src\App.jsx:650:      const includedDb = all.filter(x => x.included).length;
+  src\App.jsx:651:
+  src\App.jsx:652:      setMsg(
+> src\App.jsx:653:        `Imported ${d.writtenTotal} game(s). Included (FBS): 
+${includedDb}. ` +
+  src\App.jsx:654:        `[debug: tried=${d.sourceTried.join("�'") || "none"}, 
+cfbdWeek=${d.cfbdGames}, fbsNames=${d.fbsTeamNames}, espnDirect=${d.espnDirect}, 
+espnProxy=${d.espnProxy}]`
+  src\App.jsx:655:      );
+  src\App.jsx:820:                        <div style={{ order:1, flex:1 }} /><Row style={{ 
+order:3, justifyContent:"space-between" }}>
+  src\App.jsx:821:              <Row>
+> src\App.jsx:822:                <label><input type="checkbox" checked={!!g.included} 
+onChange={e=>toggle(g, e.target.checked)} /> Included</label>
+  src\App.jsx:823:                <button onClick={()=>chooseWinner(g)}>Set winner</button>
+  src\App.jsx:824:              </Row>
+
+

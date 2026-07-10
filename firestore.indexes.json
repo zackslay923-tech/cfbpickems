@@ -1,0 +1,21 @@
+{
+    "indexes":  [
+                    {
+                        "collectionGroup":  "picks",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "year",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "week",
+                                           "order":  "ASCENDING"
+                                       }
+                                   ]
+                    }
+                ],
+    "fieldOverrides":  [
+
+                       ]
+}
