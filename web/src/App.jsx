@@ -3209,7 +3209,6 @@ await setDoc(doc(db,"config","app"), { currentYear: year, currentWeek: week, upd
         </Row>
 
         <BulkImportPicksPreview year={year} week={week} />
-<BulkImportPicksPreview year={year} week={week} />
         <h3 style={{ marginTop: 16 }}>Submissions</h3>
         <Row style={{ marginTop: 6, marginBottom: 6 }}>
           <button onClick={async ()=>{ try {
