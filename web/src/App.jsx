@@ -1334,7 +1334,7 @@ while (i < seq.length) {
     <div style={{ background:"#121a2b", border:"1px solid #1f2a44", borderRadius:16, padding:16, maxWidth:720, width:"90%", boxShadow:"0 10px 24px rgba(0,0,0,.35)" }}>
       <h3 style={{ marginTop:0, marginBottom:8 }}>Rules</h3>
       <div style={{ lineHeight: 1.6 }}>
-  <h4 style={{ marginTop: 0 }}>Welcome to the 2025 Season!</h4>
+  <h4 style={{ marginTop: 0 }}>Welcome to the 2026 Season!</h4>
   <ul style={{ paddingLeft: "1.25rem", margin: 0 }}>
     <li><strong>Weekly Picks:</strong> Each week you'll pick winners from a curated slate — marquee matchups, AP Top 25 games, all Florida FBS teams, plus a few randoms to keep it interesting.</li>
     <li><strong>Tiebreaker:</strong> Closest to the actual total combined points (over or under) wins. If still tied, the pot is split.</li>
