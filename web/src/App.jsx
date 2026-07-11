@@ -1746,8 +1746,14 @@ const loadAll = async () => { try { console.debug("[lb] loadAll:start", { year, 
     if (!Array.isArray(g) || g.length === 0) { g = await listGames({ year, week, includedOnly: false }); }
     setGames(g);
     const ids = g.map(x => x.id);
-const rFromWeek = await getWeekResultsMap(year, week, g);
-const r = rFromWeek || await getResultsMap(ids);
+const [rFromWeek, rFromGames] = await Promise.all([
+  getWeekResultsMap(year, week, g),
+  getResultsMap(ids)
+]);
+// Merge both result sources (both keyed by game id): per-game docs (written by
+// "Set Winner" and the auto-winner hook) win over the bulk weekly snapshot
+// (written by "Write Winners (CFBD)") when both exist for the same game.
+const r = { ...(rFromWeek || {}), ...(rFromGames || {}) };
     setResults(r);
     let picks = [];
 try {
