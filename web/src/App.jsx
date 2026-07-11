@@ -390,10 +390,15 @@ async function importWeek({ year, week }) {
     const gamesUrl = `https://api.collegefootballdata.com/games?year=${encodeURIComponent(year)}&week=${encodeURIComponent(week)}&seasonType=regular`;
     const resGames = await fetchJson(gamesUrl, { headers: { Authorization: "Bearer " + apiKey }});
     if (resGames.ok && Array.isArray(resGames.data)) {
-      debug.cfbdGames = resGames.data.length;
+      // Defensive: CFBD's own `week` query param has been observed to be silently
+      // ignored for week=0 (returning the entire season instead of filtering), so
+      // never trust that the response only contains the requested week - verify
+      // each game's own `week` field before treating it as belonging to this import.
+      const weekMatched = resGames.data.filter(g => Number(g.week) === Number(week));
+      debug.cfbdGames = weekMatched.length;
       const fbsSet = await buildFbsNameSet(apiKey, year);
       debug.fbsTeamNames = fbsSet.size;
-      for (const g of resGames.data) {
+      for (const g of weekMatched) {
         const homeN = norm(g.home_team), awayN = norm(g.away_team);
         const isFbsByTeam = fbsSet.has(homeN) || fbsSet.has(awayN);
         const isFbsByConf = FBS_CONF.has(g.home_conference || "") || FBS_CONF.has(g.away_conference || "");
