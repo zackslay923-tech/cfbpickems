@@ -4,7 +4,8 @@
       "Bash(firebase deploy *)",
       "Bash(firebase hosting:sites:list)",
       "Bash(firebase projects:list)",
-      "Bash(npm run *)"
+      "Bash(npm run *)",
+      "Bash(grep -n \"Array.from\\({ length: 20 }, \\(_, i\\) => i + 1\\)\" web/src/App.jsx)"
     ]
   }
 }

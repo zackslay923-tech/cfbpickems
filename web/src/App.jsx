@@ -59,6 +59,13 @@ import { onSnapshot, collection, doc, getDoc, getDocs, setDoc, serverTimestamp, 
 const fitFontByLen = (len) => (len <= 28 ? 15 : len <= 34 ? 14 : len <= 40 ? 13 : len <= 46 ? 12 : 11);
 /* === end fit font === */
 
+// Is this a real, selected week/year value? Deliberately distinct from a plain
+// truthy/finite check: Number(null) and Number("") both coerce to 0, so a
+// naive Number.isFinite(Number(v)) would treat "not yet chosen" the same as
+// "week 0" was chosen. Week 0 is a legitimate CFB week (real games exist for
+// it), so it must survive this check while null/undefined/"" must not.
+const hasWeekValue = (v) => v !== null && v !== undefined && v !== "" && Number.isFinite(Number(v));
+
 // ---------- small UI helpers ----------
 function Row({ children, style }) {
   return <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", ...style }}>{children}</div>;
@@ -610,7 +617,7 @@ const pot = useMemo(() => (pickCount * 5), [pickCount]);
 useEffect(() => {
   (async () => {
     try {
-      if (Number.isFinite(Number(year)) && Number.isFinite(Number(week)) && Number(week) > 0) {
+      if (hasWeekValue(year) && hasWeekValue(week)) {
         const arr = await getPicksForWeek(year, week);
         setPickCount(Array.isArray(arr) ? arr.length : 0);
       } else {
@@ -630,7 +637,7 @@ useEffect(() => {
         const d = s.data() || {};
         const y = Number(d.year), w = Number(d.week);
         setLive({ year: y, week: w });
-        if (!y || !w) { return; }
+        if (!hasWeekValue(y) || !hasWeekValue(w)) { return; }
 
         // Keep Admin controls consistent, but the important part is we load the live week now:
         setYear(y);
@@ -745,7 +752,7 @@ const [code, setCode] = useState("");
   };
 
   useEffect(() => {
-  if (!(Number.isFinite(Number(year)) && Number.isFinite(Number(week)) && Number(week) > 0)) return;
+  if (!(hasWeekValue(year) && hasWeekValue(week))) return;
   load();
   /* eslint-disable-next-line */
 }, [year, week, email]);
@@ -1641,7 +1648,7 @@ const pot = useMemo(() => (pickCount * 5), [pickCount]);
 useEffect(() => {
   (async () => {
     try {
-      if (Number.isFinite(Number(year)) && Number.isFinite(Number(week)) && Number(week) > 0) {
+      if (hasWeekValue(year) && hasWeekValue(week)) {
         const arr = await getPicksForWeek(year, week);
         setPickCount(Array.isArray(arr) ? arr.length : 0);
       } else {
@@ -1661,7 +1668,7 @@ useEffect(() => {
         const d = s.data() || {};
         const y = Number(d.year), w = Number(d.week);
         setLive({ year: y, week: w });
-        if (!y || !w) { return; }
+        if (!hasWeekValue(y) || !hasWeekValue(w)) { return; }
 
         // Keep Admin controls consistent, but the important part is we load the live week now:
         setYear(y);
@@ -1741,7 +1748,7 @@ useEffect(() => {
   
 const GAME_COL_W = 140;
 const loadAll = async () => { try { console.debug("[lb] loadAll:start", { year, week }); } catch {}
-  if (!(Number.isFinite(Number(year)) && Number.isFinite(Number(week)) && Number(week) > 0)) { return; }if (!(Number.isFinite(Number(year)) && Number.isFinite(Number(week)) && Number(week) > 0)) { return; }setMsg("Loading..."); console.debug(`[lb] start y=${year} w=${week}`);
+  if (!(hasWeekValue(year) && hasWeekValue(week))) { return; }if (!(hasWeekValue(year) && hasWeekValue(week))) { return; }setMsg("Loading..."); console.debug(`[lb] start y=${year} w=${week}`);
     let g = await listGames({ year, week, includedOnly: true });
     if (!Array.isArray(g) || g.length === 0) { g = await listGames({ year, week, includedOnly: false }); }
     setGames(g);
@@ -1789,7 +1796,7 @@ try {
   };
 
   useEffect(() => {
-  if (!(Number.isFinite(Number(year)) && Number.isFinite(Number(week)) && Number(week) > 0)) return;
+  if (!(hasWeekValue(year) && hasWeekValue(week))) return;
   loadAll();
   /* eslint-disable-next-line */
 }, [year, week]);
@@ -1797,7 +1804,7 @@ try {
 useEffect(() => {
   let tries = 0;
   const t = setInterval(() => {
-    if (Number.isFinite(Number(year)) && Number.isFinite(Number(week)) && Number(week) > 0) {
+    if (hasWeekValue(year) && hasWeekValue(week)) {
       try { loadAll(); } catch (e) { console.error("init loadAll failed", e); }
       clearInterval(t);
     } else if (++tries >= 20) { // ~3 seconds max (20 * 150ms)
@@ -1863,7 +1870,7 @@ useEffect(() => {
           <h2 style={{ margin: 0 }}>CFB Pick'Ems Week {week}</h2>
 <Field label="Previous weeks">
   <select value={(week ?? '')} onChange={e => setWeek(Number(e.target.value))} style={inputStyle}>
-    {(weeksForYear.length ? weeksForYear : Array.from({ length: 20 }, (_, i) => i + 1)).map(w => (
+    {(weeksForYear.length ? weeksForYear : Array.from({ length: 21 }, (_, i) => i)).map(w => (
       <option key={w} value={w}>Week {w}</option>
     ))}
   </select>
@@ -2041,7 +2048,7 @@ useEffect(() => {
           <h2 style={{ margin: 0 }}>CFB Pick'Ems Week {week}</h2>
 <Field label="Previous weeks">
   <select value={(week ?? '')} onChange={e => setWeek(Number(e.target.value))} style={inputStyle}>
-    {(weeksForYear.length ? weeksForYear : Array.from({ length: 20 }, (_, i) => i + 1)).map(w => (
+    {(weeksForYear.length ? weeksForYear : Array.from({ length: 21 }, (_, i) => i)).map(w => (
       <option key={w} value={w}>Week {w}</option>
     ))}
   </select>
@@ -2088,7 +2095,7 @@ useEffect(() => {
       } catch {}
 
       if (!tok) { alert("CFBD token missing (config/cfbd)."); return; }
-      if (!y || !w) { alert("currentYear/currentWeek missing (config/app)."); return; }
+      if (!hasWeekValue(y) || !hasWeekValue(w)) { alert("currentYear/currentWeek missing (config/app)."); return; }
 
       const normalizeKey = (name) => {
         if (!name) return "";
@@ -2582,7 +2589,7 @@ const pot = useMemo(() => (pickCount * 5), [pickCount]);
 useEffect(() => {
   (async () => {
     try {
-      if (Number.isFinite(Number(year)) && Number.isFinite(Number(week)) && Number(week) > 0) {
+      if (hasWeekValue(year) && hasWeekValue(week)) {
         const arr = await getPicksForWeek(year, week);
         setPickCount(Array.isArray(arr) ? arr.length : 0);
       } else {
@@ -2627,7 +2634,7 @@ useEffect(() => {
   useEffect(() => {
     const y = live && Number(live.year);
     const w = live && Number(live.week);
-    if (!isAdmin || !y || !w) return;
+    if (!isAdmin || !hasWeekValue(y) || !hasWeekValue(w)) return;
     let cancelled = false;
     (async () => {
       try {
@@ -2649,7 +2656,7 @@ useEffect(() => {
         const d = s.data() || {};
         const y = Number(d.year), w = Number(d.week);
         setLive({ year: y, week: w });
-        if (!y || !w) { return; }
+        if (!hasWeekValue(y) || !hasWeekValue(w)) { return; }
 
         // Keep Admin controls consistent, but the important part is we load the live week now:
         setYear(y);
@@ -2677,7 +2684,7 @@ useEffect(() => {
       const d = s.data() || {};
       const y = Number(d.year), w = Number(d.week);
       setLive({ year: y, week: w });
-      if (!y || !w) return;
+      if (!hasWeekValue(y) || !hasWeekValue(w)) return;
 
       // keep controls consistent (even if you ignore them)
       setYear(y);
@@ -2713,7 +2720,7 @@ useEffect(() => {
   useEffect(() => {
     if (!isAdmin) return;
     const y = Number(year), w = Number(week);
-    if (!y || !w) return;
+    if (!hasWeekValue(y) || !hasWeekValue(w)) return;
     _autoLoadGames(y, w);
   }, [isAdmin, year, week]);
 
@@ -2722,7 +2729,7 @@ useEffect(() => {
     if (typeof isAdmin !== "undefined" && !isAdmin) return;
     const y = Number(year);
     const w = Number(week);
-    if (!y || !w) return;
+    if (!hasWeekValue(y) || !hasWeekValue(w)) return;
     let cancelled = false;
     (async () => {
       try {
@@ -2738,7 +2745,7 @@ useEffect(() => {
     if (typeof isAdmin !== "undefined" && !isAdmin) return;
     const y = Number(year);
     const w = Number(week);
-    if (!y || !w) return;
+    if (!hasWeekValue(y) || !hasWeekValue(w)) return;
     let cancelled = false;
     (async () => {
       try {
@@ -4548,7 +4555,7 @@ if (typeof window !== "undefined") {
       const app = appSnap.exists() ? appSnap.data() : {};
       const year = app?.currentYear;
       const week = app?.currentWeek;
-      if (!year || !week) { console.warn("[fs results] missing currentYear/currentWeek"); return null; }
+      if (!hasWeekValue(year) || !hasWeekValue(week)) { console.warn("[fs results] missing currentYear/currentWeek"); return null; }
 
       const normalizeKey = (name) => {
         if (!name) return "";
@@ -4623,7 +4630,7 @@ async function copyWinnersFromWeekToPerGame() {
     const app = appSnap.exists() ? appSnap.data() : {};
     const y = app?.currentYear;
     const w = app?.currentWeek;
-    if (!y || !w) { alert("currentYear/currentWeek missing (config/app)."); return; }
+    if (!hasWeekValue(y) || !hasWeekValue(w)) { alert("currentYear/currentWeek missing (config/app)."); return; }
 
     const normalizeKey = (name) => {
       if (!name) return "";
