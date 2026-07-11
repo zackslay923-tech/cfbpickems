@@ -35,7 +35,10 @@ service cloud.firestore {
         && request.resource.data.year == resource.data.year
         && request.resource.data.week == resource.data.week;
 
-      allow delete: if false;
+      // Real season picks are permanently immutable (no delete, ever, even for admins).
+      // Exception: admin-only cleanup of the built-in dummy/test sandbox (year >= 2090),
+      // so "Clear Dummy Week" can actually delete its own test picks.
+      allow delete: if isAdmin() && resource.data.year is number && resource.data.year >= 2090;
     }
 
     // Keys: helper collection

@@ -1429,8 +1429,8 @@ const hasToken = !!cfbdTok;
 const cfg = sbCfg ?? {};
 const cfgEmpty = !cfg || (Object.keys(cfg).length === 0 && cfg.constructor === Object);
 
-const sbSourceRaw = (cfg?.mode === "off" ? "none" : "cfbd");
-const sbSource = ((sbHardStopGlobal === null ? sbHardStop : sbHardStopGlobal) ? "none" : sbSourceRaw);
+const sbSourceRaw = cfg?.testMode ? "fixture" : (cfg?.mode === "off" ? "none" : "cfbd");
+const sbSource = ((sbHardStopGlobal === null ? sbHardStop : sbHardStopGlobal) ? "none" : (sbLocalFixture ? "fixture" : sbSourceRaw));
 if (typeof console !== "undefined" && import.meta && import.meta.env && import.meta.env.DEV) {
     }
 
