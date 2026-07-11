@@ -108,10 +108,10 @@ function Header({ user, isAdmin, setPage }) {
       <h1 style={{ margin: 0, fontSize: 20 }}>CFB Pick'em</h1>
       <nav style={{ display: "flex", gap: 8 }}>
         <a href="#" onClick={(e)=>{e.preventDefault();
-    
-    location.hash="#/picks"; setPage("picks");}}>Picks</a>
-        <a href="#" onClick={(e)=>{e.preventDefault(); location.hash="#/leader"; setPage("leader");}}>Leaderboard</a>
-        {isAdmin && <a href="#" onClick={(e)=>{e.preventDefault(); location.hash="#/admin"; setPage("admin");}}>Admin</a>}
+
+    history.pushState(null, "", "/picks"); setPage("picks");}}>Picks</a>
+        <a href="#" onClick={(e)=>{e.preventDefault(); history.pushState(null, "", "/leader"); setPage("leader");}}>Leaderboard</a>
+        {isAdmin && <a href="#" onClick={(e)=>{e.preventDefault(); history.pushState(null, "", "/admin"); setPage("admin");}}>Admin</a>}
         {!user && <a href="#" onClick={(e)=>{e.preventDefault(); googleLogin();}}>Admin Login</a>}
         {user && <a href="#" onClick={(e)=>{e.preventDefault(); logout();}}>Sign out</a>}
       </nav>
@@ -906,7 +906,7 @@ const onSubmitPicks = function(e){ e.preventDefault(); if (picksLocked) { if (ty
   };
   try { if (typeof tiebreaker !== "undefined") { p.tiebreaker = tiebreaker; } localStorage.setItem("pending", JSON.stringify(p)); } catch (_){}
 if (typeof setPage === "function") setPage("confirm");
-if (typeof window !== "undefined") window.location.hash = "#/confirm";
+if (typeof window !== "undefined") window.history.pushState(null, "", "/confirm");
   setMsg("");
   return; // no write here; Confirm button will write
 };
@@ -2139,7 +2139,6 @@ useEffect(() => {
 >
   Write Winners (CFBD)
 </button> <button onClick={(e)=>{ e.preventDefault(); try { makeLiveDemoFromGames(games||[]); } catch(e){ console.error(e); } }} style={{ padding:"4px 8px", borderRadius:6, border:"1px solid rgba(255,255,255,.2)", background:"transparent", color:"#fff", cursor:"pointer", marginLeft:6 }}>Make Live Demo</button>
-'
     <span style={{opacity:.8}}>Scoreboard:</span>
     <strong>{(() => { const m = String(sbSource||"none").toLowerCase(); return m === "fixture" ? "Demo" : m === "cfbd" ? "Live" : "Off"; })()}</strong>
     <span style={{opacity:.8}}>Last updated:</span>
@@ -2148,7 +2147,7 @@ useEffect(() => {
     <span>{(sbSource === "none" ? "Paused" : (sbPaused ? "Paused" : "Running"))}</span>
     <span style={{opacity:.8, marginLeft:12}}>Hard Stop:</span>
     <button
-      onClick={async (e) => { e.preventDefault(); const next = !(sbHardStopGlobal ?? sbHardStop); try { await setDoc(doc(db,"config","app"), { scoreboard: { hardStop: next } }, { merge:true }); } catch (err) { console.error("[hardStop] update failed", err); } }}
+      onClick={async (e) => { e.preventDefault(); const next = !(sbHardStopGlobal ?? sbHardStop); try { await setDoc(doc(db,"config","app"), { scoreboard: { hardStop: next, mode: next ? "off" : "on" } }, { merge:true }); } catch (err) { console.error("[hardStop] update failed", err); } }}
       style={{ padding:"4px 8px", borderRadius:6, border:"1px solid rgba(255,255,255,.2)", background: (sbHardStopGlobal ?? sbHardStop) ? "#B91C1C" : "#065F46", color:"#fff", fontWeight:600 }}
       title="Master kill switch for scoreboard polling"
     >
@@ -3184,7 +3183,7 @@ Type "home" or "away".`,
       <Header user={user} isAdmin={isAdmin} setPage={setPage} />
       <Card style={{ maxWidth: 1200 }}>
         <h2>Admin</h2>
-        <Row style={{ margin: "8px 0" }}><button onClick={() => setPage("adminpicks")}>Open Picks Management</button></Row>
+        <Row style={{ margin: "8px 0" }}><button onClick={() => { window.history.pushState(null, "", "/admin/picks"); setPage("adminpicks"); }}>Open Picks Management</button></Row>
         <Row style={{ margin: "8px 0" }}>
           <Field label="Year"><input style={{...inputStyle, width:"6rem"}} type="number" value={(year ?? '')} onChange={e=>setYear(Number(e.target.value))}/></Field>
           <Field label="Week"><input style={{...inputStyle, width:"4rem"}} type="number" value={(week ?? '')} onChange={e=>setWeek(Number(e.target.value))}/></Field>
@@ -3502,7 +3501,7 @@ const normVenmo = (s) => String(s||"").trim().toLowerCase().replace(/^@+/, "");c
 }localStorage.setItem("receipt", JSON.stringify({ year, week, code, form, picks, tiebreaker: payload.tiebreaker || null }));
       setMsg("");
       setPage("receipt");
-      window.location.hash = "#/receipt";
+      window.history.pushState(null, "", "/receipt");
     } catch (e) {
       setMsg("Save failed: " + (e && e.message ? e.message : e));
     }
@@ -3553,7 +3552,7 @@ const normVenmo = (s) => String(s||"").trim().toLowerCase().replace(/^@+/, "");c
         )}
 
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginTop:16 }}>
-          <button type="button" onClick={()=>{ setPage("picks"); window.location.hash = "#/picks"; }}>Back to Edit</button>
+          <button type="button" onClick={()=>{ setPage("picks"); window.history.pushState(null, "", "/picks"); }}>Back to Edit</button>
           <div style={{ flex:1, textAlign:"center", color:"#9aa4c7", fontSize:13 }}>{msg}</div>
           <button type="button" onClick={confirmAndSubmit} disabled={!!(picksLocked)}>Confirm & Submit</button>
         </div>
@@ -3586,7 +3585,7 @@ function ReceiptPage({ setPage }) {
             setReceipt(null);
             localStorage.removeItem("receipt");
             setPage("picks");
-            window.location.hash = "#/picks";
+            window.history.pushState(null, "", "/picks");
           }}>Done</button>
         </div>
       </Card>
@@ -3611,15 +3610,17 @@ function ModalOverlay({ children }) {
 export default function App() {
   const { user, isAdmin } = useAuthAdmin();
   const [page, setPage] = useState("picks");
-  // --- Hash router shim (picks|leader|admin) ---
+  // --- Path router shim (picks|leader|admin|admin/picks) ---
   useEffect(() => {
-    const readHash = () => {
-      const p = (window.location.hash || "").replace(/^#\/?/, "");
-      if (p === "picks" || p === "leader" || p === "admin") setPage(p); if (p === "admin/picks") setPage("adminpicks"); if (p === "admin/picks") setPage("adminpicks");
+    const readPath = () => {
+      const p = (window.location.pathname || "/").replace(/^\/|\/$/g, "");
+      if (p === "") { setPage("picks"); return; }
+      if (p === "picks" || p === "leader" || p === "admin") { setPage(p); return; }
+      if (p === "admin/picks") { setPage("adminpicks"); return; }
     };
-    readHash(); // on load
-    window.addEventListener("hashchange", readHash);
-    return () => window.removeEventListener("hashchange", readHash);
+    readPath(); // on load
+    window.addEventListener("popstate", readPath);
+    return () => window.removeEventListener("popstate", readPath);
   }, []);
 
   useEffect(() => {
