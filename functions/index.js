@@ -19,6 +19,11 @@ function toKey(away, home) {
   return `${norm(away)}__${norm(home)}`;
 }
 
+function isFinalStatus(status) {
+  const s = String(status || "").toLowerCase();
+  return s === "final" || s === "completed" || s === "postgame";
+}
+
 // Shape the CFBD /scoreboard items into the fields your Scorebug expects
 function normalizeScoreboardItems(items) {
   const mapObj = {};
@@ -68,6 +73,72 @@ function todayET() {
   return fmt.format(new Date());
 }
 
+// Get current ET time as "HH:MM" (24h)
+function nowTimeET() {
+  const fmt = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour12: false, hour: "2-digit", minute: "2-digit" });
+  return fmt.format(new Date());
+}
+
+function toMinutes(hhmm) {
+  const [h, m] = String(hhmm || "0:0").split(":").map(Number);
+  return (h || 0) * 60 + (m || 0);
+}
+
+// Supports windows that wrap past midnight (e.g. "12:00" -> "02:00")
+function isWithinWindow(nowET, startET, endET) {
+  const now = toMinutes(nowET), start = toMinutes(startET), end = toMinutes(endET);
+  if (start <= end) return now >= start && now <= end;
+  return now >= start || now <= end;
+}
+
+// Auto-write winners for any game the live map shows as final that doesn't
+// already have a recorded result. Runs server-side (unlike the old client-only
+// useAutoWinners hook) so it works regardless of whether an admin has the
+// Leaderboard page open.
+async function autoWriteWinners(db, mapObj) {
+  const liveSnap = await db.doc("config/live").get();
+  const liveCfg = liveSnap.exists ? liveSnap.data() : {};
+  const year = Number(liveCfg?.year), week = Number(liveCfg?.week);
+  if (!Number.isFinite(year) || !Number.isFinite(week)) return;
+
+  const gamesSnap = await db.collection("games")
+    .where("year", "==", year)
+    .where("week", "==", week)
+    .get();
+  if (gamesSnap.empty) return;
+
+  const games = gamesSnap.docs.map(d => d.data()).filter(g => g.included !== false);
+  const existing = await Promise.all(games.map(g => db.doc(`results/${g.id}`).get()));
+
+  const batch = db.batch();
+  let writes = 0;
+
+  games.forEach((g, i) => {
+    if (existing[i].exists && existing[i].data()?.winner) return; // already recorded
+
+    const liveGame = mapObj[toKey(g.away, g.home)];
+    if (!liveGame || !isFinalStatus(liveGame.status)) return;
+
+    const hp = Number.isFinite(liveGame.homePoints) ? liveGame.homePoints : null;
+    const ap = Number.isFinite(liveGame.awayPoints) ? liveGame.awayPoints : null;
+    if (hp === null || ap === null || hp === ap) return; // incomplete or tied (shouldn't happen in CFB)
+
+    const winner = hp > ap ? g.home : g.away;
+    batch.set(db.doc(`results/${g.id}`), {
+      winner,
+      totalPoints: hp + ap,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      source: "auto-cron"
+    }, { merge: true });
+    writes++;
+  });
+
+  if (writes > 0) {
+    await batch.commit();
+    logger.info(`autoWriteWinners: wrote ${writes} winner(s) for ${year}/W${week}`);
+  }
+}
+
 // Node 20 has global fetch; poll once per minute via Cloud Scheduler
 exports.publishLiveMap = onSchedule(
   {
@@ -77,12 +148,14 @@ exports.publishLiveMap = onSchedule(
   },
   async () => {
     const db = admin.firestore();
+    let scoreboardCfg = {};
+
     // Respect admin hard stop: only run when config/app.scoreboard.mode === "on"
     try {
       const appSnap = await db.doc("config/app").get();
       const app = appSnap.exists ? appSnap.data() : {};
-      const sc = (app && app.scoreboard) ? app.scoreboard : {};
-      const mode = (sc && sc.mode) ? String(sc.mode).toLowerCase() : "on";
+      scoreboardCfg = (app && app.scoreboard) ? app.scoreboard : {};
+      const mode = scoreboardCfg.mode ? String(scoreboardCfg.mode).toLowerCase() : "on";
       if (mode !== "on") {
         logger.info(`publishLiveMap skipped (scoreboard.mode=${mode})`);
         return;
@@ -90,6 +163,16 @@ exports.publishLiveMap = onSchedule(
     } catch (e) {
       // If config/app is unreadable, fail closed (skip publishing)
       logger.warn("publishLiveMap: could not read config/app; skipping", e?.message || e);
+      return;
+    }
+
+    // Only poll during actual game hours (default noon-2am ET; configurable via
+    // config/app.scoreboard.window). Cuts unnecessary CFBD calls the rest of the week.
+    const win = scoreboardCfg.window || {};
+    const startET = win.startET || "12:00";
+    const endET = win.endET || "02:00";
+    if (!isWithinWindow(nowTimeET(), startET, endET)) {
+      logger.info(`publishLiveMap skipped (outside game window ${startET}-${endET} ET)`);
       return;
     }
 
@@ -137,9 +220,14 @@ exports.publishLiveMap = onSchedule(
       } else {
         logger.info("liveMap unchanged; skipped write");
       }
+
+      // Auto-write winners for any newly-final games (default on; disable via
+      // config/app.scoreboard.autoWriteWinners = false)
+      if (scoreboardCfg.autoWriteWinners !== false) {
+        await autoWriteWinners(db, mapObj);
+      }
     } catch (e) {
       logger.error("CFBD fetch/publish error:", e?.message || e);
     }
   }
 );
-

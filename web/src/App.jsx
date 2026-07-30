@@ -46,8 +46,7 @@ import { mergeEspnWeek } from "./lib/espnWeek";
 import React, { useEffect, useState, useRef , useMemo } from "react";
 import TeamLogo from "./components/TeamLogo";
 import Scorebug from "./components/Scorebug"; // SCOREBUG import
-import useScoreboard from "./lib/useScoreboard"; 
-import useAutoWinners from "./lib/useAutoWinners";// SCOREBOARD hook
+import useScoreboard from "./lib/useScoreboard";
 import AdminPicksPage from "./components/AdminPicksPage";
 import BulkImportPicksPreview from "./components/BulkImportPicksPreview";
 import { db, googleLogin, logout, onAuth } from "./firebase";
@@ -1699,8 +1698,9 @@ useEffect(() => {
   const gameday = (Array.isArray(games) ? games.find(x => x && x.gameday) : null);
   const displayGames = gameday ? [...games.filter(x => x && x.id !== gameday.id), gameday] : games;
   const [results, setResults] = useState({});
-  useAutoWinners({ isAdmin, year, week, games, resultsMap: results, liveMap: sbMap, setResultFn: setResult });
-  const [players, setPlayers] = useState([]); 
+  // Auto-winner detection now runs server-side in the publishLiveMap Cloud
+  // Function, so it works regardless of whether an admin has this page open.
+  const [players, setPlayers] = useState([]);
   // Pickems Coach: public picks flag (read-only)
   const [lbPicksPublic, setLbPicksPublic] = useState(null);
   
@@ -2082,7 +2082,7 @@ useEffect(() => {
   onClick={async (e) => {
     e.preventDefault();
     try {
-      const { setDoc, doc, serverTimestamp, getDoc } = await import("firebase/firestore");
+      const { setDoc, doc, serverTimestamp, getDoc, writeBatch } = await import("firebase/firestore");
       const appSnap = await getDoc(doc(db,"config","app"));
       const appData = appSnap.exists() ? appSnap.data() : {};
       let y = appData?.currentYear;
@@ -2095,7 +2095,7 @@ useEffect(() => {
         if (!resp) return;
         const m = resp.match(/^(\d{4})\s*-\s*W\s*(\d{1,2})$/i);
         if (!m) { alert("Invalid format. Use YYYY-W# (e.g., 2025-W2)."); return; }
-        y = Number(m[1]); 
+        y = Number(m[1]);
         w = Number(m[2]);
       } catch {}
 
@@ -2112,42 +2112,43 @@ useEffect(() => {
       };
       const gameIdFrom = (home, away) => `${normalizeKey(away)}__${normalizeKey(home)}`;
 
+      // Write directly to results/{gameId} (the same schema "Set Winner" and the
+      // server-side auto-writer use) instead of a separate weekly-bulk doc, so
+      // there's a single results schema going forward.
+      const ourGames = await listGames({ year: y, week: w, includedOnly: false });
+      const byKey = new Map(ourGames.map(g => [gameIdFrom(g.home, g.away), g]));
+
       const qs = new URLSearchParams({ year: String(y), week: String(w), seasonType: "regular", division: "fbs" });
       const url = `https://api.collegefootballdata.com/games?${qs}`;
       const res = await fetch(url, { headers: { Authorization: `Bearer ${tok}` } });
       if (!res.ok) throw new Error(`CFBD HTTP ${res.status}`);
       const arr = await res.json();
 
-      const results = {};
+      const batch = writeBatch(db);
+      let written = 0, skippedNoMatch = 0, skippedIncomplete = 0;
       for (const g of (Array.isArray(arr) ? arr : [])) {
         const home = g.home_team ?? g.homeTeam ?? g.home ?? "";
         const away = g.away_team ?? g.awayTeam ?? g.away ?? "";
         const hp = Number.isFinite(+g.home_points) ? +g.home_points : (Number.isFinite(+g.homePoints) ? +g.homePoints : null);
         const ap = Number.isFinite(+g.away_points) ? +g.away_points : (Number.isFinite(+g.awayPoints) ? +g.awayPoints : null);
-        const status = g.status ?? g.gameStatus ?? null;
-        const period = typeof g.period === "number" ? g.period : null;
-        let winner = null;
-        if (hp != null && ap != null) {
-          winner = hp > ap ? normalizeKey(home) : (ap > hp ? normalizeKey(away) : "tie");
-        }
-        const id = gameIdFrom(home, away);
-        results[id] = {
-          winner, homePoints: hp, awayPoints: ap,
-          status: status || null,
-          period: period ?? null, source: "cfbd",
-          finalizedAt: winner ? new Date().toISOString() : null
-        };
+        if (hp == null || ap == null || hp === ap) { skippedIncomplete++; continue; }
+
+        const ourGame = byKey.get(gameIdFrom(home, away));
+        if (!ourGame) { skippedNoMatch++; continue; }
+
+        const winner = hp > ap ? ourGame.home : ourGame.away;
+        batch.set(doc(db, "results", ourGame.id), {
+          winner, totalPoints: hp + ap,
+          updatedAt: serverTimestamp(),
+          source: "cfbd-manual"
+        }, { merge: true });
+        written++;
       }
+      await batch.commit();
 
-      const rid = `${y}_W${w}`;
-      await setDoc(doc(db, "results", rid), {
-        id: rid, year: y, week: w,
-        updatedAt: serverTimestamp(),
-        source: "cfbd",
-        games: results
-      }, { merge: true });
-
-      alert(`Winners written for week ${w}, ${y}.`);
+      alert(`Winners written for ${written} game(s) in week ${w}, ${y}.` +
+        (skippedNoMatch ? ` (${skippedNoMatch} CFBD game(s) had no matching imported game.)` : "") +
+        (skippedIncomplete ? ` (${skippedIncomplete} not yet final or tied.)` : ""));
     } catch (err) {
       console.error("[Write Winners (CFBD)] failed", err);
       alert("Write failed: " + (err?.message || err));
@@ -2849,14 +2850,11 @@ useEffect(() => {
     const defSb = {
       mode: "off",
       intervalSec: 60,
-      window: { startET: "12:00", endET: "02:00" },
+      window: { startET: "12:00", endET: "02:00" }, // game-hours gate for the server-side cron
       testMode: false,
       testIntervalSec: 10,
-      nowEtOverride: null,
-      testSource: "fixture",
       fixturePath: "/dev/scoreboard-demo.json",
-      autoWriteWinners: true,
-      writeGuardConfirm: true
+      autoWriteWinners: true // server-side auto-winner writer on/off (publishLiveMap)
     };
     const sb = { ...defSb, ...(d && d.scoreboard ? d.scoreboard : {}) };
     // merge into existing appCfg without disturbing other fields
@@ -4628,89 +4626,6 @@ if (typeof window !== "undefined") {
 
 
 
-/* === Bridge: copy winners from results/{year}_W{week}.games -> results/{gameId} (per-game) with backup === */
-async function copyWinnersFromWeekToPerGame() {
-  try {
-    const appSnap = await getDoc(doc(db, "config", "app"));
-    const app = appSnap.exists() ? appSnap.data() : {};
-    const y = app?.currentYear;
-    const w = app?.currentWeek;
-    if (!hasWeekValue(y) || !hasWeekValue(w)) { alert("currentYear/currentWeek missing (config/app)."); return; }
-
-    const normalizeKey = (name) => {
-      if (!name) return "";
-      let s = String(name).toLowerCase();
-      s = s.replace(/\ba\s*&\s*m\b|\ba\s*and\s*m\b/gi, "a&m");
-      s = s.normalize("NFKD").replace(/[\u0300-\u036f]/g,"").replace(/[^a-z0-9]/g,"");
-      if (s === "texasam" || s === "texasa&m") s = "texasam";
-      return s;
-    };
-    const keyFrom = (home, away) => `${normalizeKey(away)}__${normalizeKey(home)}`;
-
-    const weekId = `${y}_W${w}`;
-    const weekSnap = await getDoc(doc(db, "results", weekId));
-    if (!weekSnap.exists()) { alert(`No week results found at results/${weekId}. Run "Write Winners (CFBD)" first.`); return; }
-    const gamesMap = (weekSnap.data() || {}).games || {};
-    const haveKeys = Object.keys(gamesMap);
-    if (haveKeys.length === 0) { alert("Week results has no games map."); return; }
-
-    const qGames = query(collection(db, "games"), where("year","==", Number(y)), where("week","==", Number(w)));
-    const gsSnap = await getDocs(qGames);
-    if (gsSnap.size === 0) { alert(`No games found for ${y}/W${w}.`); return; }
-    const byGameId = {};
-    gsSnap.forEach(d => {
-      const g = d.data() || {};
-      byGameId[d.id] = { id: d.id, home: g.home || g.homeTeam || "", away: g.away || g.awayTeam || "" };
-    });
-
-    const perGameIds = Object.keys(byGameId);
-    const backup = {};
-    for (const gid of perGameIds) {
-      const rs = await getDoc(doc(db, "results", gid));
-      if (rs.exists()) backup[gid] = rs.data();
-    }
-
-    const backupId = `${y}_W${w}_` + Date.now();
-    await setDoc(doc(db, "results_backups", backupId), {
-      id: backupId, year: y, week: w, createdAt: serverTimestamp(), perGame: backup
-    }, { merge: true });
-
-    const batch = writeBatch(db);
-    let writes = 0, skips = 0;
-    for (const gid of perGameIds) {
-      const { home, away } = byGameId[gid];
-      if (!home || !away) { skips++; continue; }
-      const k = keyFrom(home, away);
-      const r = gamesMap[k];
-      if (!r || !r.winner || r.winner === "tie") { skips++; continue; }
-
-      batch.set(doc(db, "results", gid), {
-        id: gid, year: y, week: w, home, away,
-        winner: r.winner,
-        homePoints: (Number.isFinite(+r.homePoints) ? +r.homePoints : null),
-        awayPoints: (Number.isFinite(+r.awayPoints) ? +r.awayPoints : null),
-        status: r.status || (r.winner ? "final" : null),
-        period: (typeof r.period === "number" ? r.period : null),
-        source: (r.source ? (String(r.source) + "+bridge") : "bridge"),
-        updatedAt: serverTimestamp(),
-        finalizedAt: r.finalizedAt || null
-      }, { merge: true });
-      writes++;
-    }
-
-    if (writes === 0) {
-      alert(`Nothing to write. (Matched ${perGameIds.length} game(s), ${skips} skipped.)`);
-      return;
-    }
-
-    await batch.commit();
-    alert(`Applied winners to per-game results.\n\nWeek ${w}, ${y}\nWrote: ${writes}\nSkipped: ${skips}\nBackup: results_backups/${backupId}`);
-  } catch (err) {
-    console.error("[Bridge: copyWinnersFromWeekToPerGame] failed", err);
-    alert("Bridge failed: " + (err?.message || String(err)));
-  }
-}
-/* === end bridge === */
 
 
 
