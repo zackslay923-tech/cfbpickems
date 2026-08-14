@@ -1251,6 +1251,11 @@ const id = `${year}_W${week}_${nextCode}`;
                   </Row>                  {g.gameday && (
                     <div style={{ marginTop: 16, border:"1px solid #2b3a5c", borderRadius:12, padding:12, background:"#0e1524" }}>
                       <div style={{ fontWeight:700, letterSpacing:0.5, marginBottom:6 }}>College GameDay TIEBREAKER</div>
+                      {week === 0 && (
+                        <div style={{ fontSize:12, fontStyle:"italic", color:"#9aa4c7", marginBottom:8 }}>
+                          Not actually CollegeGameDay, but we need a tiebreaker — and Go Noles.
+                        </div>
+                      )}
                       <label style={{ display:"block" }}>
                         {"Total Points Scored in the "}
                         <strong>{teamLabelNoMascot(g.away, g.awayRank)} @ {teamLabelNoMascot(g.home, g.homeRank)}</strong>
