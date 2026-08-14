@@ -3417,25 +3417,96 @@ const normVenmo = (s) => String(s||"").trim().toLowerCase().replace(/^@+/, "");c
 
 function ReceiptPage({ setPage }) {
   const [receipt, setReceipt] = React.useState(null);
+  const [games, setGames] = React.useState([]);
+
   React.useEffect(() => {
     const r = JSON.parse(localStorage.getItem("receipt") || "null");
     if (!r) { setPage("picks"); return; }
     setReceipt(r);
   }, [setPage]);
 
+  React.useEffect(() => {
+    if (!receipt || !hasWeekValue(receipt.year) || !hasWeekValue(receipt.week)) return;
+    (async () => {
+      try {
+        let items = await listGames({ year: receipt.year, week: receipt.week, includedOnly: true });
+        const gd = Array.isArray(items) ? items.find(x => x && x.gameday) : null;
+        items = gd ? [...items.filter(x => x && x.id !== gd.id), gd] : items;
+        setGames(items);
+      } catch (e) {
+        console.error(e);
+      }
+    })();
+  }, [receipt]);
+
   if (!receipt) return null;
+
+  const gd = games.find(x => x && x.gameday);
+  const pickLabel = (g) => {
+    const t = receipt?.picks?.[g.id];
+    if (t == null) return "(no pick)";
+    if (t === g.home) return teamLabel(g.home, g.homeRank);
+    if (t === g.away) return teamLabel(g.away, g.awayRank);
+    return String(t);
+  };
 
   return (
     <Container maxWidth={720}>
-      <Card>
-        <h3 style={{ marginTop:0, marginBottom:8 }}>
-          Picks Submitted — Receipt <span style={{ fontWeight:400 }}> (*SCREENSHOT THIS*)</span>
-        </h3>
-        <p style={{ marginTop:0 }}>
-          Your code is <b>{receipt.code}</b>. Use this with your last name to edit before kickoff.
-        </p>
-        <div style={{ display:"flex", justifyContent:"flex-end", marginTop:16 }}>
-          <button type="button" onClick={()=>{
+      <Card style={{ maxWidth: 900 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+          <span style={{ fontSize:28 }}>✅</span>
+          <h2 style={{ margin:0 }}>Picks Submitted — Week {receipt.week}</h2>
+        </div>
+        <div style={{ fontSize:13, color:"#9aa4c7", margin:"8px 0 4px" }}>
+          <strong style={{ color:"#f0b429" }}>Screenshot this page</strong> as your record. Use your code + last name to edit before kickoff.
+        </div>
+        <div style={{ display:"flex", alignItems:"center", gap:8, background:"#0e1730", border:"1px solid #1f2a44", borderRadius:999, padding:"6px 14px", width:"fit-content", margin:"12px 0 16px" }}>
+          <span style={{ fontSize:12, color:"#9aa4c7" }}>Edit code</span>
+          <code style={{ fontSize:16, fontWeight:700, letterSpacing:1 }}>{receipt.code}</code>
+        </div>
+
+        {games.length > 0 && (
+          <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+            {games.map(g => {
+              const pickedHome = receipt?.picks?.[g.id] === g.home;
+              const pickedAway = receipt?.picks?.[g.id] === g.away;
+              const hasPick = pickedHome || pickedAway;
+              return (
+                <div key={g.id} style={{
+                  display:"flex", alignItems:"center", justifyContent:"space-between", gap:12, flexWrap:"wrap",
+                  padding:"10px 14px", borderRadius:12,
+                  background:"#0e1730", border: g.gameday ? "1px solid #f0b429" : "1px solid #1f2a44"
+                }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:8, minWidth:0, flexWrap:"wrap" }}>
+                    <TeamLogo school={g.away} size={28} style={{ opacity: pickedAway ? 1 : .4 }}/>
+                    <span style={{ fontSize:13, fontWeight: pickedAway ? 700 : 400, color: pickedAway ? "#fff" : "#9aa4c7" }}>
+                      {teamLabelNoMascot(g.away, g.awayRank)}
+                    </span>
+                    <span style={{ fontSize:12, color:"#5b6a8f" }}>@</span>
+                    <TeamLogo school={g.home} size={28} style={{ opacity: pickedHome ? 1 : .4 }}/>
+                    <span style={{ fontSize:13, fontWeight: pickedHome ? 700 : 400, color: pickedHome ? "#fff" : "#9aa4c7" }}>
+                      {teamLabelNoMascot(g.home, g.homeRank)}
+                    </span>
+                    {g.gameday && <span style={{ fontSize:11, color:"#f0b429", fontWeight:700, marginLeft:4 }}>GAMEDAY</span>}
+                  </div>
+                  <StatusBadge tone={hasPick ? "success" : "danger"}>{pickLabel(g)}</StatusBadge>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {gd && receipt?.tiebreaker && (
+          <div style={{ marginTop: 16, padding:"12px 14px", borderRadius:12, background:"#0e1730", border:"1px solid #f0b429" }}>
+            <div style={{ fontSize:12, color:"#f0b429", fontWeight:700, marginBottom:4 }}>College GameDay Tiebreaker</div>
+            <div style={{ fontSize:14, fontWeight:600 }}>
+              Total points: {receipt.tiebreaker.total ?? "(not set)"}
+            </div>
+          </div>
+        )}
+
+        <div style={{ display:"flex", justifyContent:"flex-end", marginTop:20 }}>
+          <button type="button" style={adminBtn("primary")} onClick={()=>{
             setReceipt(null);
             localStorage.removeItem("receipt");
             setPage("picks");
