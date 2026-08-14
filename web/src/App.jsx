@@ -129,6 +129,50 @@ function Field({ label, children }) {
 }
 const inputStyle = { background:"#0c1426", color:"#fff", border:"1px solid #1f2a44", padding:"10px 12px", borderRadius:10 };
 
+// --- Admin UI helpers: consistent button semantics + section grouping ---
+const ADMIN_TONES = {
+  primary: { bg: "#2a4fb8", border: "#3b63d6", text: "#fff", dot: "#6aa2ff" },
+  neutral: { bg: "transparent", border: "#2a3655", text: "#cfd8f0", dot: "#8ea0c9" },
+  success: { bg: "#1a6b46", border: "#238a5c", text: "#fff", dot: "#3ecf8e" },
+  warning: { bg: "#8a5d12", border: "#a8791d", text: "#fff", dot: "#f0b429" },
+  danger:  { bg: "#7a2530", border: "#9c303d", text: "#fff", dot: "#f0596b" }
+};
+function adminBtn(variant = "neutral", extra = {}) {
+  const t = ADMIN_TONES[variant] || ADMIN_TONES.neutral;
+  return {
+    background: t.bg, border: `1px solid ${t.border}`, color: t.text,
+    padding: "9px 14px", borderRadius: 10, fontSize: 14, fontWeight: 600,
+    cursor: "pointer", ...extra
+  };
+}
+function AdminSection({ title, tone = "neutral", right, children }) {
+  const dot = (ADMIN_TONES[tone] || ADMIN_TONES.neutral).dot;
+  return (
+    <div style={{ background:"#0e1730", border:"1px solid #1f2a44", borderRadius:14, padding:"16px 18px", marginTop:16 }}>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:12, flexWrap:"wrap", gap:8 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+          <span style={{ width:8, height:8, borderRadius:"50%", background:dot, display:"inline-block" }} />
+          <h3 style={{ margin:0, fontSize:15, letterSpacing:.3, color:"#eef2ff" }}>{title}</h3>
+        </div>
+        {right}
+      </div>
+      {children}
+    </div>
+  );
+}
+function StatusBadge({ tone = "neutral", children }) {
+  const t = ADMIN_TONES[tone] || ADMIN_TONES.neutral;
+  return (
+    <span style={{
+      display:"inline-flex", alignItems:"center", fontSize:12, fontWeight:600,
+      padding:"3px 10px", borderRadius:999, whiteSpace:"nowrap",
+      background: `${t.dot}22`, color: t.dot, border: `1px solid ${t.dot}55`
+    }}>
+      {children}
+    </span>
+  );
+}
+
 // Renders "#7 Team" if rank is 1..25, else just "Team"
 function teamLabel(name, rank) {
   const n = Number(rank);
@@ -2526,6 +2570,7 @@ const isKickoffTbd = (g) => !kickoffDate(g);function AdminPage({ user, isAdmin, 
   const [msg, setMsg] = useState("");
   const [weeksForYear, setWeeksForYear] = useState([]);
   const [apiKey, setApiKey] = useState("");
+  const [showApiKey, setShowApiKey] = useState(false);
   const [appCfg, setAppCfg] = useState({ leaderboardLocked: false, leaderboardPicksPublic: false, picksLocked: false });
   const pot = useMemo(() => (pickCount * 5), [pickCount]);
 
@@ -2910,156 +2955,170 @@ Type "home" or "away".`,
     }
   };
 
-  if (year == null || week == null) { return (<Container maxWidth={720}><Header user={user} isAdmin={isAdmin} setPage={setPage} /><Card><p>Loading live weekï¿½</p></Card></Container>); }
+  if (year == null || week == null) { return (<Container maxWidth={720}><Header user={user} isAdmin={isAdmin} setPage={setPage} /><Card><p>Loading live week&hellip;</p></Card></Container>); }
   return (<Container maxWidth={720}>
       <Header user={user} isAdmin={isAdmin} setPage={setPage} />
       <Card style={{ maxWidth: 1200 }}>
-        <h2>Admin</h2>
-        <Row style={{ margin: "8px 0" }}><button onClick={() => { window.history.pushState(null, "", "/admin/picks"); setPage("adminpicks"); }}>Open Picks Management</button></Row>
-        <Row style={{ margin: "8px 0" }}>
-          <Field label="Year"><input style={{...inputStyle, width:"6rem"}} type="number" value={(year ?? '')} onChange={e=>setYear(Number(e.target.value))}/></Field>
-          <Field label="Week"><input style={{...inputStyle, width:"4rem"}} type="number" value={(week ?? '')} onChange={e=>setWeek(Number(e.target.value))}/></Field>
-          <button onClick={async()=>setGames(await listGames({ year, week, includedOnly: false }))}>Load</button>
-          <button onClick={async()=>{ try { await setDoc(doc(db,"config","live"), { year, week }, { merge:true });
+        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:10 }}>
+          <h2 style={{ margin:0 }}>Admin</h2>
+          <button style={adminBtn("neutral")} onClick={() => { window.history.pushState(null, "", "/admin/picks"); setPage("adminpicks"); }}>Open Picks Management</button>
+        </div>
+        {msg && (
+          <div style={{ marginTop:12, padding:"8px 12px", borderRadius:10, background:"rgba(106,162,255,.1)", border:"1px solid rgba(106,162,255,.3)", color:"#cfe0ff", fontSize:13 }}>{msg}</div>
+        )}
+
+        <AdminSection title="Live Week" tone="primary" right={<StatusBadge tone="primary">Live: {live?.year ?? "-"} / W{live?.week ?? "-"}</StatusBadge>}>
+          <Row>
+            <Field label="Year"><input style={{...inputStyle, width:"6rem"}} type="number" value={(year ?? '')} onChange={e=>setYear(Number(e.target.value))}/></Field>
+            <Field label="Week"><input style={{...inputStyle, width:"4rem"}} type="number" value={(week ?? '')} onChange={e=>setWeek(Number(e.target.value))}/></Field>
+            <button style={adminBtn("neutral")} onClick={async()=>setGames(await listGames({ year, week, includedOnly: false }))}>Load</button>
+            <button style={adminBtn("primary")} onClick={async()=>{ try { await setDoc(doc(db,"config","live"), { year, week }, { merge:true });
 await setDoc(doc(db,"config","app"), { currentYear: year, currentWeek: week, updatedAt: serverTimestamp() }, { merge:true }); setMsg(`Live week set to ${year} / W${week} (config/live + config/app)`); } catch(e) { console.error(e); setMsg("Failed to set live week"); } }}>Set Live Week</button>
-          <button onClick={async()=>{ 
-            try { 
-              const gs = await listGames({ year, week, includedOnly: false });
-              const gd = (gs || []).filter(g => g && g.gameday);
-              if (gd.length !== 1) { 
-                setMsg(gd.length === 0 ? "No GameDay game flagged for this week." : "Multiple GameDay games flagged ï¿½ fix in Games.");
-                return; 
+            <button style={adminBtn("neutral")} onClick={async()=>{
+              try {
+                const gs = await listGames({ year, week, includedOnly: false });
+                const gd = (gs || []).filter(g => g && g.gameday);
+                if (gd.length !== 1) {
+                  setMsg(gd.length === 0 ? "No GameDay game flagged for this week." : "Multiple GameDay games flagged — fix in Games.");
+                  return;
+                }
+                await setDoc(doc(db, "config", "live"), { gamedayGameId: gd[0].id, gamedayHome: gd[0].home }, { merge: true });
+                setMsg("Synced live GameDay to " + (gd[0].away || "Away") + " @ " + (gd[0].home || "Home") + ".");
+              } catch (e) {
+                console.error(e);
+                setMsg("Failed to sync live GameDay");
               }
-              await setDoc(doc(db, "config", "live"), { gamedayGameId: gd[0].id, gamedayHome: gd[0].home }, { merge: true });
-              setMsg("Synced live GameDay to " + (gd[0].away || "Away") + " @ " + (gd[0].home || "Home") + ".");
-            } catch (e) { 
-              console.error(e); 
-              setMsg("Failed to sync live GameDay");
-            } 
-          }}>Sync Live GameDay</button>
-          <div style={{ marginLeft: 12, fontSize: 13, color:"#9aa4c7" }}>Current Week: {live?.week ?? "-"}</div>
-        </Row>
+            }}>Sync Live GameDay</button>
+          </Row>
+        </AdminSection>
 
         <BulkImportPicksPreview year={year} week={week} />
-        <h3 style={{ marginTop: 16 }}>Submissions</h3>
-        <Row style={{ marginTop: 6, marginBottom: 6 }}>
-          <button onClick={async ()=>{ try {
-            await setDoc(doc(db, "config", "app"), { picksLocked: true, updatedAt: serverTimestamp() }, { merge: true });
-            setMsg("Submissions locked.");
-          } catch (e) {
-            setMsg("Failed: " + (e?.message || String(e)));
-          } }}>
-            Lock Submissions
-          </button>
-          <button onClick={async ()=>{ try {
-            await setDoc(doc(db, "config", "app"), { picksLocked: false, updatedAt: serverTimestamp() }, { merge: true });
-            setMsg("Submissions unlocked.");
-          } catch (e) {
-            setMsg("Failed: " + (e?.message || String(e)));
-          } }}>
-            Unlock Submissions
-          </button>
-        </Row>
-        <h3 style={{ marginTop: 16 }}>Leaderboard</h3>
-        <Row style={{ marginTop: 6, marginBottom: 6 }}>
-          <button onClick={toggleLeaderboardLock}>
-            {appCfg.leaderboardLocked ? "Unlock Leaderboard" : "Lock Leaderboard (current week)"}
-          </button>
-          <div style={{ color:"#9aa4c7", fontSize:13, marginLeft:8 }}>
-            Status: {appCfg.leaderboardLocked ? "Locked (current week)" : "Unlocked"}
+
+        <AdminSection title="Submissions" tone="warning" right={<StatusBadge tone={appCfg.picksLocked ? "danger" : "success"}>{appCfg.picksLocked ? "Locked" : "Open"}</StatusBadge>}>
+          <Row>
+            <button style={adminBtn("warning")} onClick={async ()=>{ try {
+              await setDoc(doc(db, "config", "app"), { picksLocked: true, updatedAt: serverTimestamp() }, { merge: true });
+              setMsg("Submissions locked.");
+            } catch (e) {
+              setMsg("Failed: " + (e?.message || String(e)));
+            } }}>
+              Lock Submissions
+            </button>
+            <button style={adminBtn("success")} onClick={async ()=>{ try {
+              await setDoc(doc(db, "config", "app"), { picksLocked: false, updatedAt: serverTimestamp() }, { merge: true });
+              setMsg("Submissions unlocked.");
+            } catch (e) {
+              setMsg("Failed: " + (e?.message || String(e)));
+            } }}>
+              Unlock Submissions
+            </button>
+          </Row>
+        </AdminSection>
+
+        <AdminSection title="Leaderboard" tone="warning">
+          <Row style={{ marginBottom: 10 }}>
+            <button style={adminBtn(appCfg.leaderboardLocked ? "success" : "warning")} onClick={toggleLeaderboardLock}>
+              {appCfg.leaderboardLocked ? "Unlock Leaderboard" : "Lock Leaderboard (current week)"}
+            </button>
+            <StatusBadge tone={appCfg.leaderboardLocked ? "danger" : "success"}>
+              {appCfg.leaderboardLocked ? "Locked (current week)" : "Unlocked"}
+            </StatusBadge>
+          </Row>
+          <Row>
+            <button style={adminBtn("neutral")} onClick={toggleLeaderboardPicks}>
+              {appCfg.leaderboardPicksPublic ? "Switch to Admin-Only Picks" : "Switch to Public Picks"}
+            </button>
+            <StatusBadge tone={appCfg.leaderboardPicksPublic ? "primary" : "neutral"}>
+              {appCfg.leaderboardPicksPublic ? "Public (everyone can see picks)" : "Admin-Only"}
+            </StatusBadge>
+          </Row>
+        </AdminSection>
+
+        <AdminSection title="Test Sandbox (2099 / W1)" tone="neutral">
+          <Row>
+            <button style={adminBtn("success")} onClick={createDummyWeek}>Create Dummy Week</button>
+            <button style={adminBtn("danger")} onClick={clearDummyWeek}>Clear Dummy Week</button>
+            <button style={adminBtn("danger")} onClick={clearWeekIfNoPicks}>Clear Week (if no picks)</button>
+          </Row>
+        </AdminSection>
+
+        <AdminSection title="Scoreboard Controls" tone="neutral">
+          <Row>
+            <button style={adminBtn("neutral")} onClick={async()=>{
+              try {
+                await setDoc(doc(db, "config", "app"), {
+                  scoreboard: {
+                    testMode: true,
+                    mode: "off",
+                    fixturePath: "/dev/scoreboard-demo.json"
+                  },
+                  updatedAt: serverTimestamp()
+                }, { merge: true });
+                setMsg("Scoreboard set to DEMO (fixture) via config/app.");
+              } catch(e) {
+                console.error(e);
+                setMsg("Failed to set scoreboard to DEMO");
+              }
+            }}>
+              Use Demo (Fixture)
+            </button>
+
+            <button style={adminBtn("primary")} onClick={async()=>{
+              try {
+                await setDoc(doc(db, "config", "app"), {
+                  scoreboard: {
+                    testMode: false,
+                    mode: "on"
+                  },
+                  updatedAt: serverTimestamp()
+                }, { merge: true });
+                setMsg("Scoreboard set to CFBD LIVE via config/app.");
+              } catch(e) {
+                console.error(e);
+                setMsg("Failed to set scoreboard to LIVE");
+              }
+            }}>
+              Use CFBD Live
+            </button>
+
+            <button style={adminBtn("neutral")} onClick={() => {
+              try {
+                localStorage.setItem("sbLocalFixture","0");
+                alert("Fixture override set to OFF.\nIf the Leaderboard is already open, toggle its Fixture button OFF once.");
+              } catch(_) {}
+            }}>
+              Disable Fixture Override
+            </button>
+          </Row>
+        </AdminSection>
+
+        <AdminSection title="Schedule Import" tone="primary">
+          <Row>
+            <Field label="CFBD API key (stored admin-only in Firestore)">
+              <div style={{ display:"flex", gap:8 }}>
+                <input style={{...inputStyle, width:"24rem"}} type={showApiKey ? "text" : "password"} autoComplete="off" value={apiKey} onChange={e=>setApiKey(e.target.value)} placeholder="Bearer key from collegefootballdata.com"/>
+                <button type="button" style={adminBtn("neutral", { padding:"9px 12px" })} onClick={()=>setShowApiKey(v=>!v)}>{showApiKey ? "Hide" : "Show"}</button>
+              </div>
+            </Field>
+            <button style={adminBtn("primary")} onClick={saveKey}>Save key</button>
+            <button style={adminBtn("primary")} onClick={doImport}>Import week</button>
+          </Row>
+        </AdminSection>
+
+        <AdminSection title="Games" tone="neutral" right={
+          <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+            <StatusBadge tone="neutral">Selected: {games.filter(x => x.included).length} / {games.length}</StatusBadge>
+            <button
+              type="button"
+              onClick={(e)=>{ e.preventDefault(); e.stopPropagation(); deselectAll(); }}
+              style={adminBtn("neutral", { padding:"6px 10px" })}
+              aria-label="Deselect all games"
+              title="Deselect all games"
+            >
+              Deselect All
+            </button>
           </div>
-        </Row>
-        <Row style={{ marginTop: 6, marginBottom: 6 }}>
-          <button onClick={toggleLeaderboardPicks}>
-            {appCfg.leaderboardPicksPublic ? "Switch to Admin-Only Picks" : "Switch to Public Picks"}
-          </button>
-          <div style={{ color:"#9aa4c7", fontSize:13, marginLeft:8 }}>
-            Picks Visibility: {appCfg.leaderboardPicksPublic ? "Public (everyone can see picks)" : "Admin-Only"}
-          </div>
-        </Row>
-        <div style={{ color:"#9aa4c7", margintop:-4, fontSize:13 }}>{msg}</div>
-        
-
-        <Row style={{ marginBottom: 14 }}>
-          <button onClick={createDummyWeek}>Create Dummy Week (2099 / W1)</button>
-          <button onClick={clearDummyWeek}>Clear Dummy Week (2099 / W1)</button>
-          <button onClick={clearWeekIfNoPicks}>Clear Week (if no picks)</button>
-        </Row>
-        <h3>Scoreboard Controls</h3>
-<Row>
-  <button onClick={async()=>{ 
-    try { 
-      await setDoc(doc(db, "config", "app"), { 
-        scoreboard: {
-          testMode: true, 
-          mode: "off", 
-          fixturePath: "/dev/scoreboard-demo.json"
-        },
-        updatedAt: serverTimestamp()
-      }, { merge: true });
-      setMsg("Scoreboard set to DEMO (fixture) via config/app.");
-    } catch(e) { 
-      console.error(e); 
-      setMsg("Failed to set scoreboard to DEMO"); 
-    } 
-  }}>
-    Use Demo (Fixture)
-  </button>
-
-  <button onClick={async()=>{ 
-    try { 
-      await setDoc(doc(db, "config", "app"), { 
-        scoreboard: {
-          testMode: false, 
-          mode: "on"
-        },
-        updatedAt: serverTimestamp()
-      }, { merge: true });
-      setMsg("Scoreboard set to CFBD LIVE via config/app.");
-    } catch(e) { 
-      console.error(e); 
-      setMsg("Failed to set scoreboard to LIVE"); 
-    } 
-  }}>
-    Use CFBD Live
-  </button>
-
-  <button onClick={() => {
-    try {
-      localStorage.setItem("sbLocalFixture","0");
-      alert("Fixture override set to OFF.\nIf the Leaderboard is already open, toggle its Fixture button OFF once.");
-    } catch(_) {}
-  }}>
-    Disable Fixture Override
-  </button>
-</Row>
-
-<h3>Schedule import</h3>
-        <Row style={{ marginBottom: 14 }}>
-          <Field label="CFBD API key (stored admin-only in Firestore)">
-            <input style={{...inputStyle, width:"28rem"}} value={apiKey} onChange={e=>setApiKey(e.target.value)} placeholder="Bearer key from collegefootballdata.com"/>
-          </Field>
-          <button onClick={saveKey}>Save key</button>
-          <button onClick={doImport}>Import week</button>
-        </Row>
-
-        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginTop:16 }}>
-  <h3 style={{ margin: 0 }}>Games</h3>
-  <div style={{ display:"flex", alignItems:"center", gap:12 }}>
-    <div style={{ fontSize: 12, opacity: 0.8 }}>
-      Selected: {games.filter(x => x.included).length} / {games.length}
-    </div>
-    <button
-      type="button"
-      onClick={(e)=>{ e.preventDefault(); e.stopPropagation(); deselectAll(); }}
-      style={{ padding:"6px 10px", borderRadius:10, border:"1px solid #1f2a44", cursor:"pointer" }}
-      aria-label="Deselect all games"
-      title="Deselect all games"
-    >
-      Deselect All
-    </button>
-  </div>
-</div>
+        }>
 {renderGamesGroupedByDate(games, {
   timeZone: "America/New_York",
   renderRow: (g, i, { kickoffLabel }) => (
@@ -3108,7 +3167,9 @@ await setDoc(doc(db,"config","app"), { currentYear: year, currentWeek: week, upd
 </div>
     </div>
   )
-})}</Card>
+})}
+        </AdminSection>
+      </Card>
 </Container>
   );
 }
