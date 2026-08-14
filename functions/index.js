@@ -139,6 +139,62 @@ async function autoWriteWinners(db, mapObj) {
   }
 }
 
+function clockToSeconds(clock) {
+  if (!clock || typeof clock !== "string") return null;
+  const m = clock.match(/^(\d+):(\d{2})$/);
+  if (!m) return null;
+  return Number(m[1]) * 60 + Number(m[2]);
+}
+
+// "Started" = clock has ticked below 15:00 in the 1st quarter, or the game
+// has moved past the 1st quarter entirely.
+function hasGameStarted(liveGame) {
+  if (!liveGame) return false;
+  const period = Number(liveGame.period);
+  if (Number.isFinite(period) && period >= 2) return true;
+  if (period === 1) {
+    const secs = clockToSeconds(liveGame.clock);
+    if (secs !== null && secs < 900) return true;
+  }
+  return false;
+}
+
+// Lock picks and open the leaderboard the instant the week's first game (by
+// scheduled kickoff) actually starts. Reopening picks for the next week is
+// always a manual admin action - this only ever locks, never unlocks picks.
+async function autoLockAtKickoff(db, mapObj) {
+  const liveSnap = await db.doc("config/live").get();
+  const liveCfg = liveSnap.exists ? liveSnap.data() : {};
+  const year = Number(liveCfg?.year), week = Number(liveCfg?.week);
+  if (!Number.isFinite(year) || !Number.isFinite(week)) return;
+
+  const gamesSnap = await db.collection("games")
+    .where("year", "==", year)
+    .where("week", "==", week)
+    .get();
+  if (gamesSnap.empty) return;
+
+  const games = gamesSnap.docs.map(d => d.data()).filter(g => g.included !== false && g.startTimeStr);
+  if (!games.length) return;
+
+  games.sort((a, b) => new Date(a.startTimeStr) - new Date(b.startTimeStr));
+  const firstGame = games[0];
+
+  if (!hasGameStarted(mapObj[toKey(firstGame.away, firstGame.home)])) return;
+
+  const appSnap = await db.doc("config/app").get();
+  const app = appSnap.exists ? appSnap.data() : {};
+  const updates = {};
+  if (app.picksLocked !== true) updates.picksLocked = true;
+  if (app.leaderboardLocked !== false) updates.leaderboardLocked = false;
+
+  if (Object.keys(updates).length > 0) {
+    updates.updatedAt = admin.firestore.FieldValue.serverTimestamp();
+    await db.doc("config/app").set(updates, { merge: true });
+    logger.info(`autoLockAtKickoff: ${firstGame.away} @ ${firstGame.home} started - locked picks, opened leaderboard for ${year}/W${week}`);
+  }
+}
+
 // Node 20 has global fetch; poll once per minute via Cloud Scheduler
 exports.publishLiveMap = onSchedule(
   {
@@ -226,6 +282,9 @@ exports.publishLiveMap = onSchedule(
       if (scoreboardCfg.autoWriteWinners !== false) {
         await autoWriteWinners(db, mapObj);
       }
+
+      // Lock picks + open the leaderboard the instant the week's first game starts
+      await autoLockAtKickoff(db, mapObj);
     } catch (e) {
       logger.error("CFBD fetch/publish error:", e?.message || e);
     }
