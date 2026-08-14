@@ -65,6 +65,21 @@ const fitFontByLen = (len) => (len <= 28 ? 15 : len <= 34 ? 14 : len <= 40 ? 13 
 // it), so it must survive this check while null/undefined/"" must not.
 const hasWeekValue = (v) => v !== null && v !== undefined && v !== "" && Number.isFinite(Number(v));
 
+// True on narrow (mobile-width) viewports; updates live on resize/rotate.
+// Lets specific components render a distinct compact mobile layout without
+// touching the desktop rendering at all.
+function useIsMobile(breakpoint = 768) {
+  const [isMobile, setIsMobile] = useState(() =>
+    typeof window !== "undefined" ? window.innerWidth < breakpoint : false
+  );
+  useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth < breakpoint);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [breakpoint]);
+  return isMobile;
+}
+
 // ---------- small UI helpers ----------
 function Row({ children, style }) {
   return <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", ...style }}>{children}</div>;
@@ -110,9 +125,9 @@ function Header({ user, isAdmin, setPage }) {
     }
   }
   return (
-    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 16 }}>
+    <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", rowGap: 8, marginBottom: 16 }}>
       <h1 style={{ margin: 0, fontSize: 20 }}>CFB Pick'em</h1>
-      <nav style={{ display: "flex", gap: 8 }}>
+      <nav style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <a href="#" onClick={(e)=>{e.preventDefault();
 
     history.pushState(null, "", "/picks"); setPage("picks");}}>Picks</a>
@@ -3220,6 +3235,7 @@ await setDoc(doc(db,"config","app"), { currentYear: year, currentWeek: week, upd
 }
 
 function ConfirmPage({ setPage }) {
+  const isMobile = useIsMobile();
   const [picksLocked, setPicksLocked] = useState(false);
   useEffect(() => {
     const unsub = onSnapshot(doc(db, "config", "app"), (s) => {
@@ -3372,11 +3388,37 @@ const normVenmo = (s) => String(s||"").trim().toLowerCase().replace(/^@+/, "");c
           Double-check your picks below, then confirm to submit.
         </div>
 
-        <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+        <div style={{ display:"flex", flexDirection:"column", gap: isMobile ? 4 : 8 }}>
           {list.map(g => {
             const pickedHome = pending?.picks?.[g.id] === g.home;
             const pickedAway = pending?.picks?.[g.id] === g.away;
             const hasPick = pickedHome || pickedAway;
+
+            if (isMobile) {
+              // Compact, single-line, non-wrapping row so a full slate stays
+              // screenshot-friendly - long names truncate instead of wrapping.
+              return (
+                <div key={g.id} style={{
+                  display:"flex", alignItems:"center", gap:6, flexWrap:"nowrap",
+                  padding:"6px 8px", borderRadius:8,
+                  background:"#0e1730", border: g.gameday ? "1px solid #f0b429" : "1px solid #1f2a44"
+                }}>
+                  <TeamLogo school={g.away} size={16} style={{ opacity: pickedAway ? 1 : .4, flexShrink:0 }}/>
+                  <span style={{ fontSize:11, fontWeight: pickedAway ? 700 : 400, color: pickedAway ? "#fff" : "#9aa4c7", minWidth:0, flexShrink:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                    {teamLabelNoMascot(g.away, g.awayRank)}
+                  </span>
+                  <span style={{ fontSize:10, color:"#5b6a8f", flexShrink:0 }}>@</span>
+                  <TeamLogo school={g.home} size={16} style={{ opacity: pickedHome ? 1 : .4, flexShrink:0 }}/>
+                  <span style={{ fontSize:11, fontWeight: pickedHome ? 700 : 400, color: pickedHome ? "#fff" : "#9aa4c7", minWidth:0, flexShrink:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                    {teamLabelNoMascot(g.home, g.homeRank)}
+                  </span>
+                  <div style={{ marginLeft:"auto", flexShrink:0 }}>
+                    <StatusBadge tone={hasPick ? "success" : "danger"}>{pickLabel(g)}</StatusBadge>
+                  </div>
+                </div>
+              );
+            }
+
             return (
               <div key={g.id} style={{
                 display:"flex", alignItems:"center", justifyContent:"space-between", gap:12, flexWrap:"wrap",
@@ -3421,6 +3463,7 @@ const normVenmo = (s) => String(s||"").trim().toLowerCase().replace(/^@+/, "");c
 }
 
 function ReceiptPage({ setPage }) {
+  const isMobile = useIsMobile();
   const [receipt, setReceipt] = React.useState(null);
   const [games, setGames] = React.useState([]);
 
@@ -3471,11 +3514,37 @@ function ReceiptPage({ setPage }) {
         </div>
 
         {games.length > 0 && (
-          <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+          <div style={{ display:"flex", flexDirection:"column", gap: isMobile ? 4 : 8 }}>
             {games.map(g => {
               const pickedHome = receipt?.picks?.[g.id] === g.home;
               const pickedAway = receipt?.picks?.[g.id] === g.away;
               const hasPick = pickedHome || pickedAway;
+
+              if (isMobile) {
+                // Compact, single-line, non-wrapping row so a full slate stays
+                // screenshot-friendly - long names truncate instead of wrapping.
+                return (
+                  <div key={g.id} style={{
+                    display:"flex", alignItems:"center", gap:6, flexWrap:"nowrap",
+                    padding:"6px 8px", borderRadius:8,
+                    background:"#0e1730", border: g.gameday ? "1px solid #f0b429" : "1px solid #1f2a44"
+                  }}>
+                    <TeamLogo school={g.away} size={16} style={{ opacity: pickedAway ? 1 : .4, flexShrink:0 }}/>
+                    <span style={{ fontSize:11, fontWeight: pickedAway ? 700 : 400, color: pickedAway ? "#fff" : "#9aa4c7", minWidth:0, flexShrink:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                      {teamLabelNoMascot(g.away, g.awayRank)}
+                    </span>
+                    <span style={{ fontSize:10, color:"#5b6a8f", flexShrink:0 }}>@</span>
+                    <TeamLogo school={g.home} size={16} style={{ opacity: pickedHome ? 1 : .4, flexShrink:0 }}/>
+                    <span style={{ fontSize:11, fontWeight: pickedHome ? 700 : 400, color: pickedHome ? "#fff" : "#9aa4c7", minWidth:0, flexShrink:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                      {teamLabelNoMascot(g.home, g.homeRank)}
+                    </span>
+                    <div style={{ marginLeft:"auto", flexShrink:0 }}>
+                      <StatusBadge tone={hasPick ? "success" : "danger"}>{pickLabel(g)}</StatusBadge>
+                    </div>
+                  </div>
+                );
+              }
+
               return (
                 <div key={g.id} style={{
                   display:"flex", alignItems:"center", justifyContent:"space-between", gap:12, flexWrap:"wrap",
@@ -3525,7 +3594,7 @@ function ReceiptPage({ setPage }) {
 function ModalOverlay({ children }) {
   return (
     <div style={{
-      position:"fixed", inset:0, background:"rgba(0,0,0,0.45)",
+      position:"fixed", inset:0, background:"rgba(5,8,16,0.92)",
       display:"grid", placeItems:"center", padding:"24px", zIndex: 1000
     }}>
       <div style={{
