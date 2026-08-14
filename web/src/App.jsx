@@ -2668,7 +2668,8 @@ const isKickoffTbd = (g) => !kickoffDate(g);function AdminPage({ user, isAdmin, 
         testMode: false,
         testIntervalSec: 10,
         fixturePath: "/dev/scoreboard-demo.json",
-        autoWriteWinners: true // server-side auto-winner writer on/off (publishLiveMap)
+        autoWriteWinners: true, // server-side auto-winner writer on/off (publishLiveMap)
+        autoLockPicks: true // server-side auto-lock-at-kickoff on/off (publishLiveMap)
       };
       setAppCfg({
         leaderboardLocked: !!d.leaderboardLocked,
@@ -3006,8 +3007,15 @@ await setDoc(doc(db,"config","app"), { currentYear: year, currentWeek: week, upd
 
         <BulkImportPicksPreview year={year} week={week} />
 
-        <AdminSection title="Submissions" tone="warning" right={<StatusBadge tone={appCfg.picksLocked ? "danger" : "success"}>{appCfg.picksLocked ? "Locked" : "Open"}</StatusBadge>}>
-          <Row>
+        <AdminSection title="Submissions" tone="warning" right={
+          <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+            <StatusBadge tone={appCfg.picksLocked ? "danger" : "success"}>{appCfg.picksLocked ? "Locked" : "Open"}</StatusBadge>
+            <StatusBadge tone={appCfg.scoreboard?.autoLockPicks !== false ? "primary" : "neutral"}>
+              Automation: {appCfg.scoreboard?.autoLockPicks !== false ? "On" : "Off"}
+            </StatusBadge>
+          </div>
+        }>
+          <Row style={{ marginBottom: 10 }}>
             <button style={adminBtn("warning")} onClick={async ()=>{ try {
               await setDoc(doc(db, "config", "app"), { picksLocked: true, updatedAt: serverTimestamp() }, { merge: true });
               setMsg("Submissions locked.");
@@ -3023,6 +3031,23 @@ await setDoc(doc(db,"config","app"), { currentYear: year, currentWeek: week, upd
               setMsg("Failed: " + (e?.message || String(e)));
             } }}>
               Unlock Submissions
+            </button>
+          </Row>
+          <Row>
+            <button
+              style={adminBtn(appCfg.scoreboard?.autoLockPicks !== false ? "neutral" : "primary")}
+              title="Auto-lock picks + open leaderboard at kickoff. Turn off to make a manual unlock stick during a game."
+              onClick={async ()=>{
+                const next = appCfg.scoreboard?.autoLockPicks === false; // currently off -> turn on
+                try {
+                  await setDoc(doc(db, "config", "app"), { scoreboard: { autoLockPicks: next }, updatedAt: serverTimestamp() }, { merge: true });
+                  setMsg(`Auto-lock-at-kickoff turned ${next ? "ON" : "OFF"}.`);
+                } catch (e) {
+                  setMsg("Failed: " + (e?.message || String(e)));
+                }
+              }}
+            >
+              Automation: {appCfg.scoreboard?.autoLockPicks !== false ? "ON (turn off)" : "OFF (turn on)"}
             </button>
           </Row>
         </AdminSection>

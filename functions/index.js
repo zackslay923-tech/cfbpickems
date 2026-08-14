@@ -283,8 +283,11 @@ exports.publishLiveMap = onSchedule(
         await autoWriteWinners(db, mapObj);
       }
 
-      // Lock picks + open the leaderboard the instant the week's first game starts
-      await autoLockAtKickoff(db, mapObj);
+      // Lock picks + open the leaderboard the instant the week's first game
+      // starts (default on; disable via config/app.scoreboard.autoLockPicks = false)
+      if (scoreboardCfg.autoLockPicks !== false) {
+        await autoLockAtKickoff(db, mapObj);
+      }
     } catch (e) {
       logger.error("CFBD fetch/publish error:", e?.message || e);
     }
