@@ -3231,7 +3231,7 @@ function ConfirmPage({ setPage }) {
   (async () => {
     try {
       const p = JSON.parse(localStorage.getItem("pending") || "null");
-      if (!p || !p.year || !p.week) { setPage("picks"); return; }
+      if (!p || !hasWeekValue(p.year) || !hasWeekValue(p.week)) { setPage("picks"); return; }
       setPending(p);
 
       // Use the same fetch + sort as PicksPage
@@ -3356,37 +3356,59 @@ const normVenmo = (s) => String(s||"").trim().toLowerCase().replace(/^@+/, "");c
   return (
     <Container maxWidth={720}>
       <Card style={{ maxWidth: 900 }}>
-        <h2 style={{ marginTop: 0 }}>Confirm Your Picks — Week {pending.week}</h2>
-        <div style={{ marginBottom:12 }}>
-          <span style={{ fontWeight:700, marginRight:8 }}>Your edit code:</span>
-          <code style={{ fontSize:18 }}>{pending.code}</code>
+        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:10 }}>
+          <h2 style={{ margin:0 }}>Confirm Your Picks — Week {pending.week}</h2>
+          <div style={{ display:"flex", alignItems:"center", gap:8, background:"#0e1730", border:"1px solid #1f2a44", borderRadius:999, padding:"6px 14px" }}>
+            <span style={{ fontSize:12, color:"#9aa4c7" }}>Edit code</span>
+            <code style={{ fontSize:16, fontWeight:700, letterSpacing:1 }}>{pending.code}</code>
+          </div>
+        </div>
+        <div style={{ fontSize:13, color:"#9aa4c7", margin:"6px 0 16px" }}>
+          Double-check your picks below, then confirm to submit.
         </div>
 
-        <div style={{ display:"grid", gridTemplateColumns:"1fr auto", gap:12 }}>
+        <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
           {list.map(g => {
-            const matchup = teamLabelNoMascot(g.away, g.awayRank) + " @ " + teamLabelNoMascot(g.home, g.homeRank);
+            const pickedHome = pending?.picks?.[g.id] === g.home;
+            const pickedAway = pending?.picks?.[g.id] === g.away;
+            const hasPick = pickedHome || pickedAway;
             return (
-              <div key={g.id} style={{ display:"grid", gridTemplateColumns:"1fr auto", gap:12, alignItems:"center" }}>
-                <div style={{ fontSize:12 }}>{matchup}{g.gameday ? "  ???" : ""}</div>
-                <div style={{ fontSize:13, fontWeight:600 }}>{pickLabel(g)}</div>
+              <div key={g.id} style={{
+                display:"flex", alignItems:"center", justifyContent:"space-between", gap:12, flexWrap:"wrap",
+                padding:"10px 14px", borderRadius:12,
+                background:"#0e1730", border: g.gameday ? "1px solid #f0b429" : "1px solid #1f2a44"
+              }}>
+                <div style={{ display:"flex", alignItems:"center", gap:8, minWidth:0, flexWrap:"wrap" }}>
+                  <TeamLogo school={g.away} size={28} style={{ opacity: pickedAway ? 1 : .4 }}/>
+                  <span style={{ fontSize:13, fontWeight: pickedAway ? 700 : 400, color: pickedAway ? "#fff" : "#9aa4c7" }}>
+                    {teamLabelNoMascot(g.away, g.awayRank)}
+                  </span>
+                  <span style={{ fontSize:12, color:"#5b6a8f" }}>@</span>
+                  <TeamLogo school={g.home} size={28} style={{ opacity: pickedHome ? 1 : .4 }}/>
+                  <span style={{ fontSize:13, fontWeight: pickedHome ? 700 : 400, color: pickedHome ? "#fff" : "#9aa4c7" }}>
+                    {teamLabelNoMascot(g.home, g.homeRank)}
+                  </span>
+                  {g.gameday && <span style={{ fontSize:11, color:"#f0b429", fontWeight:700, marginLeft:4 }}>GAMEDAY</span>}
+                </div>
+                <StatusBadge tone={hasPick ? "success" : "danger"}>{pickLabel(g)}</StatusBadge>
               </div>
             );
           })}
         </div>
 
         {gd && (
-          <div style={{ marginTop: 16 }}>
-            <div style={{ fontSize:12, opacity:.8 }}>College GameDay Tiebreaker</div>
-            <div style={{ fontSize:13, fontWeight:600 }}>
-              Total: {pending?.tiebreaker?.total === "" || pending?.tiebreaker?.total == null ? "(not set)" : Number(pending.tiebreaker.total)}
+          <div style={{ marginTop: 16, padding:"12px 14px", borderRadius:12, background:"#0e1730", border:"1px solid #f0b429" }}>
+            <div style={{ fontSize:12, color:"#f0b429", fontWeight:700, marginBottom:4 }}>College GameDay Tiebreaker</div>
+            <div style={{ fontSize:14, fontWeight:600 }}>
+              Total points: {pending?.tiebreaker?.total === "" || pending?.tiebreaker?.total == null ? "(not set)" : Number(pending.tiebreaker.total)}
             </div>
           </div>
         )}
 
-        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginTop:16 }}>
-          <button type="button" onClick={()=>{ setPage("picks"); window.history.pushState(null, "", "/picks"); }}>Back to Edit</button>
-          <div style={{ flex:1, textAlign:"center", color:"#9aa4c7", fontSize:13 }}>{msg}</div>
-          <button type="button" onClick={confirmAndSubmit} disabled={!!(picksLocked)}>Confirm & Submit</button>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginTop:20, gap:12, flexWrap:"wrap" }}>
+          <button type="button" style={adminBtn("neutral")} onClick={()=>{ setPage("picks"); window.history.pushState(null, "", "/picks"); }}>Back to Edit</button>
+          {msg && <div style={{ flex:1, textAlign:"center", color:"#f0b429", fontSize:13, fontWeight:600 }}>{msg}</div>}
+          <button type="button" style={adminBtn(picksLocked ? "neutral" : "primary")} onClick={confirmAndSubmit} disabled={!!(picksLocked)}>Confirm & Submit</button>
         </div>
       </Card>
     </Container>
