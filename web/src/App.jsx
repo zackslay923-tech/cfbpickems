@@ -2519,357 +2519,113 @@ const kickoffLabel = (g, opts = {}) => {
 
 const isKickoffTbd = (g) => !kickoffDate(g);function AdminPage({ user, isAdmin, setPage }) {
   const [live, setLive] = useState({ year: null, week: null });
-  // --- Subscribe to live week (config/live) for display ---
-
-  useEffect(() => {
-    const unsub = onSnapshot(doc(db, "config", "live"), (s) => { const d = s.data() || {}; setLive(d); });
-
-  async function loadByCode() {
-    setMsg("");
-    const c = (loadCode || "").trim();
-    const ln = (loadLastName || "").trim().toLowerCase();
-    if (!/^\d{6}$/.test(c) || ln.length === 0) {
-      setMsg("Enter your 6-digit code and last name."); return;
-    }
-    const id = year + "_W" + week + "_" + c;
-    try {
-      const ref = doc(db, "picks", id);
-      const snap = await getDoc(ref);
-      if (!snap.exists()) { setMsg("No picks found for that code."); return; }
-      const d = snap.data();
-      const storedLower = (d.lastNameLower || (d.lastName || "").toLowerCase().trim());
-      if (storedLower !== ln) { setMsg("Code and last name do not match."); return; }
-
-      setForm(f => ({
-        ...f,
-        firstName: d.firstName || "",
-        lastName: d.lastName || "",
-        phone: d.phone || "", venmo: d.venmo || ""
-      }));
-      setPicks(d.picks || {});
-      setCode(c);
-      setEditing(true);
-      setMsg("Loaded. Editing code " + c + ".");
-    } catch (e) {
-      const m = (e && e.message) ? String(e.message) : String(e);
-      setMsg("Load failed: " + m);
-    }
-  }
-  return () => unsub();
-
-
-  }, []);
   const [year, setYear] = useState(null);
   const [week, setWeek] = useState(null);
-  // Mirror config/live into Admin controls (defaults to live week)
-  useEffect(() => {
-    if (live && live.year) setYear(Number(live.year));
-    if (live && live.week) setWeek(Number(live.week));
-  }, [live]);
-  // [removed duplicate auto-load ï¿½ keep only seq-safe loader]
-
-  // Mirror live {year,week} into Admin controls (default to live week)
-  useEffect(() => {
-    if (live && live.year) setYear(Number(live.year));
-    if (live && live.week) setWeek(Number(live.week));
-  }, [live.year, live.week]);  
-  // One-time sync from config/live ? Admin year/week
-  const [syncedFromLive, setSyncedFromLive] = useState(false);  
-  
-  // Primitive derivations so effects re-run reliably when live changes
-  const liveYear = (live && Number(live.year)) || null;
-  const liveWeek = (live && Number(live.week)) || null;
-// Default Admin to live Year/Week exactly once when config/live arrives
-  useEffect(() => {
-    try {
-      if (!syncedFromLive && live && Number(live.year) && Number(live.week)) {
-        setYear(Number(live.year));
-        setWeek(Number(live.week));
-        setSyncedFromLive(true); setMsg("Synced to live " + liveYear + "/W" + liveWeek + "."); }
-    } catch (e) { /* no-op */ }
-  }, [liveYear, liveWeek, syncedFromLive]);
   const [games, setGames] = useState([]);
   const [pickCount, setPickCount] = useState(0);
-const pot = useMemo(() => (pickCount * 5), [pickCount]);
+  const [msg, setMsg] = useState("");
+  const [weeksForYear, setWeeksForYear] = useState([]);
+  const [apiKey, setApiKey] = useState("");
+  const [appCfg, setAppCfg] = useState({ leaderboardLocked: false, leaderboardPicksPublic: false, picksLocked: false });
+  const pot = useMemo(() => (pickCount * 5), [pickCount]);
 
-useEffect(() => {
-  (async () => {
-    try {
-      if (hasWeekValue(year) && hasWeekValue(week)) {
-        const arr = await getPicksForWeek(year, week);
-        setPickCount(Array.isArray(arr) ? arr.length : 0);
-      } else {
+  // Subscribe to config/live (drives the "Current Week" display and Sync GameDay)
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, "config", "live"), (s) => setLive(s.data() || {}));
+    return () => unsub();
+  }, []);
+
+  // Seed Year/Week from the live week exactly once. After that, Admin can
+  // freely browse other weeks without snapping back when config/live changes.
+  const seededFromLiveRef = useRef(false);
+  useEffect(() => {
+    if (seededFromLiveRef.current) return;
+    if (hasWeekValue(live?.year) && hasWeekValue(live?.week)) {
+      setYear(Number(live.year));
+      setWeek(Number(live.week));
+      seededFromLiveRef.current = true;
+    }
+  }, [live]);
+
+  // Load games whenever the selected year/week changes
+  const gamesLoadSeq = useRef(0);
+  useEffect(() => {
+    if (!isAdmin || !hasWeekValue(year) || !hasWeekValue(week)) return;
+    const seq = ++gamesLoadSeq.current;
+    (async () => {
+      try {
+        const gs = await listGames({ year, week, includedOnly: false });
+        if (gamesLoadSeq.current === seq) setGames(gs);
+      } catch (e) {
+        console.error(e);
+      }
+    })();
+  }, [isAdmin, year, week]);
+
+  // Pick count for the selected week (drives the pot display)
+  useEffect(() => {
+    (async () => {
+      try {
+        if (hasWeekValue(year) && hasWeekValue(week)) {
+          const arr = await getPicksForWeek(year, week);
+          setPickCount(Array.isArray(arr) ? arr.length : 0);
+        } else {
+          setPickCount(0);
+        }
+      } catch {
         setPickCount(0);
       }
-    } catch {
-      setPickCount(0);
-    }
-  })();
-}, [year, week]);
-// [removed ADMIN_LIVE_ONLY_LOAD ï¿½ prevent duplicate loads]
-  // CONVERGE_ADMIN_GRID_TO_LIVE: if grid's week != live week, fetch and show live week
-  const liveY = live && Number(live.year) || 0;
-  const liveW = live && Number(live.week) || 0;
+    })();
+  }, [year, week]);
 
-  const gridWeek = useMemo(() => {
-    if (!games || !games.length) return 0;
-    const w = games.find(g => g && g.week)?.week;
-    return Number(w) || 0;
-  }, [games]);
-
-  // Sequence guard so stale loads cannot overwrite newer ones
-  const __adminSeq = useRef(0);
-
+  // Weeks dropdown: populate from games in the selected year
   useEffect(() => {
-    if (!isAdmin) return;
-    if (!liveY || !liveW) return;
-
-    // If what we're showing isn't the live week, pull the live week now.
-    if (gridWeek !== liveW) {
-      const seq = ++__adminSeq.current;
-      (async () => {
-        try {
-          const gs = await listGames({ year: liveY, week: liveW, includedOnly: false });
-          if (__adminSeq.current === seq) setGames(gs);
-        } catch (e) { console.error(e); }
-      })();
-    }
-  }, [isAdmin, liveY, liveW, gridWeek]);
-
-  // AUTOLOAD_FROM_LIVE: always load the live week's games (config/live) regardless of controls
-  useEffect(() => {
-    const y = live && Number(live.year);
-    const w = live && Number(live.week);
-    if (!isAdmin || !hasWeekValue(y) || !hasWeekValue(w)) return;
-    let cancelled = false;
     (async () => {
       try {
-        const gs = await listGames({ year: y, week: w, includedOnly: false });
-        if (!cancelled) setGames(gs);
-      } catch (e) {
-        console.error(e);
+        const q = query(collection(db, "games"), where("year", "==", Number(year)));
+        const snap = await getDocs(q);
+        const uniq = new Set();
+        snap.forEach(d => {
+          const w = d.data()?.week;
+          if (Number.isFinite(+w)) uniq.add(Number(w));
+        });
+        setWeeksForYear([...uniq].sort((a,b)=>a-b));
+      } catch (err) {
+        console.error("weeksForYear load failed", err);
+        setWeeksForYear([]);
       }
     })();
-    return () => { cancelled = true; };
-  }, [isAdmin, live && live.year, live && live.week]);
+  }, [year]);
 
-  // INITIAL_LIVE_AUTOLOAD: on first mount, load games for the live week (config/live)
+  // CFBD API key (admin-only, stored in config/cfbd)
   useEffect(() => {
-        try {
-      const ref = doc(db, "config", "live");
-      // Subscribe once, then auto-unsub after we apply the first live week load
-      const unsub = onSnapshot(ref, async (s) => {
-        const d = s.data() || {};
-        const y = Number(d.year), w = Number(d.week);
-        setLive({ year: y, week: w });
-        if (!hasWeekValue(y) || !hasWeekValue(w)) { return; }
+    if (!isAdmin) return;
+    (async () => { setApiKey(await getCfbdKey()); })();
+  }, [isAdmin]);
 
-        // Keep Admin controls consistent, but the important part is we load the live week now:
-        setYear(y);
-        setWeek(w);
-
-        try {
-          const gs = await listGames({ year: y, week: w, includedOnly: false });
-          setGames(gs);
-        } catch (e) {
-          console.error(e);
-        } finally {
-          // We only need this once on entry; further changes can be manual
-          unsub();
-        }
-      });
-      return () => { try { unsub(); } catch {} };
-    } catch (e) {
-      console.error(e);
-    }
-  }, []);
-  const _liveSeq = useRef(0);
-  // LIVE_SUB_LOAD_ADMIN: subscribe to config/live and always load live week's games
+  // config/app: scoreboard settings + leaderboard/picks lock flags, in one subscription
   useEffect(() => {
-    const unsub = onSnapshot(doc(db, "config", "live"), (s) => {
+    const unsub = onSnapshot(doc(db, "config", "app"), (s) => {
       const d = s.data() || {};
-      const y = Number(d.year), w = Number(d.week);
-      setLive({ year: y, week: w });
-      if (!hasWeekValue(y) || !hasWeekValue(w)) return;
-
-      // keep controls consistent (even if you ignore them)
-      setYear(y);
-      setWeek(w);
-
-      // race-proof fetch: only apply the latest live result
-      const seq = ++_liveSeq.current;
-      (async () => {
-        try {
-          const gs = await listGames({ year: y, week: w, includedOnly: false });
-          if (_liveSeq.current === seq) setGames(gs);
-        } catch (e) {
-          console.error(e);
-        }
-      })();
+      const defSb = {
+        mode: "off",
+        intervalSec: 60,
+        window: { startET: "12:00", endET: "02:00" }, // game-hours gate for the server-side cron
+        testMode: false,
+        testIntervalSec: 10,
+        fixturePath: "/dev/scoreboard-demo.json",
+        autoWriteWinners: true // server-side auto-winner writer on/off (publishLiveMap)
+      };
+      setAppCfg({
+        leaderboardLocked: !!d.leaderboardLocked,
+        leaderboardPicksPublic: !!d.leaderboardPicksPublic,
+        picksLocked: !!d.picksLocked,
+        scoreboard: { ...defSb, ...(d.scoreboard || {}) }
+      });
     });
     return () => unsub();
   }, []);
 
-
-  // sequence guard for autoload
-  const _autoSeq = useRef(0);  // helper: race-proof fetch for selected week
-  async function _autoLoadGames(y, w) {
-    const seq = ++_autoSeq.current;
-    try {
-      const gs = await listGames({ year: Number(y), week: Number(w), includedOnly: false });
-      if (seq !== _autoSeq.current) { return; } // stale result; ignore
-      setGames(gs);
-    } catch (e) {
-      console.error(e);
-    }
-  }  // AUTOLOAD_ADMIN_FIX: load games when (isAdmin, year, week) change
-  useEffect(() => {
-    if (!isAdmin) return;
-    const y = Number(year), w = Number(week);
-    if (!hasWeekValue(y) || !hasWeekValue(w)) return;
-    _autoLoadGames(y, w);
-  }, [isAdmin, year, week]);
-
-  // AUTOLOAD_ADMIN_WEEK: load games whenever (isAdmin, year, week) change
-  useEffect(() => {
-    if (typeof isAdmin !== "undefined" && !isAdmin) return;
-    const y = Number(year);
-    const w = Number(week);
-    if (!hasWeekValue(y) || !hasWeekValue(w)) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const gs = await listGames({ year: y, week: w, includedOnly: false });
-        if (!cancelled) setGames(gs);
-      } catch (e) { console.error(e); }
-    })();
-    return () => { cancelled = true; };
-  }, [isAdmin, year, week]);
-
-  // AUTOLOAD: Admin load games on year/week change
-  useEffect(() => {
-    if (typeof isAdmin !== "undefined" && !isAdmin) return;
-    const y = Number(year);
-    const w = Number(week);
-    if (!hasWeekValue(y) || !hasWeekValue(w)) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const gs = await listGames({ year: y, week: w, includedOnly: false });
-        if (!cancelled) setGames(gs);
-      } catch (e) {
-        console.error(e);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [isAdmin, year, week]);
-
-const [msg, setMsg] = useState("");
-  // Submissions lock (config/app.picksLocked)
-  const [picksLocked, setPicksLocked] = useState(false);
-  useEffect(() => {
-    const unsub = onSnapshot(doc(db, "config", "app"), (s) => {
-      const d = s.data() || {};
-      setPicksLocked(!!d.picksLocked);
-    });
-    return () => unsub && unsub();
-  }, []);
-
-// Weeks dropdown: populate from games in the selected year
-const [weeksForYear, setWeeksForYear] = useState([]);
-useEffect(() => {
-  (async () => {
-    try {
-      const q = query(collection(db, "games"), where("year", "==", Number(year)));
-      const snap = await getDocs(q);
-      const uniq = new Set();
-      snap.forEach(d => {
-        const w = d.data()?.week;
-        if (Number.isFinite(+w)) uniq.add(Number(w));
-      });
-      setWeeksForYear([...uniq].sort((a,b)=>a-b));
-    } catch (err) {
-      console.error("weeksForYear load failed", err);
-      setWeeksForYear([]);
-    }
-  })();
-}, [year]);const [loadCode, setLoadCode] = useState("");
-  const [loadLastName, setLoadLastName] = useState("");
-  const [editing, setEditing] = useState(false);
-  const [showLoad, setShowLoad] = useState(false);
-
-  const [apiKey, setApiKey] = useState("");
-
-// One-time default: pull live {year,week} once on mount (no ongoing subscription),
-// so Admin can freely change the controls without snapping back.
-useEffect(() => {
-  if (!isAdmin) return;
-  (async () => {
-    try {
-      const s = await getDoc(doc(db, "config", "live"));
-      const d = s.exists() ? s.data() : {};
-      const y = Number(d.year), w = Number(d.week);
-      setLive({ year: y, week: w });
-      if (y && w) {
-        setYear(y);
-        setWeek(w);
-      }
-    } catch (e) {
-      console.error(e);
-    }
-  })();
-  // no subscription here; we only seed the defaults once
-}, [isAdmin]);// One-time init to avoid flicker: prefer live {year,week} if available, else fallback
-  const initRef = useRef(false);
-  useEffect(() => {
-    if (initRef.current) return;
-    const hasLive = live && Number.isInteger(live.year) && Number.isInteger(live.week);
-    const y = hasLive ? live.year : new Date().getFullYear();
-    const w = hasLive ? live.week : 1;
-    setYear(y);
-    setWeek(w);
-    initRef.current = true;
-  }, [live]);
-  // Initialize year/week from live exactly once to avoid flicker
-
-  const initFromLiveRef = useRef(false);
-  useEffect(() => {
-    if (!initFromLiveRef.current && live?.year && live?.week) {
-      setYear(live.year);
-      setWeek(live.week);
-      initFromLiveRef.current = true;
-    }
-  }, [live]);  
-  // Step 8.2 ? Admin toggle for Leaderboard lock (writes config/app.leaderboardLocked)
-  const [appCfg, setAppCfg] = useState({ leaderboardLocked: false, leaderboardPicksPublic: false, picksLocked: false });
-
-// SCOREBOARD config subscriber v1 (read-only; safe defaults; no UI impact)
-useEffect(() => {
-  const unsub = onSnapshot(doc(db, "config", "app"), (s) => {
-    const d = s.data?.() ? s.data() : (s.data || (()=>({})))(); console.debug("[config/app] raw", d); // support both function & direct for safety
-    const defSb = {
-      mode: "off",
-      intervalSec: 60,
-      window: { startET: "12:00", endET: "02:00" }, // game-hours gate for the server-side cron
-      testMode: false,
-      testIntervalSec: 10,
-      fixturePath: "/dev/scoreboard-demo.json",
-      autoWriteWinners: true // server-side auto-winner writer on/off (publishLiveMap)
-    };
-    const sb = { ...defSb, ...(d && d.scoreboard ? d.scoreboard : {}) };
-    // merge into existing appCfg without disturbing other fields
-    setAppCfg((prev) => ({ ...prev, scoreboard: sb }));
-    if (import.meta && import.meta.env && import.meta.env.DEV) { console.debug("[scoreboard:config] loaded", sb); }
-  });
-  return () => unsub && unsub();
-}, []);
-  useEffect(() => {
-    const unsub = onSnapshot(doc(db, "config", "app"), (s) => {
-      const d = s.data() || {};
-      setAppCfg(prev => ({ ...prev, leaderboardLocked: !!d.leaderboardLocked, leaderboardPicksPublic: !!d.leaderboardPicksPublic, picksLocked: !!d.picksLocked }));
-    });
-    return () => unsub();
-  }, []);
   const toggleLeaderboardLock = async () => {
     try {
       await setDoc(doc(db, "config", "app"), { leaderboardLocked: !appCfg.leaderboardLocked, updatedAt: serverTimestamp() }, { merge: true });
@@ -2891,15 +2647,6 @@ useEffect(() => {
       setMsg("Failed to save: " + (e?.message || String(e)));
     }
   };
-
-
-  useEffect(() => {
-    if (!isAdmin) return;
-    (async () => {
-      setApiKey(await getCfbdKey());
-      setGames(await listGames({ year, week, includedOnly: false }));
-    })();
-  }, [isAdmin, year, week]);
 
   if (!user) return <Container maxWidth={720}><Header user={user} isAdmin={isAdmin} setPage={setPage} /><Card><p>Please sign in with Google.</p></Card></Container>;
   if (!isAdmin) return <Container maxWidth={720}><Header user={user} isAdmin={isAdmin} setPage={setPage} /><Card><p>This account is not an admin.</p></Card></Container>;
@@ -3123,37 +2870,6 @@ Type "home" or "away".`,
   }
 };
 
-  async function loadByCode() {
-    setMsg("");
-    const c = (loadCode || "").trim();
-    const ln = (loadLastName || "").trim().toLowerCase();
-    if (!/^\d{6}$/.test(c) || ln.length === 0) {
-      setMsg("Enter your 6-digit code and last name."); return;
-    }
-    const id = year + "_W" + week + "_" + c;
-    try {
-      const ref = doc(db, "picks", id);
-      const snap = await getDoc(ref);
-      if (!snap.exists()) { setMsg("No picks found for that code."); return; }
-      const d = snap.data();
-      const storedLower = (d.lastNameLower || (d.lastName || "").toLowerCase().trim());
-      if (storedLower !== ln) { setMsg("Code and last name do not match."); return; }
-
-      setForm(f => ({
-        ...f,
-        firstName: d.firstName || "",
-        lastName: d.lastName || "",
-        phone: d.phone || "", venmo: d.venmo || ""
-      }));
-      setPicks(d.picks || {});
-      setCode(c);
-      setEditing(true);
-      setMsg("Loaded. Editing code " + c + ".");
-    } catch (e) {
-      const m = (e && e.message) ? String(e.message) : String(e);
-      setMsg("Load failed: " + m);
-    }
-  }
     // Clear selected week if it has NO picks (safety guard)
   const clearWeekIfNoPicks = async () => {
     try {
