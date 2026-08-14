@@ -1,22 +1,36 @@
 ﻿{
-    "hosting":  {
-                    "public":  "web/dist",
-                    "ignore":  [
-                                   "firebase.json",
-                                   "**/.*",
-                                   "**/node_modules/**"
-                               ],
-                    "rewrites":  [
-                                     {
-                                         "function":  "cfbdScoreboard",
-                                         "source":  "/api/cfbd/**"
-                                     },
-                                     {
-                                         "source":  "**",
-                                         "destination":  "/index.html"
-                                     }
-                                 ]
-                },
+    "hosting":  [
+                    {
+                        "target":  "default",
+                        "public":  "web/dist",
+                        "ignore":  [
+                                       "firebase.json",
+                                       "**/.*",
+                                       "**/node_modules/**"
+                                   ],
+                        "rewrites":  [
+                                         {
+                                             "source":  "**",
+                                             "destination":  "/index.html"
+                                         }
+                                     ]
+                    },
+                    {
+                        "target":  "cfbpickems",
+                        "public":  "web/dist",
+                        "ignore":  [
+                                       "firebase.json",
+                                       "**/.*",
+                                       "**/node_modules/**"
+                                   ],
+                        "rewrites":  [
+                                         {
+                                             "source":  "**",
+                                             "destination":  "/index.html"
+                                         }
+                                     ]
+                    }
+                ],
     "firestore":  {
                       "rules":  "firestore.rules",
                       "indexes":  "firestore.indexes.json"

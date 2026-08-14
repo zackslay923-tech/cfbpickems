@@ -2,6 +2,17 @@
   "projects": {
     "default": "pickems-2k25"
   },
-  "targets": {},
+  "targets": {
+    "pickems-2k25": {
+      "hosting": {
+        "cfbpickems": [
+          "cfbpickems"
+        ],
+        "default": [
+          "pickems-2k25"
+        ]
+      }
+    }
+  },
   "etags": {}
 }
