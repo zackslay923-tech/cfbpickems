@@ -2201,7 +2201,7 @@ useEffect(() => {
   style={{ padding:"4px 8px", borderRadius:6, border:"1px solid rgba(255,255,255,.2)", background:"transparent", color:"#fff", cursor:"pointer", marginLeft:6 }}
 >
   Write Winners (CFBD)
-</button> <button onClick={(e)=>{ e.preventDefault(); try { makeLiveDemoFromGames(games||[]); } catch(e){ console.error(e); } }} style={{ padding:"4px 8px", borderRadius:6, border:"1px solid rgba(255,255,255,.2)", background:"transparent", color:"#fff", cursor:"pointer", marginLeft:6 }}>Make Live Demo</button>
+</button>
     <span style={{opacity:.8}}>Scoreboard:</span>
     <strong>{(() => { const m = String(sbSource||"none").toLowerCase(); return m === "fixture" ? "Demo" : m === "cfbd" ? "Live" : "Off"; })()}</strong>
     <span style={{opacity:.8}}>Last updated:</span>
@@ -2223,14 +2223,7 @@ useEffect(() => {
       title="Toggle the scorebug row">
       {showScorebug ? "ON" : "OFF"}
     </button>
-    <span style={{opacity:.8, marginLeft:12}}>Fixture:</span>
-<button
-  onClick={(e) => { e.preventDefault(); setSbLocalFixture(v => !v); }}
-  style={{ padding:"4px 8px", borderRadius:6, border:"1px solid rgba(255,255,255,.2)", background: sbLocalFixture ? "#1D4ED8" : "transparent", color:"#fff", fontWeight:600 }}
-  title="Force local fixture JSON; disables CFBD calls for safe testing"
->
-  {sbLocalFixture ? "ON" : "OFF"}
-</button><button onClick={(e) => { e.preventDefault(); sbRefresh && sbRefresh(); }}
+    <button onClick={(e) => { e.preventDefault(); sbRefresh && sbRefresh(); }}
             style={{ marginLeft:"auto", padding:"4px 8px", borderRadius:6, border:"1px solid rgba(255,255,255,.25)",
                      background:"transparent", color:"#fff", cursor:"pointer" }}>
       Refresh
@@ -2572,7 +2565,23 @@ const isKickoffTbd = (g) => !kickoffDate(g);function AdminPage({ user, isAdmin, 
   const [apiKey, setApiKey] = useState("");
   const [showApiKey, setShowApiKey] = useState(false);
   const [appCfg, setAppCfg] = useState({ leaderboardLocked: false, leaderboardPicksPublic: false, picksLocked: false });
+  const [dummyWeekExists, setDummyWeekExists] = useState(false);
+  const [localFixture, setLocalFixture] = useState(() => {
+    try { return localStorage.getItem("sbLocalFixture") === "1"; } catch { return false; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("sbLocalFixture", localFixture ? "1" : "0"); } catch {}
+  }, [localFixture]);
   const pot = useMemo(() => (pickCount * 5), [pickCount]);
+
+  // Does the 2099/W1 test sandbox currently exist?
+  useEffect(() => {
+    const unsub = onSnapshot(
+      query(collection(db, "games"), where("year","==",2099), where("week","==",1)),
+      (snap) => setDummyWeekExists(!snap.empty)
+    );
+    return () => unsub();
+  }, []);
 
   // Subscribe to config/live (drives the "Current Week" display and Sync GameDay)
   useEffect(() => {
@@ -2990,6 +2999,9 @@ await setDoc(doc(db,"config","app"), { currentYear: year, currentWeek: week, upd
               }
             }}>Sync Live GameDay</button>
           </Row>
+          <Row style={{ marginTop: 10 }}>
+            <button style={adminBtn("danger")} onClick={clearWeekIfNoPicks}>Clear Week (if no picks)</button>
+          </Row>
         </AdminSection>
 
         <BulkImportPicksPreview year={year} week={week} />
@@ -3034,16 +3046,20 @@ await setDoc(doc(db,"config","app"), { currentYear: year, currentWeek: week, upd
           </Row>
         </AdminSection>
 
-        <AdminSection title="Test Sandbox (2099 / W1)" tone="neutral">
-          <Row>
-            <button style={adminBtn("success")} onClick={createDummyWeek}>Create Dummy Week</button>
+        <AdminSection title="Testing Mode (without live games)" tone="neutral" right={
+          <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+            <StatusBadge tone={dummyWeekExists ? "success" : "neutral"}>Sandbox: {dummyWeekExists ? "Active" : "Empty"}</StatusBadge>
+            <StatusBadge tone={appCfg.scoreboard?.testMode ? "primary" : (appCfg.scoreboard?.mode === "on" ? "success" : "neutral")}>
+              Scoreboard: {appCfg.scoreboard?.testMode ? "Demo" : (appCfg.scoreboard?.mode === "on" ? "Live" : "Off")}
+            </StatusBadge>
+            <StatusBadge tone={localFixture ? "primary" : "neutral"}>Local Override: {localFixture ? "On" : "Off"}</StatusBadge>
+          </div>
+        }>
+          <Row style={{ marginBottom: 10 }}>
+            <button style={adminBtn("success")} onClick={createDummyWeek}>Create Dummy Week (2099 / W1)</button>
             <button style={adminBtn("danger")} onClick={clearDummyWeek}>Clear Dummy Week</button>
-            <button style={adminBtn("danger")} onClick={clearWeekIfNoPicks}>Clear Week (if no picks)</button>
           </Row>
-        </AdminSection>
-
-        <AdminSection title="Scoreboard Controls" tone="neutral">
-          <Row>
+          <Row style={{ marginBottom: 10 }}>
             <button style={adminBtn("neutral")} onClick={async()=>{
               try {
                 await setDoc(doc(db, "config", "app"), {
@@ -3080,14 +3096,13 @@ await setDoc(doc(db,"config","app"), { currentYear: year, currentWeek: week, upd
             }}>
               Use CFBD Live
             </button>
-
-            <button style={adminBtn("neutral")} onClick={() => {
-              try {
-                localStorage.setItem("sbLocalFixture","0");
-                alert("Fixture override set to OFF.\nIf the Leaderboard is already open, toggle its Fixture button OFF once.");
-              } catch(_) {}
-            }}>
-              Disable Fixture Override
+          </Row>
+          <Row>
+            <button style={adminBtn("neutral")} onClick={(e)=>{ e.preventDefault(); try { makeLiveDemoFromGames(games||[]); } catch(err){ console.error(err); } }}>
+              Make Live Demo
+            </button>
+            <button style={adminBtn(localFixture ? "primary" : "neutral")} onClick={()=>setLocalFixture(v=>!v)} title="Force local fixture JSON in your own browser; disables CFBD calls for safe testing">
+              Local Fixture Override: {localFixture ? "ON" : "OFF"}
             </button>
           </Row>
         </AdminSection>
