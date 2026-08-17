@@ -792,6 +792,35 @@ const [code, setCode] = useState("");
   const [editing, setEditing] = useState(false);
   const [showLoad, setShowLoad] = useState(false);
 
+  // --- Autosave picks-in-progress to localStorage, so closing the tab or
+  // losing connection mid-fill doesn't lose everything already selected.
+  // Cleared once the real submit succeeds (see onSubmitPicks).
+  const draftKey = (hasWeekValue(year) && hasWeekValue(week)) ? `draft_${year}_${week}` : null;
+  const [draftReady, setDraftReady] = useState(false);
+  const draftKeyLoadedRef = useRef(null);
+
+  useEffect(() => {
+    if (!draftKey || editing) return;
+    if (draftKeyLoadedRef.current === draftKey) return;
+    draftKeyLoadedRef.current = draftKey;
+    try {
+      const saved = JSON.parse(localStorage.getItem(draftKey) || "null");
+      if (saved) {
+        if (saved.form) setForm(f => ({ ...f, ...saved.form }));
+        if (saved.picks) setPicks(saved.picks);
+        if (saved.tiebreaker) setTiebreaker(saved.tiebreaker);
+      }
+    } catch (_) {}
+    setDraftReady(true);
+  }, [draftKey, editing]);
+
+  useEffect(() => {
+    if (!draftKey || !draftReady) return;
+    try {
+      localStorage.setItem(draftKey, JSON.stringify({ form, picks, tiebreaker }));
+    } catch (_) {}
+  }, [draftKey, draftReady, form, picks, tiebreaker]);
+
 
   const email = (user?.email || "").toLowerCase();
 
@@ -975,6 +1004,7 @@ const onSubmitPicks = function(e){ e.preventDefault(); if (picksLocked) { if (ty
     editing: !!editing
   };
   try { if (typeof tiebreaker !== "undefined") { p.tiebreaker = tiebreaker; } localStorage.setItem("pending", JSON.stringify(p)); } catch (_){}
+  try { if (draftKey) localStorage.removeItem(draftKey); } catch (_){}
 if (typeof setPage === "function") setPage("confirm");
 if (typeof window !== "undefined") window.history.pushState(null, "", "/confirm");
   setMsg("");
