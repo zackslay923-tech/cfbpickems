@@ -184,7 +184,7 @@ function Header({ user, isAdmin, setPage }) {
           <div style={{ fontSize:28, marginBottom:8 }}>🔔</div>
           <h3 style={{ margin:"0 0 8px", fontSize:17, color:"#eef2ff" }}>Turn on notifications?</h3>
           <p style={{ margin:"0 0 16px", fontSize:14, color:"#9aa4c7", lineHeight:1.5 }}>
-            Get a heads-up when picks open, lock at kickoff, and when results are final &mdash; no need to keep checking back.
+            Get a heads-up when picks open, when the leaderboard unlocks, and reminders to submit picks.
           </p>
           <div style={{ display:"flex", gap:10, marginBottom:14 }}>
             <button
