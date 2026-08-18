@@ -2502,7 +2502,7 @@ return liveItem || fromWinners;
                 {gameday ? (
   <td key={"tb_"+(p.email||p.name||p.code||p.id)}
       style={{ ...cell, textAlign:"center", width: 140, minwidth: 140 }}>
-    {(p.tb ?? (p.tiebreaker?.total ?? p.tiebreaker ?? p.tieBreaker ?? p.tiebreak ?? p.tb ?? ""))}
+    {(lbPicksPublic || isAdmin) ? (p.tb ?? (p.tiebreaker?.total ?? p.tiebreaker ?? p.tieBreaker ?? p.tiebreak ?? p.tb ?? "")) : "🔒"}
   </td>
 ) : null}</tr>
               ))}
