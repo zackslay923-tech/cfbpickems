@@ -95,18 +95,29 @@ function Header({ user, isAdmin, setPage }) {
   const [notifState, setNotifState] = useState(
     (typeof Notification !== "undefined" && Notification.permission === "granted") ? "on" : "off"
   );
-  const [notifDismissed, setNotifDismissed] = useState(
-    (typeof localStorage !== "undefined" && localStorage.getItem("notifBannerDismissed") === "1")
-  );
-  function dismissNotifBanner() {
-    try { localStorage.setItem("notifBannerDismissed", "1"); } catch (e) {}
-    setNotifDismissed(true);
+  const [notifDontShowAgain, setNotifDontShowAgain] = useState(false);
+  const [showNotifModal, setShowNotifModal] = useState(() => {
+    if (typeof window === "undefined") return false;
+    if (typeof Notification !== "undefined" && Notification.permission === "granted") return false;
+    try {
+      if (localStorage.getItem("notifPromptDismissedForever") === "1") return false;
+      if (sessionStorage.getItem("notifPromptShownThisSession") === "1") return false;
+      sessionStorage.setItem("notifPromptShownThisSession", "1");
+    } catch (e) {}
+    return true;
+  });
+  function closeNotifModal() {
+    if (notifDontShowAgain) {
+      try { localStorage.setItem("notifPromptDismissedForever", "1"); } catch (e) {}
+    }
+    setShowNotifModal(false);
   }
   async function handleEnableNotifications() {
     setNotifState("working");
     try {
       await enablePushNotifications();
       setNotifState("on");
+      setShowNotifModal(false);
     } catch (e) {
       setNotifState("off");
       alert((e && e.message) ? e.message : "Couldn't enable notifications.");
@@ -154,30 +165,51 @@ function Header({ user, isAdmin, setPage }) {
     history.pushState(null, "", "/picks"); setPage("picks");}}>Picks</a>
         <a href="#" onClick={(e)=>{e.preventDefault(); history.pushState(null, "", "/leader"); setPage("leader");}}>Leaderboard</a>
         {isAdmin && <a href="#" onClick={(e)=>{e.preventDefault(); history.pushState(null, "", "/admin"); setPage("admin");}}>Admin</a>}
+        {notifState !== "on" && (
+          <a href="#" onClick={(e)=>{e.preventDefault(); setShowNotifModal(true);}} title="Enable notifications" aria-label="Enable notifications">🔔</a>
+        )}
         {!user && <a href="#" onClick={(e)=>{e.preventDefault(); googleLogin();}}>Admin Login</a>}
         {user && <a href="#" onClick={(e)=>{e.preventDefault(); logout();}}>Sign out</a>}
       </nav>
     </div>
-    {notifState !== "on" && !notifDismissed && (
+    {showNotifModal && (
       <div style={{
-        position:"fixed", left:0, right:0, bottom:0, zIndex:50,
-        background:"#121a2b", borderTop:"1px solid #1f2a44",
-        padding:"10px 16px", display:"flex", alignItems:"center", justifyContent:"center",
-        gap:12, flexWrap:"wrap", boxShadow:"0 -4px 16px rgba(0,0,0,.25)"
+        position:"fixed", inset:0, zIndex:100, background:"rgba(4,7,15,.72)",
+        display:"flex", alignItems:"center", justifyContent:"center", padding:16
       }}>
-        <span style={{ fontSize:14, color:"#eef2ff" }}>🔔 Get a heads-up when picks open, lock, and results are final.</span>
-        <button
-          onClick={handleEnableNotifications}
-          disabled={notifState === "working"}
-          style={{ background:"#6aa2ff", color:"#07152b", border:0, padding:"6px 12px", borderRadius:8, fontWeight:600, cursor:"pointer" }}
-        >
-          {notifState === "working" ? "Enabling…" : "Enable Notifications"}
-        </button>
-        <button
-          onClick={dismissNotifBanner}
-          aria-label="Dismiss"
-          style={{ background:"transparent", border:0, color:"#9aa4c7", cursor:"pointer", fontSize:18, lineHeight:1, padding:"0 4px" }}
-        >×</button>
+        <div style={{
+          background:"#121a2b", border:"1px solid #1f2a44", borderRadius:16,
+          padding:"22px 24px", maxWidth:360, width:"100%", boxShadow:"0 20px 60px rgba(0,0,0,.5)"
+        }}>
+          <div style={{ fontSize:28, marginBottom:8 }}>🔔</div>
+          <h3 style={{ margin:"0 0 8px", fontSize:17, color:"#eef2ff" }}>Turn on notifications?</h3>
+          <p style={{ margin:"0 0 16px", fontSize:14, color:"#9aa4c7", lineHeight:1.5 }}>
+            Get a heads-up when picks open, lock at kickoff, and when results are final &mdash; no need to keep checking back.
+          </p>
+          <div style={{ display:"flex", gap:10, marginBottom:14 }}>
+            <button
+              onClick={handleEnableNotifications}
+              disabled={notifState === "working"}
+              style={{ flex:1, background:"#6aa2ff", color:"#07152b", border:0, padding:"10px 14px", borderRadius:10, fontWeight:600, cursor:"pointer" }}
+            >
+              {notifState === "working" ? "Enabling…" : "Enable Notifications"}
+            </button>
+            <button
+              onClick={closeNotifModal}
+              style={{ background:"transparent", color:"#9aa4c7", border:"1px solid #2a3655", padding:"10px 14px", borderRadius:10, cursor:"pointer" }}
+            >
+              Not now
+            </button>
+          </div>
+          <label style={{ display:"flex", alignItems:"center", gap:8, fontSize:13, color:"#9aa4c7", cursor:"pointer" }}>
+            <input
+              type="checkbox"
+              checked={notifDontShowAgain}
+              onChange={(e)=>setNotifDontShowAgain(e.target.checked)}
+            />
+            Don&rsquo;t show me this again
+          </label>
+        </div>
       </div>
     )}
     </>
