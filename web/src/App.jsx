@@ -1922,7 +1922,7 @@ useEffect(() => {
     return () => unsub();
   }, []);
 
-  if (false /* mask disabled */ && Number(year) === Number(live?.year) && Number(week) === Number(live?.week)) {
+  if (lbLocked && !isAdmin && Number(year) === Number(live?.year) && Number(week) === Number(live?.week)) {
       // Clear selected week if it has NO picks (safety guard)
   const clearWeekIfNoPicks = async () => {
     try {
@@ -2477,46 +2477,14 @@ return liveItem || fromWinners;
                   <td style={{ ...cell, ...sticky1() }}>{p.name}</td>
                   <td style={{ ...cell, ...sticky2({ textAlign:"center", fontWeight:700 }) }}>{p.points}</td>
                   {displayGames.map(g => {
+                    const canSeePicks = lbPicksPublic || isAdmin;
                     const choice = p.picks?.[g.id];
-                    const label =
+                    const label = !canSeePicks ? "🔒" :
                       choice === g.home ? teamLabel(g.home, g.homeRank) :
                       choice === g.away ? teamLabel(g.away, g.awayRank) :
                       (choice || "-");
-
-  async function loadByCode() {
-    setMsg("");
-    const c = (loadCode || "").trim();
-    const ln = (loadLastName || "").trim().toLowerCase();
-    if (!/^\d{6}$/.test(c) || ln.length === 0) {
-      setMsg("Enter your 6-digit code and last name."); return;
-    }
-    const id = year + "_W" + week + "_" + c;
-    try {
-      const ref = doc(db, "picks", id);
-      const snap = await getDoc(ref);
-      if (!snap.exists()) { setMsg("No picks found for that code."); return; }
-      const d = snap.data();
-      const storedLower = (d.lastNameLower || (d.lastName || "").toLowerCase().trim());
-      if (storedLower !== ln) { setMsg("Code and last name do not match."); return; }
-
-      setForm(f => ({
-        ...f,
-        firstName: d.firstName || "",
-        lastName: d.lastName || "",
-        phone: d.phone || "", venmo: d.venmo || ""
-      }));
-      setPicks(d.picks || {});
-        setTiebreaker(d.tiebreaker ? { gameId: d.tiebreaker.gameId || null, total: String(d.tiebreaker.total ?? "") } : { gameId: null, total: "" });
-      setCode(c);
-      setEditing(true);
-      setMsg("Loaded. Editing code " + c + ".");
-    } catch (e) {
-      const m = (e && e.message) ? String(e.message) : String(e);
-      setMsg("Load failed: " + m);
-    }
-  }
-  return (
-                      <td key={g.id} data-game-id={g.id} style={{ ...pickCellStyle(g.id, choice), width: 140, minwidth: 140 }}><div style={{display:"flex",justifyContent:"center"}}>{label}</div></td>
+                    return (
+                      <td key={g.id} data-game-id={g.id} style={{ ...pickCellStyle(g.id, canSeePicks ? choice : null), width: 140, minwidth: 140 }}><div style={{display:"flex",justifyContent:"center"}}>{label}</div></td>
                     );
                   })}
                 {gameday ? (
