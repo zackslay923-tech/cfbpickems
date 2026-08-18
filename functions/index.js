@@ -187,12 +187,59 @@ async function autoLockAtKickoff(db, mapObj) {
   const updates = {};
   if (app.picksLocked !== true) updates.picksLocked = true;
   if (app.leaderboardLocked !== false) updates.leaderboardLocked = false;
+  if (app.leaderboardPicksPublic !== true) updates.leaderboardPicksPublic = true;
 
   if (Object.keys(updates).length > 0) {
     updates.updatedAt = admin.firestore.FieldValue.serverTimestamp();
     await db.doc("config/app").set(updates, { merge: true });
-    logger.info(`autoLockAtKickoff: ${firstGame.away} @ ${firstGame.home} started - locked picks, opened leaderboard for ${year}/W${week}`);
+    logger.info(`autoLockAtKickoff: ${firstGame.away} @ ${firstGame.home} started - locked picks, opened leaderboard, made picks public for ${year}/W${week}`);
   }
+}
+
+// Cheap check (Firestore only, no CFBD call): has the current live week's
+// first game reached its scheduled kickoff time? Used to auto-disengage the
+// scoreboard hard stop without needing to poll CFBD while stopped.
+async function isPastScheduledKickoff(db) {
+  const liveSnap = await db.doc("config/live").get();
+  const liveCfg = liveSnap.exists ? liveSnap.data() : {};
+  const year = Number(liveCfg?.year), week = Number(liveCfg?.week);
+  if (!Number.isFinite(year) || !Number.isFinite(week)) return false;
+
+  const gamesSnap = await db.collection("games")
+    .where("year", "==", year)
+    .where("week", "==", week)
+    .get();
+  if (gamesSnap.empty) return false;
+
+  const startTimes = gamesSnap.docs
+    .map(d => d.data())
+    .filter(g => g.included !== false && g.startTimeStr)
+    .map(g => new Date(g.startTimeStr).getTime())
+    .filter(Number.isFinite);
+  if (!startTimes.length) return false;
+
+  return Date.now() >= Math.min(...startTimes);
+}
+
+// Has every included game in the current live week been recorded with a
+// winner? Used to auto-re-engage the hard stop once the week wraps up.
+async function isWeekComplete(db) {
+  const liveSnap = await db.doc("config/live").get();
+  const liveCfg = liveSnap.exists ? liveSnap.data() : {};
+  const year = Number(liveCfg?.year), week = Number(liveCfg?.week);
+  if (!Number.isFinite(year) || !Number.isFinite(week)) return false;
+
+  const gamesSnap = await db.collection("games")
+    .where("year", "==", year)
+    .where("week", "==", week)
+    .get();
+  if (gamesSnap.empty) return false;
+
+  const games = gamesSnap.docs.map(d => d.data()).filter(g => g.included !== false);
+  if (!games.length) return false;
+
+  const results = await Promise.all(games.map(g => db.doc(`results/${g.id}`).get()));
+  return results.every(r => r.exists && r.data()?.winner);
 }
 
 // Node 20 has global fetch; poll once per minute via Cloud Scheduler
@@ -206,20 +253,39 @@ exports.publishLiveMap = onSchedule(
     const db = admin.firestore();
     let scoreboardCfg = {};
 
-    // Respect admin hard stop: only run when config/app.scoreboard.mode === "on"
     try {
       const appSnap = await db.doc("config/app").get();
       const app = appSnap.exists ? appSnap.data() : {};
       scoreboardCfg = (app && app.scoreboard) ? app.scoreboard : {};
-      const mode = scoreboardCfg.mode ? String(scoreboardCfg.mode).toLowerCase() : "on";
-      if (mode !== "on") {
-        logger.info(`publishLiveMap skipped (scoreboard.mode=${mode})`);
-        return;
-      }
     } catch (e) {
       // If config/app is unreadable, fail closed (skip publishing)
       logger.warn("publishLiveMap: could not read config/app; skipping", e?.message || e);
       return;
+    }
+
+    // Respect admin hard stop (config/app.scoreboard.mode !== "on" / hardStop === true).
+    // Before giving up, do a cheap Firestore-only check (no CFBD call) for
+    // whether we've reached the current week's scheduled kickoff - if so,
+    // auto-disengage the hard stop so live polling can start on its own.
+    const mode = scoreboardCfg.mode ? String(scoreboardCfg.mode).toLowerCase() : "on";
+    const hardStopped = scoreboardCfg.hardStop === true || mode !== "on";
+    if (hardStopped) {
+      let pastKickoff = false;
+      try {
+        pastKickoff = await isPastScheduledKickoff(db);
+      } catch (e) {
+        logger.warn("publishLiveMap: scheduled-kickoff check failed", e?.message || e);
+      }
+      if (!pastKickoff) {
+        logger.info("publishLiveMap skipped (scoreboard hard-stopped)");
+        return;
+      }
+      await db.doc("config/app").set(
+        { scoreboard: { hardStop: false, mode: "on" }, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
+        { merge: true }
+      );
+      scoreboardCfg = { ...scoreboardCfg, hardStop: false, mode: "on" };
+      logger.info("publishLiveMap: reached scheduled kickoff - auto-disengaged hard stop");
     }
 
     // Only poll during actual game hours (default noon-2am ET; configurable via
@@ -287,6 +353,22 @@ exports.publishLiveMap = onSchedule(
       // starts (default on; disable via config/app.scoreboard.autoLockPicks = false)
       if (scoreboardCfg.autoLockPicks !== false) {
         await autoLockAtKickoff(db, mapObj);
+      }
+
+      // Once every game in the week has a recorded winner, re-engage the hard
+      // stop so we stop polling CFBD until the next game week begins.
+      if (!scoreboardCfg.hardStop) {
+        try {
+          if (await isWeekComplete(db)) {
+            await db.doc("config/app").set(
+              { scoreboard: { hardStop: true, mode: "off" }, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
+              { merge: true }
+            );
+            logger.info("publishLiveMap: week complete - auto re-engaged hard stop");
+          }
+        } catch (e) {
+          logger.warn("publishLiveMap: week-complete check failed", e?.message || e);
+        }
       }
     } catch (e) {
       logger.error("CFBD fetch/publish error:", e?.message || e);
