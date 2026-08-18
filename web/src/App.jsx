@@ -2282,6 +2282,12 @@ useEffect(() => {
     
 </div>
 )}
+          {!lbPicksPublic && !isAdmin && (
+            <div style={{ marginTop: 8, marginBottom: 8, lineHeight: 1.6 }}>
+              <div style={{ fontWeight: 700 }}>Picks are hidden for Week {week}</div>
+              <div>Only the admin can see individual picks right now — standings and totals below are still accurate.</div>
+            </div>
+          )}
           <table style={{ tableLayout:"auto", borderCollapse:"separate", borderSpacing:0, width:"max-content", minWidth:"auto" }}>
             <thead>
               <tr>
