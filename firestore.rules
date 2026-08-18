@@ -84,6 +84,29 @@ service cloud.firestore {
       allow read: if true;
       allow write: if isAdmin();
     }
+
+    // Push notification tokens: any device can register itself (doc id is the
+    // token, so a device can only touch its own doc); no reads (nothing to
+    // read), no updates (just re-create); topic subscription happens
+    // server-side in a Cloud Function.
+    match /pushTokens/{token} {
+      allow get: if false;
+      allow list: if false;
+      allow create: if request.resource.data.token == token;
+      allow update: if false;
+      allow delete: if true;
+    }
+
+    // Notification outbox: admin drops a {title, body} doc here to broadcast
+    // a push notification; a Cloud Function picks it up and deletes it.
+    match /notificationOutbox/{id} {
+      allow read: if false;
+      allow create: if isAdmin()
+        && request.resource.data.title is string
+        && request.resource.data.body is string;
+      allow update: if false;
+      allow delete: if false;
+    }
   }
 }
 

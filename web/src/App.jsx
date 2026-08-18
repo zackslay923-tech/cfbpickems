@@ -49,9 +49,9 @@ import Scorebug from "./components/Scorebug"; // SCOREBUG import
 import useScoreboard from "./lib/useScoreboard";
 import AdminPicksPage from "./components/AdminPicksPage";
 import BulkImportPicksPreview from "./components/BulkImportPicksPreview";
-import { db, googleLogin, logout, onAuth } from "./firebase";
+import { db, googleLogin, logout, onAuth, enablePushNotifications } from "./firebase";
 
-import { onSnapshot, collection, doc, getDoc, getDocs, setDoc, serverTimestamp, writeBatch, query, where , runTransaction } from "firebase/firestore";
+import { onSnapshot, collection, doc, getDoc, getDocs, setDoc, addDoc, serverTimestamp, writeBatch, query, where , runTransaction } from "firebase/firestore";
 
 
 /* === Fit font helper (for header + winners) === */
@@ -92,6 +92,19 @@ function Card({ children, style }) {
 }
 function Container({ children, maxWidth = 720 }) { return <div style={{ maxWidth: maxWidth, margin: "0 auto", padding: 24 }}>{children}</div>; }
 function Header({ user, isAdmin, setPage }) {
+  const [notifState, setNotifState] = useState(
+    (typeof Notification !== "undefined" && Notification.permission === "granted") ? "on" : "off"
+  );
+  async function handleEnableNotifications() {
+    setNotifState("working");
+    try {
+      await enablePushNotifications();
+      setNotifState("on");
+    } catch (e) {
+      setNotifState("off");
+      alert((e && e.message) ? e.message : "Couldn't enable notifications.");
+    }
+  }
 
   async function loadByCode() {
     setMsg("");
@@ -133,6 +146,12 @@ function Header({ user, isAdmin, setPage }) {
     history.pushState(null, "", "/picks"); setPage("picks");}}>Picks</a>
         <a href="#" onClick={(e)=>{e.preventDefault(); history.pushState(null, "", "/leader"); setPage("leader");}}>Leaderboard</a>
         {isAdmin && <a href="#" onClick={(e)=>{e.preventDefault(); history.pushState(null, "", "/admin"); setPage("admin");}}>Admin</a>}
+        {notifState !== "on" && (
+          <a href="#" onClick={(e)=>{e.preventDefault(); handleEnableNotifications();}}>
+            {notifState === "working" ? "Enabling…" : "🔔 Enable Notifications"}
+          </a>
+        )}
+        {notifState === "on" && <span style={{ color:"#9aa4c7" }}>🔔 Notifications on</span>}
         {!user && <a href="#" onClick={(e)=>{e.preventDefault(); googleLogin();}}>Admin Login</a>}
         {user && <a href="#" onClick={(e)=>{e.preventDefault(); logout();}}>Sign out</a>}
       </nav>
@@ -3014,6 +3033,7 @@ Type "home" or "away".`,
             <button style={adminBtn("neutral")} onClick={async()=>setGames(await listGames({ year, week, includedOnly: false }))}>Load</button>
             <button style={adminBtn("primary")} onClick={async()=>{ try { await setDoc(doc(db,"config","live"), { year, week }, { merge:true });
 await setDoc(doc(db,"config","app"), { currentYear: year, currentWeek: week, updatedAt: serverTimestamp() }, { merge:true }); setMsg(`Live week set to ${year} / W${week} (config/live + config/app)`); } catch(e) { console.error(e); setMsg("Failed to set live week"); } }}>Set Live Week</button>
+            <button style={adminBtn("success")} onClick={async()=>{ try { await addDoc(collection(db,"notificationOutbox"), { title: `🏈 Week ${week} is open`, body: "Picks are open — submit yours on the Picks page.", createdAt: serverTimestamp() }); setMsg(`Push notification sent to everyone for Week ${week}.`); } catch(e) { console.error(e); setMsg("Failed to send notification"); } }}>Notify Players: Picks Open</button>
             <button style={adminBtn("neutral")} onClick={async()=>{
               try {
                 const gs = await listGames({ year, week, includedOnly: false });

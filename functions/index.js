@@ -1,9 +1,53 @@
 "use strict";
 
 const { onSchedule } = require("firebase-functions/v2/scheduler");
+const { onDocumentCreated } = require("firebase-functions/v2/firestore");
 const logger = require("firebase-functions/logger");
 const admin = require("firebase-admin");
 admin.initializeApp();
+
+const NOTIFICATION_TOPIC = "all-players";
+
+// Broadcast a push notification to every device that's subscribed. Failures
+// are logged and swallowed - a missed notification shouldn't break the
+// automation that triggered it.
+async function sendPush({ title, body }) {
+  try {
+    await admin.messaging().send({
+      topic: NOTIFICATION_TOPIC,
+      notification: { title, body }
+    });
+    logger.info(`sendPush: sent "${title}"`);
+  } catch (e) {
+    logger.warn("sendPush failed:", e?.message || e);
+  }
+}
+
+// New device registers a push token -> subscribe it to the broadcast topic.
+exports.subscribePushToken = onDocumentCreated(
+  { document: "pushTokens/{token}", region: "us-east4" },
+  async (event) => {
+    const token = event.params.token;
+    try {
+      await admin.messaging().subscribeToTopic([token], NOTIFICATION_TOPIC);
+      logger.info(`subscribePushToken: subscribed ${token.slice(0, 12)}...`);
+    } catch (e) {
+      logger.warn("subscribePushToken failed:", e?.message || e);
+    }
+  }
+);
+
+// Admin drops a {title, body} doc in notificationOutbox -> broadcast it, then
+// clean up the doc.
+exports.sendOutboxNotification = onDocumentCreated(
+  { document: "notificationOutbox/{id}", region: "us-east4" },
+  async (event) => {
+    const data = event.data?.data() || {};
+    if (!data.title) return;
+    await sendPush({ title: data.title, body: data.body || "" });
+    try { await event.data.ref.delete(); } catch (e) {}
+  }
+);
 
 // Normalize team names to the same key format your app uses ("away__home")
 function norm(s) {
@@ -193,7 +237,51 @@ async function autoLockAtKickoff(db, mapObj) {
     updates.updatedAt = admin.firestore.FieldValue.serverTimestamp();
     await db.doc("config/app").set(updates, { merge: true });
     logger.info(`autoLockAtKickoff: ${firstGame.away} @ ${firstGame.home} started - locked picks, opened leaderboard, made picks public for ${year}/W${week}`);
+    await sendPush({
+      title: "🔒 Picks are locked - leaderboard is live!",
+      body: `${firstGame.away} @ ${firstGame.home} just kicked off. See where everyone landed.`
+    });
   }
+}
+
+// Cheap check (Firestore only, no CFBD call): send a one-time reminder push
+// roughly an hour before the current live week's first scheduled kickoff.
+async function maybeSendKickoffReminder(db) {
+  const liveSnap = await db.doc("config/live").get();
+  const liveCfg = liveSnap.exists ? liveSnap.data() : {};
+  const year = Number(liveCfg?.year), week = Number(liveCfg?.week);
+  if (!Number.isFinite(year) || !Number.isFinite(week)) return;
+
+  const gamesSnap = await db.collection("games")
+    .where("year", "==", year)
+    .where("week", "==", week)
+    .get();
+  if (gamesSnap.empty) return;
+
+  const games = gamesSnap.docs.map(d => d.data()).filter(g => g.included !== false && g.startTimeStr);
+  if (!games.length) return;
+
+  games.sort((a, b) => new Date(a.startTimeStr) - new Date(b.startTimeStr));
+  const firstGame = games[0];
+  const kickoffMs = new Date(firstGame.startTimeStr).getTime();
+  if (!Number.isFinite(kickoffMs)) return;
+
+  const minsUntil = (kickoffMs - Date.now()) / 60000;
+  if (minsUntil > 60 || minsUntil <= 0) return;
+
+  const appSnap = await db.doc("config/app").get();
+  const app = appSnap.exists ? appSnap.data() : {};
+  const alreadySent = app?.notifications?.reminderSentGameId === firstGame.id;
+  if (alreadySent) return;
+
+  await sendPush({
+    title: "⏰ Picks close in about an hour",
+    body: `${firstGame.away} @ ${firstGame.home} kicks off soon - get your picks in!`
+  });
+  await db.doc("config/app").set(
+    { notifications: { reminderSentGameId: firstGame.id }, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
+    { merge: true }
+  );
 }
 
 // Cheap check (Firestore only, no CFBD call): has the current live week's
@@ -261,6 +349,14 @@ exports.publishLiveMap = onSchedule(
       // If config/app is unreadable, fail closed (skip publishing)
       logger.warn("publishLiveMap: could not read config/app; skipping", e?.message || e);
       return;
+    }
+
+    // Cheap check (Firestore only, runs regardless of hard-stop state): send
+    // the pre-kickoff reminder push if we're within the window for it.
+    try {
+      await maybeSendKickoffReminder(db);
+    } catch (e) {
+      logger.warn("publishLiveMap: kickoff reminder check failed", e?.message || e);
     }
 
     // Respect admin hard stop (config/app.scoreboard.mode !== "on" / hardStop === true).
@@ -365,6 +461,10 @@ exports.publishLiveMap = onSchedule(
               { merge: true }
             );
             logger.info("publishLiveMap: week complete - auto re-engaged hard stop");
+            await sendPush({
+              title: "🏆 Final standings are in",
+              body: "This week's games are all final - check the leaderboard for results."
+            });
           }
         } catch (e) {
           logger.warn("publishLiveMap: week-complete check failed", e?.message || e);
