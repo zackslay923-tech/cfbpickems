@@ -2283,9 +2283,15 @@ useEffect(() => {
 </div>
 )}
           {!lbPicksPublic && !isAdmin && (
-            <div style={{ marginTop: 8, marginBottom: 8, lineHeight: 1.6 }}>
-              <div style={{ fontWeight: 700 }}>Picks are hidden for Week {week}</div>
-              <div>Only the admin can see individual picks right now — standings and totals below are still accurate.</div>
+            <div role="status" style={{
+              marginTop: 8, marginBottom: 12, padding: "12px 16px", borderRadius: 10,
+              lineHeight: 1.6, background: "rgba(240,180,41,0.12)", color: "#f0b429",
+              border: "1px solid rgba(240,180,41,0.45)", fontWeight: 600
+            }}>
+              <div style={{ fontWeight: 800, fontSize: 15 }}>Leaderboard locked for Week {week}</div>
+              <div>It will be activated when the first game kicks off.</div>
+              <div>To submit or edit picks, visit the Picks page and type in your edit code.</div>
+              <div>If you lost your code, contact Zack.</div>
             </div>
           )}
           <table style={{ tableLayout:"auto", borderCollapse:"separate", borderSpacing:0, width:"max-content", minWidth:"auto" }}>
