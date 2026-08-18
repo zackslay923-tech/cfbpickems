@@ -95,6 +95,13 @@ function Header({ user, isAdmin, setPage }) {
   const [notifState, setNotifState] = useState(
     (typeof Notification !== "undefined" && Notification.permission === "granted") ? "on" : "off"
   );
+  const [notifDismissed, setNotifDismissed] = useState(
+    (typeof localStorage !== "undefined" && localStorage.getItem("notifBannerDismissed") === "1")
+  );
+  function dismissNotifBanner() {
+    try { localStorage.setItem("notifBannerDismissed", "1"); } catch (e) {}
+    setNotifDismissed(true);
+  }
   async function handleEnableNotifications() {
     setNotifState("working");
     try {
@@ -138,6 +145,7 @@ function Header({ user, isAdmin, setPage }) {
     }
   }
   return (
+    <>
     <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", rowGap: 8, marginBottom: 16 }}>
       <h1 style={{ margin: 0, fontSize: 20 }}>CFB Pick'em</h1>
       <nav style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -146,16 +154,33 @@ function Header({ user, isAdmin, setPage }) {
     history.pushState(null, "", "/picks"); setPage("picks");}}>Picks</a>
         <a href="#" onClick={(e)=>{e.preventDefault(); history.pushState(null, "", "/leader"); setPage("leader");}}>Leaderboard</a>
         {isAdmin && <a href="#" onClick={(e)=>{e.preventDefault(); history.pushState(null, "", "/admin"); setPage("admin");}}>Admin</a>}
-        {notifState !== "on" && (
-          <a href="#" onClick={(e)=>{e.preventDefault(); handleEnableNotifications();}}>
-            {notifState === "working" ? "Enabling…" : "🔔 Enable Notifications"}
-          </a>
-        )}
-        {notifState === "on" && <span style={{ color:"#9aa4c7" }}>🔔 Notifications on</span>}
         {!user && <a href="#" onClick={(e)=>{e.preventDefault(); googleLogin();}}>Admin Login</a>}
         {user && <a href="#" onClick={(e)=>{e.preventDefault(); logout();}}>Sign out</a>}
       </nav>
     </div>
+    {notifState !== "on" && !notifDismissed && (
+      <div style={{
+        position:"fixed", left:0, right:0, bottom:0, zIndex:50,
+        background:"#121a2b", borderTop:"1px solid #1f2a44",
+        padding:"10px 16px", display:"flex", alignItems:"center", justifyContent:"center",
+        gap:12, flexWrap:"wrap", boxShadow:"0 -4px 16px rgba(0,0,0,.25)"
+      }}>
+        <span style={{ fontSize:14, color:"#eef2ff" }}>🔔 Get a heads-up when picks open, lock, and results are final.</span>
+        <button
+          onClick={handleEnableNotifications}
+          disabled={notifState === "working"}
+          style={{ background:"#6aa2ff", color:"#07152b", border:0, padding:"6px 12px", borderRadius:8, fontWeight:600, cursor:"pointer" }}
+        >
+          {notifState === "working" ? "Enabling…" : "Enable Notifications"}
+        </button>
+        <button
+          onClick={dismissNotifBanner}
+          aria-label="Dismiss"
+          style={{ background:"transparent", border:0, color:"#9aa4c7", cursor:"pointer", fontSize:18, lineHeight:1, padding:"0 4px" }}
+        >×</button>
+      </div>
+    )}
+    </>
   );
 }
 function Field({ label, children }) {
