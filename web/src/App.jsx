@@ -80,6 +80,23 @@ function useIsMobile(breakpoint = 768) {
   return isMobile;
 }
 
+// Device/install detection for the "add to home screen" prompt. iOS Safari
+// only allows push notifications for a site that's been installed this way,
+// so it gates whether we auto-show the install steps vs. the notification
+// prompt on first visit.
+function isIOSDevice() {
+  if (typeof navigator === "undefined") return false;
+  return /iphone|ipad|ipod/i.test(navigator.userAgent)
+    || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1); // iPadOS 13+
+}
+function isAndroidDevice() {
+  return typeof navigator !== "undefined" && /android/i.test(navigator.userAgent);
+}
+function isStandaloneMode() {
+  if (typeof window === "undefined") return false;
+  return window.matchMedia?.("(display-mode: standalone)")?.matches || window.navigator?.standalone === true;
+}
+
 // ---------- small UI helpers ----------
 function Row({ children, style }) {
   return <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", ...style }}>{children}</div>;
@@ -92,12 +109,30 @@ function Card({ children, style }) {
 }
 function Container({ children, maxWidth = 720 }) { return <div style={{ maxWidth: maxWidth, margin: "0 auto", padding: 24 }}>{children}</div>; }
 function Header({ user, isAdmin, setPage }) {
+  const isMobile = useIsMobile();
   const [notifState, setNotifState] = useState(
     (typeof Notification !== "undefined" && Notification.permission === "granted") ? "on" : "off"
   );
   const [notifDontShowAgain, setNotifDontShowAgain] = useState(false);
+  const needsHomeScreenFirst = isIOSDevice() && !isStandaloneMode();
+  const [showInstallModal, setShowInstallModal] = useState(() => {
+    if (typeof window === "undefined" || !needsHomeScreenFirst) return false;
+    try {
+      if (localStorage.getItem("installPromptDismissedForever") === "1") return false;
+      if (sessionStorage.getItem("installPromptShownThisSession") === "1") return false;
+      sessionStorage.setItem("installPromptShownThisSession", "1");
+    } catch (e) {}
+    return true;
+  });
+  const [installDontShowAgain, setInstallDontShowAgain] = useState(false);
+  function closeInstallModal() {
+    if (installDontShowAgain) {
+      try { localStorage.setItem("installPromptDismissedForever", "1"); } catch (e) {}
+    }
+    setShowInstallModal(false);
+  }
   const [showNotifModal, setShowNotifModal] = useState(() => {
-    if (typeof window === "undefined") return false;
+    if (typeof window === "undefined" || needsHomeScreenFirst || !isMobile) return false;
     if (typeof Notification !== "undefined" && Notification.permission === "granted") return false;
     try {
       if (localStorage.getItem("notifPromptDismissedForever") === "1") return false;
@@ -165,13 +200,63 @@ function Header({ user, isAdmin, setPage }) {
     history.pushState(null, "", "/picks"); setPage("picks");}}>Picks</a>
         <a href="#" onClick={(e)=>{e.preventDefault(); history.pushState(null, "", "/leader"); setPage("leader");}}>Leaderboard</a>
         {isAdmin && <a href="#" onClick={(e)=>{e.preventDefault(); history.pushState(null, "", "/admin"); setPage("admin");}}>Admin</a>}
-        {notifState !== "on" && (
+        {isMobile && !isStandaloneMode() && (
+          <a href="#" onClick={(e)=>{e.preventDefault(); setShowInstallModal(true);}} title="Add to home screen" aria-label="Add to home screen">📲</a>
+        )}
+        {isMobile && notifState !== "on" && (
           <a href="#" onClick={(e)=>{e.preventDefault(); setShowNotifModal(true);}} title="Enable notifications" aria-label="Enable notifications">🔔</a>
         )}
         {!user && <a href="#" onClick={(e)=>{e.preventDefault(); googleLogin();}}>Admin Login</a>}
         {user && <a href="#" onClick={(e)=>{e.preventDefault(); logout();}}>Sign out</a>}
       </nav>
     </div>
+    {showInstallModal && (
+      <div style={{
+        position:"fixed", inset:0, zIndex:100, background:"rgba(4,7,15,.72)",
+        display:"flex", alignItems:"center", justifyContent:"center", padding:16
+      }}>
+        <div style={{
+          background:"#121a2b", border:"1px solid #1f2a44", borderRadius:16,
+          padding:"22px 24px", maxWidth:380, width:"100%", boxShadow:"0 20px 60px rgba(0,0,0,.5)"
+        }}>
+          <div style={{ fontSize:28, marginBottom:8 }}>📲</div>
+          <h3 style={{ margin:"0 0 8px", fontSize:17, color:"#eef2ff" }}>Add this to your home screen</h3>
+          <p style={{ margin:"0 0 16px", fontSize:14, color:"#9aa4c7", lineHeight:1.5 }}>
+            It'll open like a regular app, and it's what lets notifications work on iPhone.
+          </p>
+          <div style={{ marginBottom:14 }}>
+            <div style={{ fontSize:13, fontWeight:700, color:"#eef2ff", marginBottom:6 }}>On iPhone (must be on Safari)</div>
+            <ol style={{ margin:"0 0 14px", paddingLeft:20, fontSize:14, color:"#cfd8f0", lineHeight:1.6 }}>
+              <li>Tap the <b>Share</b> icon (square with an arrow up)</li>
+              <li>Scroll down and tap <b>Add to Home Screen</b></li>
+              <li>Tap <b>Add</b> in the top right</li>
+            </ol>
+            <div style={{ fontSize:13, fontWeight:700, color:"#eef2ff", marginBottom:6 }}>On Android (Chrome)</div>
+            <ol style={{ margin:0, paddingLeft:20, fontSize:14, color:"#cfd8f0", lineHeight:1.6 }}>
+              <li>Tap the menu icon (&#8942;) in the top right</li>
+              <li>Tap <b>Add to Home screen</b> (or <b>Install app</b>)</li>
+              <li>Tap <b>Add</b> / <b>Install</b> to confirm</li>
+            </ol>
+          </div>
+          <div style={{ display:"flex", gap:10, marginBottom:14 }}>
+            <button
+              onClick={closeInstallModal}
+              style={{ flex:1, background:"#6aa2ff", color:"#07152b", border:0, padding:"10px 14px", borderRadius:10, fontWeight:600, cursor:"pointer" }}
+            >
+              Got it
+            </button>
+          </div>
+          <label style={{ display:"flex", alignItems:"center", gap:8, fontSize:13, color:"#9aa4c7", cursor:"pointer" }}>
+            <input
+              type="checkbox"
+              checked={installDontShowAgain}
+              onChange={(e)=>setInstallDontShowAgain(e.target.checked)}
+            />
+            Don&rsquo;t show me this again
+          </label>
+        </div>
+      </div>
+    )}
     {showNotifModal && (
       <div style={{
         position:"fixed", inset:0, zIndex:100, background:"rgba(4,7,15,.72)",
