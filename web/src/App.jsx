@@ -3031,7 +3031,9 @@ const isKickoffTbd = (g) => !kickoffDate(g);function AdminPage({ user, isAdmin, 
         autoLockPicks: true // server-side auto-lock-at-kickoff on/off (publishLiveMap)
       };
       const defNotif = {
+        reminder2dEnabled: true, reminderMorningEnabled: true, reminder2hEnabled: true,
         reminderEnabled: true, kickoffEnabled: true, resultsEnabled: true,
+        reminder2dSentWeekKey: null, reminderMorningSentWeekKey: null, reminder2hSentWeekKey: null,
         reminderSentWeekKey: null, kickoffSentWeekKey: null, resultsSentWeekKey: null
       };
       setAppCfg({
@@ -3388,7 +3390,10 @@ await setDoc(doc(db,"config","app"), { currentYear: year, currentWeek: week, upd
             const weekKey = (hasWeekValue(year) && hasWeekValue(week)) ? `${year}_W${week}` : null;
             const notif = appCfg.notifications || {};
             const rows = [
-              { key: "reminderEnabled", sentField: "reminderSentWeekKey", label: "Pre-kickoff reminder", desc: "Sent ~1 hour before the week's first game" },
+              { key: "reminder2dEnabled", sentField: "reminder2dSentWeekKey", label: "2-day reminder", desc: "Sent ~2 days before the week's first game" },
+              { key: "reminderMorningEnabled", sentField: "reminderMorningSentWeekKey", label: "Game day morning reminder", desc: "Sent at 9:00 AM ET the day of the first game" },
+              { key: "reminder2hEnabled", sentField: "reminder2hSentWeekKey", label: "2-hour reminder", desc: "Sent ~2 hours before the week's first game" },
+              { key: "reminderEnabled", sentField: "reminderSentWeekKey", label: "1-hour reminder", desc: "Sent ~1 hour before the week's first game" },
               { key: "kickoffEnabled", sentField: "kickoffSentWeekKey", label: "Picks locked / leaderboard live", desc: "Sent the moment the first game kicks off" },
               { key: "resultsEnabled", sentField: "resultsSentWeekKey", label: "Final standings are in", desc: "Sent once every game that week is final" }
             ];

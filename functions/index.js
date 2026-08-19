@@ -261,9 +261,24 @@ async function getLiveWeekKey(db) {
   return `${year}_W${week}`;
 }
 
-// Cheap check (Firestore only, no CFBD call): send a one-time reminder push
-// roughly an hour before the current live week's first scheduled kickoff.
-async function maybeSendKickoffReminder(db) {
+// Same-day ET calendar date string ("YYYY-MM-DD") for an arbitrary Date, used
+// by the "morning of" reminder to know if today is game day.
+function etDateStr(d) {
+  const fmt = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" });
+  return fmt.format(d);
+}
+
+// "12:00 PM EDT" / "7:30 PM EST" - DST-aware kickoff time label for copy.
+function etTimeLabel(ms) {
+  const fmt = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit", timeZoneName: "short" });
+  return fmt.format(new Date(ms));
+}
+
+// Shared plumbing for a single reminder tier: look up the current live
+// week's first scheduled kickoff, check shouldFire({minsUntil, kickoffMs,
+// now}), and if so send + record it (deduped per week, per tier, and
+// skippable via its own config/app.notifications.<enabledField> flag).
+async function maybeSendReminderTier(db, { enabledField, sentField, title, body, shouldFire }) {
   const liveSnap = await db.doc("config/live").get();
   const liveCfg = liveSnap.exists ? liveSnap.data() : {};
   const year = Number(liveCfg?.year), week = Number(liveCfg?.week);
@@ -283,24 +298,58 @@ async function maybeSendKickoffReminder(db) {
   const kickoffMs = new Date(firstGame.startTimeStr).getTime();
   if (!Number.isFinite(kickoffMs)) return;
 
-  const minsUntil = (kickoffMs - Date.now()) / 60000;
-  if (minsUntil > 60 || minsUntil <= 0) return;
+  const now = Date.now();
+  const minsUntil = (kickoffMs - now) / 60000;
+  if (!shouldFire({ minsUntil, kickoffMs, now })) return;
 
   const appSnap = await db.doc("config/app").get();
   const app = appSnap.exists ? appSnap.data() : {};
-  if (app.notifications?.reminderEnabled === false) return;
+  if (app.notifications?.[enabledField] === false) return;
 
   const weekKey = `${year}_W${week}`;
-  if (app?.notifications?.reminderSentWeekKey === weekKey) return;
+  if (app?.notifications?.[sentField] === weekKey) return;
 
   await sendPush({
-    title: "⏰ Picks close in about an hour",
-    body: `${firstGame.away} @ ${firstGame.home} kicks off soon - get your picks in!`
+    title: typeof title === "function" ? title(firstGame, kickoffMs) : title,
+    body: body(firstGame, kickoffMs)
   });
   await db.doc("config/app").set(
-    { notifications: { reminderSentWeekKey: weekKey }, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
+    { notifications: { [sentField]: weekKey }, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
     { merge: true }
   );
+}
+
+// Cheap checks (Firestore only, no CFBD call): four reminder checkpoints
+// counting down to the current live week's first scheduled kickoff.
+async function maybeSendReminders(db) {
+  await maybeSendReminderTier(db, {
+    enabledField: "reminder2dEnabled", sentField: "reminder2dSentWeekKey",
+    title: "📅 Games are 2 days away",
+    body: (g) => `${g.away} @ ${g.home} kicks off in about 2 days - get your picks in when you're ready.`,
+    shouldFire: ({ minsUntil }) => minsUntil <= 2880 && minsUntil > 0
+  });
+  await maybeSendReminderTier(db, {
+    enabledField: "reminderMorningEnabled", sentField: "reminderMorningSentWeekKey",
+    title: (g, kickoffMs) => `⏰ Picks are due today at ${etTimeLabel(kickoffMs)}`,
+    body: (g) => `${g.away} @ ${g.home} kicks off then - get your picks in.`,
+    shouldFire: ({ kickoffMs, now }) => {
+      if (now >= kickoffMs) return false;
+      if (etDateStr(new Date(kickoffMs)) !== etDateStr(new Date(now))) return false;
+      return toMinutes(nowTimeET()) >= 9 * 60; // 9:00 AM ET or later
+    }
+  });
+  await maybeSendReminderTier(db, {
+    enabledField: "reminder2hEnabled", sentField: "reminder2hSentWeekKey",
+    title: "⏰ Picks close in about 2 hours",
+    body: (g) => `${g.away} @ ${g.home} kicks off soon - last call to get your picks in!`,
+    shouldFire: ({ minsUntil }) => minsUntil <= 120 && minsUntil > 0
+  });
+  await maybeSendReminderTier(db, {
+    enabledField: "reminderEnabled", sentField: "reminderSentWeekKey",
+    title: "⏰ Picks close in about an hour",
+    body: (g) => `${g.away} @ ${g.home} kicks off soon - get your picks in!`,
+    shouldFire: ({ minsUntil }) => minsUntil <= 60 && minsUntil > 0
+  });
 }
 
 // Cheap check (Firestore only, no CFBD call): has the current live week's
@@ -375,7 +424,7 @@ exports.publishLiveMap = onSchedule(
     // Cheap check (Firestore only, runs regardless of hard-stop state): send
     // the pre-kickoff reminder push if we're within the window for it.
     try {
-      await maybeSendKickoffReminder(db);
+      await maybeSendReminders(db);
     } catch (e) {
       logger.warn("publishLiveMap: kickoff reminder check failed", e?.message || e);
     }
