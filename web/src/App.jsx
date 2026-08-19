@@ -3030,15 +3030,30 @@ const isKickoffTbd = (g) => !kickoffDate(g);function AdminPage({ user, isAdmin, 
         autoWriteWinners: true, // server-side auto-winner writer on/off (publishLiveMap)
         autoLockPicks: true // server-side auto-lock-at-kickoff on/off (publishLiveMap)
       };
+      const defNotif = {
+        reminderEnabled: true, kickoffEnabled: true, resultsEnabled: true,
+        reminderSentWeekKey: null, kickoffSentWeekKey: null, resultsSentWeekKey: null
+      };
       setAppCfg({
         leaderboardLocked: !!d.leaderboardLocked,
         leaderboardPicksPublic: !!d.leaderboardPicksPublic,
         picksLocked: !!d.picksLocked,
-        scoreboard: { ...defSb, ...(d.scoreboard || {}) }
+        scoreboard: { ...defSb, ...(d.scoreboard || {}) },
+        notifications: { ...defNotif, ...(d.notifications || {}) }
       });
     });
     return () => unsub();
   }, []);
+
+  async function toggleAutoNotif(key) {
+    try {
+      const next = appCfg.notifications?.[key] === false;
+      await setDoc(doc(db, "config", "app"), { notifications: { [key]: next }, updatedAt: serverTimestamp() }, { merge: true });
+      setMsg(`Notification ${next ? "enabled" : "disabled"}.`);
+    } catch (e) {
+      setMsg("Failed to save: " + (e?.message || String(e)));
+    }
+  }
 
   const toggleLeaderboardLock = async () => {
     try {
@@ -3363,6 +3378,44 @@ await setDoc(doc(db,"config","app"), { currentYear: year, currentWeek: week, upd
           <Row style={{ marginTop: 10 }}>
             <button style={adminBtn("danger")} onClick={clearWeekIfNoPicks}>Clear Week (if no picks)</button>
           </Row>
+        </AdminSection>
+
+        <AdminSection title="Automated Notifications" tone="neutral">
+          <p style={{ margin:"0 0 12px", fontSize:13, color:"#9aa4c7" }}>
+            These fire on their own as part of the kickoff automation above. Turning one off here only stops that notification &mdash; the underlying automation (locking picks, re-engaging the hard stop, etc.) still runs.
+          </p>
+          {(() => {
+            const weekKey = (hasWeekValue(year) && hasWeekValue(week)) ? `${year}_W${week}` : null;
+            const notif = appCfg.notifications || {};
+            const rows = [
+              { key: "reminderEnabled", sentField: "reminderSentWeekKey", label: "Pre-kickoff reminder", desc: "Sent ~1 hour before the week's first game" },
+              { key: "kickoffEnabled", sentField: "kickoffSentWeekKey", label: "Picks locked / leaderboard live", desc: "Sent the moment the first game kicks off" },
+              { key: "resultsEnabled", sentField: "resultsSentWeekKey", label: "Final standings are in", desc: "Sent once every game that week is final" }
+            ];
+            return (
+              <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+                {rows.map(r => {
+                  const enabled = notif[r.key] !== false;
+                  const sent = weekKey && notif[r.sentField] === weekKey;
+                  return (
+                    <div key={r.key} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:8, padding:"10px 12px", background:"#0e1730", border:"1px solid #1f2a44", borderRadius:10 }}>
+                      <div>
+                        <div style={{ fontWeight:600, fontSize:14 }}>{r.label}</div>
+                        <div style={{ fontSize:12, color:"#9aa4c7" }}>{r.desc}</div>
+                      </div>
+                      <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                        <StatusBadge tone={sent ? "success" : "neutral"}>{sent ? `Sent for ${weekKey}` : "Not sent yet"}</StatusBadge>
+                        <StatusBadge tone={enabled ? "primary" : "danger"}>{enabled ? "On" : "Off"}</StatusBadge>
+                        <button style={adminBtn(enabled ? "neutral" : "primary")} onClick={() => toggleAutoNotif(r.key)}>
+                          {enabled ? "Turn Off" : "Turn On"}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
         </AdminSection>
 
         <AdminSection title="Send a Notification" tone="success">

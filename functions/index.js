@@ -237,11 +237,28 @@ async function autoLockAtKickoff(db, mapObj) {
     updates.updatedAt = admin.firestore.FieldValue.serverTimestamp();
     await db.doc("config/app").set(updates, { merge: true });
     logger.info(`autoLockAtKickoff: ${firstGame.away} @ ${firstGame.home} started - locked picks, opened leaderboard, made picks public for ${year}/W${week}`);
-    await sendPush({
-      title: "🔒 Picks are locked - leaderboard is live!",
-      body: `${firstGame.away} @ ${firstGame.home} just kicked off. See where everyone landed.`
-    });
+    if (app.notifications?.kickoffEnabled !== false) {
+      await sendPush({
+        title: "🔒 Picks are locked - leaderboard is live!",
+        body: `${firstGame.away} @ ${firstGame.home} just kicked off. See where everyone landed.`
+      });
+      await db.doc("config/app").set(
+        { notifications: { kickoffSentWeekKey: `${year}_W${week}` }, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
+        { merge: true }
+      );
+    }
   }
+}
+
+// Cheap check (Firestore only): current live week's "{year}_W{week}" key, or
+// null if no live week is set. Used to record which week a notification was
+// last sent for, so the Admin page can show an accurate sent/not-sent status.
+async function getLiveWeekKey(db) {
+  const liveSnap = await db.doc("config/live").get();
+  const liveCfg = liveSnap.exists ? liveSnap.data() : {};
+  const year = Number(liveCfg?.year), week = Number(liveCfg?.week);
+  if (!Number.isFinite(year) || !Number.isFinite(week)) return null;
+  return `${year}_W${week}`;
 }
 
 // Cheap check (Firestore only, no CFBD call): send a one-time reminder push
@@ -271,15 +288,17 @@ async function maybeSendKickoffReminder(db) {
 
   const appSnap = await db.doc("config/app").get();
   const app = appSnap.exists ? appSnap.data() : {};
-  const alreadySent = app?.notifications?.reminderSentGameId === firstGame.id;
-  if (alreadySent) return;
+  if (app.notifications?.reminderEnabled === false) return;
+
+  const weekKey = `${year}_W${week}`;
+  if (app?.notifications?.reminderSentWeekKey === weekKey) return;
 
   await sendPush({
     title: "⏰ Picks close in about an hour",
     body: `${firstGame.away} @ ${firstGame.home} kicks off soon - get your picks in!`
   });
   await db.doc("config/app").set(
-    { notifications: { reminderSentGameId: firstGame.id }, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
+    { notifications: { reminderSentWeekKey: weekKey }, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
     { merge: true }
   );
 }
@@ -340,11 +359,13 @@ exports.publishLiveMap = onSchedule(
   async () => {
     const db = admin.firestore();
     let scoreboardCfg = {};
+    let notifCfg = {};
 
     try {
       const appSnap = await db.doc("config/app").get();
       const app = appSnap.exists ? appSnap.data() : {};
       scoreboardCfg = (app && app.scoreboard) ? app.scoreboard : {};
+      notifCfg = (app && app.notifications) ? app.notifications : {};
     } catch (e) {
       // If config/app is unreadable, fail closed (skip publishing)
       logger.warn("publishLiveMap: could not read config/app; skipping", e?.message || e);
@@ -461,10 +482,19 @@ exports.publishLiveMap = onSchedule(
               { merge: true }
             );
             logger.info("publishLiveMap: week complete - auto re-engaged hard stop");
-            await sendPush({
-              title: "🏆 Final standings are in",
-              body: "This week's games are all final - check the leaderboard for results."
-            });
+            if (notifCfg.resultsEnabled !== false) {
+              await sendPush({
+                title: "🏆 Final standings are in",
+                body: "This week's games are all final - check the leaderboard for results."
+              });
+              const weekKey = await getLiveWeekKey(db);
+              if (weekKey) {
+                await db.doc("config/app").set(
+                  { notifications: { resultsSentWeekKey: weekKey }, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
+                  { merge: true }
+                );
+              }
+            }
           }
         } catch (e) {
           logger.warn("publishLiveMap: week-complete check failed", e?.message || e);
