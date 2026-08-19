@@ -110,6 +110,18 @@ function Card({ children, style }) {
 function Container({ children, maxWidth = 720 }) { return <div style={{ maxWidth: maxWidth, margin: "0 auto", padding: 24 }}>{children}</div>; }
 function Header({ user, isAdmin, setPage }) {
   const isMobile = useIsMobile();
+  const logoTapsRef = useRef({ count: 0, timer: null });
+  function handleLogoTap() {
+    if (user) return;
+    const t = logoTapsRef.current;
+    t.count += 1;
+    clearTimeout(t.timer);
+    t.timer = setTimeout(() => { t.count = 0; }, 2000);
+    if (t.count >= 5) {
+      t.count = 0;
+      googleLogin();
+    }
+  }
   const [notifState, setNotifState] = useState(
     (typeof Notification !== "undefined" && Notification.permission === "granted") ? "on" : "off"
   );
@@ -193,7 +205,7 @@ function Header({ user, isAdmin, setPage }) {
   return (
     <>
     <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", rowGap: 8, marginBottom: 16 }}>
-      <h1 style={{ margin: 0, fontSize: 20 }}>CFB Pick'em</h1>
+      <h1 style={{ margin: 0, fontSize: 20, userSelect:"none" }} onClick={handleLogoTap}>CFB Pick'em</h1>
       <nav style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <a href="#" onClick={(e)=>{e.preventDefault();
 
@@ -206,7 +218,6 @@ function Header({ user, isAdmin, setPage }) {
         {isMobile && notifState !== "on" && (
           <a href="#" onClick={(e)=>{e.preventDefault(); setShowNotifModal(true);}} title="Enable notifications" aria-label="Enable notifications">🔔</a>
         )}
-        {!user && <a href="#" onClick={(e)=>{e.preventDefault(); googleLogin();}}>Admin Login</a>}
         {user && <a href="#" onClick={(e)=>{e.preventDefault(); logout();}}>Sign out</a>}
       </nav>
     </div>
