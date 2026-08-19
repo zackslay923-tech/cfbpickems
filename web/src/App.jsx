@@ -2913,6 +2913,25 @@ const isKickoffTbd = (g) => !kickoffDate(g);function AdminPage({ user, isAdmin, 
     try { localStorage.setItem("sbLocalFixture", localFixture ? "1" : "0"); } catch {}
   }, [localFixture]);
   const pot = useMemo(() => (pickCount * 5), [pickCount]);
+  const [customNotifTitle, setCustomNotifTitle] = useState("");
+  const [customNotifBody, setCustomNotifBody] = useState("");
+  const [sendingCustomNotif, setSendingCustomNotif] = useState(false);
+  async function sendCustomNotification() {
+    const title = customNotifTitle.trim();
+    if (!title) { setMsg("Enter a title before sending."); return; }
+    setSendingCustomNotif(true);
+    try {
+      await addDoc(collection(db, "notificationOutbox"), { title, body: customNotifBody.trim(), createdAt: serverTimestamp() });
+      setMsg("Push notification sent to everyone.");
+      setCustomNotifTitle("");
+      setCustomNotifBody("");
+    } catch (e) {
+      console.error(e);
+      setMsg("Failed to send notification");
+    } finally {
+      setSendingCustomNotif(false);
+    }
+  }
 
   // Does the 2099/W1 test sandbox currently exist?
   useEffect(() => {
@@ -3343,6 +3362,35 @@ await setDoc(doc(db,"config","app"), { currentYear: year, currentWeek: week, upd
           </Row>
           <Row style={{ marginTop: 10 }}>
             <button style={adminBtn("danger")} onClick={clearWeekIfNoPicks}>Clear Week (if no picks)</button>
+          </Row>
+        </AdminSection>
+
+        <AdminSection title="Send a Notification" tone="success">
+          <p style={{ margin:"0 0 10px", fontSize:13, color:"#9aa4c7" }}>
+            Sends a push notification to everyone who's enabled notifications &mdash; use this for anything the automatic ones don't cover (deadline changes, reminders, etc).
+          </p>
+          <Field label="Title">
+            <input
+              style={{...inputStyle, width:"100%"}}
+              value={customNotifTitle}
+              onChange={e=>setCustomNotifTitle(e.target.value)}
+              placeholder="e.g. Deadline extended!"
+              maxLength={80}
+            />
+          </Field>
+          <Field label="Message (optional)">
+            <textarea
+              style={{...inputStyle, width:"100%", minHeight:70, fontFamily:"inherit", resize:"vertical"}}
+              value={customNotifBody}
+              onChange={e=>setCustomNotifBody(e.target.value)}
+              placeholder="e.g. Picks now close Sunday at noon instead."
+              maxLength={200}
+            />
+          </Field>
+          <Row style={{ marginTop: 10 }}>
+            <button style={adminBtn("success")} onClick={sendCustomNotification} disabled={sendingCustomNotif || !customNotifTitle.trim()}>
+              {sendingCustomNotif ? "Sending…" : "Send Notification"}
+            </button>
           </Row>
         </AdminSection>
 
