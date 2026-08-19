@@ -170,8 +170,38 @@ function Header({ user, isAdmin, setPage }) {
   );
   const [notifDontShowAgain, setNotifDontShowAgain] = useState(false);
   const needsHomeScreenFirst = isIOSDevice() && !isStandaloneMode();
+  const [showWhatsNewModal, setShowWhatsNewModal] = useState(() => {
+    if (typeof window === "undefined" || !isMobile) return false;
+    try {
+      if (localStorage.getItem("whatsNewDismissedForever") === "1") return false;
+      if (sessionStorage.getItem("whatsNewShownThisSession") === "1") return false;
+      sessionStorage.setItem("whatsNewShownThisSession", "1");
+    } catch (e) {}
+    return true;
+  });
+  function closeWhatsNewModal() {
+    try { localStorage.setItem("whatsNewDismissedForever", "1"); } catch (e) {}
+    setShowWhatsNewModal(false);
+    // hand off to whichever of the install/notification prompts is relevant,
+    // as if this were the first render for that one
+    if (needsHomeScreenFirst) {
+      try {
+        if (localStorage.getItem("installPromptDismissedForever") !== "1") {
+          sessionStorage.setItem("installPromptShownThisSession", "1");
+          setShowInstallModal(true);
+        }
+      } catch (e) {}
+    } else if (isMobile && !(typeof Notification !== "undefined" && Notification.permission === "granted")) {
+      try {
+        if (localStorage.getItem("notifPromptDismissedForever") !== "1") {
+          sessionStorage.setItem("notifPromptShownThisSession", "1");
+          setShowNotifModal(true);
+        }
+      } catch (e) {}
+    }
+  }
   const [showInstallModal, setShowInstallModal] = useState(() => {
-    if (typeof window === "undefined" || !needsHomeScreenFirst) return false;
+    if (typeof window === "undefined" || !needsHomeScreenFirst || showWhatsNewModal) return false;
     try {
       if (localStorage.getItem("installPromptDismissedForever") === "1") return false;
       if (sessionStorage.getItem("installPromptShownThisSession") === "1") return false;
@@ -187,7 +217,7 @@ function Header({ user, isAdmin, setPage }) {
     setShowInstallModal(false);
   }
   const [showNotifModal, setShowNotifModal] = useState(() => {
-    if (typeof window === "undefined" || needsHomeScreenFirst || !isMobile) return false;
+    if (typeof window === "undefined" || needsHomeScreenFirst || !isMobile || showWhatsNewModal) return false;
     if (typeof Notification !== "undefined" && Notification.permission === "granted") return false;
     try {
       if (localStorage.getItem("notifPromptDismissedForever") === "1") return false;
@@ -264,6 +294,30 @@ function Header({ user, isAdmin, setPage }) {
         {user && <a href="#" onClick={(e)=>{e.preventDefault(); logout();}}>Sign out</a>}
       </nav>
     </div>
+    {showWhatsNewModal && (
+      <div style={{
+        position:"fixed", inset:0, zIndex:100, background:"rgba(4,7,15,.72)",
+        display:"flex", alignItems:"center", justifyContent:"center", padding:16
+      }}>
+        <div style={{
+          background:"#121a2b", border:"1px solid #1f2a44", borderRadius:16,
+          padding:"22px 24px", maxWidth:360, width:"100%", boxShadow:"0 20px 60px rgba(0,0,0,.5)"
+        }}>
+          <div style={{ fontSize:28, marginBottom:8 }}>✨</div>
+          <h3 style={{ margin:"0 0 8px", fontSize:17, color:"#eef2ff" }}>What's new</h3>
+          <ul style={{ margin:"0 0 18px", paddingLeft:20, fontSize:14, color:"#cfd8f0", lineHeight:1.7 }}>
+            <li><b>Your picks now autosave</b> &mdash; get pulled away or refresh the page, and your progress is still there when you come back.</li>
+            <li><b>You can add this to your home screen</b> &mdash; it'll open like a real app, right from your phone.</li>
+          </ul>
+          <button
+            onClick={closeWhatsNewModal}
+            style={{ width:"100%", background:"#6aa2ff", color:"#07152b", border:0, padding:"10px 14px", borderRadius:10, fontWeight:600, cursor:"pointer" }}
+          >
+            Got it
+          </button>
+        </div>
+      </div>
+    )}
     {showInstallModal && (
       <div style={{
         position:"fixed", inset:0, zIndex:100, background:"rgba(4,7,15,.72)",
