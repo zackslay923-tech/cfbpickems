@@ -305,10 +305,14 @@ function Header({ user, isAdmin, setPage }) {
         }}>
           <div style={{ fontSize:28, marginBottom:8 }}>✨</div>
           <h3 style={{ margin:"0 0 8px", fontSize:17, color:"#eef2ff" }}>What's new</h3>
-          <ul style={{ margin:"0 0 18px", paddingLeft:20, fontSize:14, color:"#cfd8f0", lineHeight:1.7 }}>
+          <ul style={{ margin:"0 0 12px", paddingLeft:20, fontSize:14, color:"#cfd8f0", lineHeight:1.7 }}>
             <li><b>Your picks now autosave</b> &mdash; get pulled away or refresh the page, and your progress is still there when you come back.</li>
             <li><b>You can add this to your home screen</b> &mdash; it'll open like a real app, right from your phone.</li>
+            <li><b>You can turn on notifications</b> &mdash; get a heads-up when picks open, when the leaderboard unlocks, and reminders to submit picks. <u>On iPhone, you must add this to your home screen first</u> &mdash; notifications only work from the installed app, not from Safari or Chrome directly.</li>
           </ul>
+          <p style={{ margin:"0 0 18px", fontSize:13, color:"#9aa4c7", lineHeight:1.5 }}>
+            Tap the 📲 and 🔔 icons at the top anytime to turn these on.
+          </p>
           <button
             onClick={closeWhatsNewModal}
             style={{ width:"100%", background:"#6aa2ff", color:"#07152b", border:0, padding:"10px 14px", borderRadius:10, fontWeight:600, cursor:"pointer" }}
