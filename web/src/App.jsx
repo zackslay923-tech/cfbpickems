@@ -141,6 +141,10 @@ function Card({ children, style }) {
 function Container({ children, maxWidth = 720 }) { return <div style={{ maxWidth: maxWidth, margin: "0 auto", padding: 24 }}>{children}</div>; }
 function Header({ user, isAdmin, setPage }) {
   const isMobile = useIsMobile();
+  const onIOS = isIOSDevice();
+  const onAndroid = isAndroidDevice();
+  const showIOSSteps = onIOS || !onAndroid;
+  const showAndroidSteps = onAndroid || !onIOS;
   const androidInstallAvailable = useInstallPromptAvailable();
   const [androidInstalling, setAndroidInstalling] = useState(false);
   async function handleAndroidInstallClick() {
@@ -272,30 +276,40 @@ function Header({ user, isAdmin, setPage }) {
           <div style={{ fontSize:28, marginBottom:8 }}>📲</div>
           <h3 style={{ margin:"0 0 8px", fontSize:17, color:"#eef2ff" }}>Add this to your home screen</h3>
           <p style={{ margin:"0 0 16px", fontSize:14, color:"#9aa4c7", lineHeight:1.5 }}>
-            It'll open like a regular app, and it's what lets notifications work on iPhone.
+            {showIOSSteps && !showAndroidSteps
+              ? "It'll open like a regular app, and it's what lets notifications work on iPhone."
+              : "It'll open like a regular app, right from your home screen."}
           </p>
           <div style={{ marginBottom:14 }}>
-            <div style={{ fontSize:13, fontWeight:700, color:"#eef2ff", marginBottom:6 }}>On iPhone (must be on Safari)</div>
-            <ol style={{ margin:"0 0 14px", paddingLeft:20, fontSize:14, color:"#cfd8f0", lineHeight:1.6 }}>
-              <li>Tap the <b>Share</b> icon (square with an arrow up)</li>
-              <li>Scroll down and tap <b>Add to Home Screen</b></li>
-              <li>Tap <b>Add</b> in the top right</li>
-            </ol>
-            <div style={{ fontSize:13, fontWeight:700, color:"#eef2ff", marginBottom:6 }}>On Android (Chrome)</div>
-            {androidInstallAvailable ? (
-              <button
-                onClick={handleAndroidInstallClick}
-                disabled={androidInstalling}
-                style={{ width:"100%", background:"#1a6b46", color:"#fff", border:0, padding:"9px 14px", borderRadius:10, fontWeight:600, cursor:"pointer", marginBottom:2 }}
-              >
-                {androidInstalling ? "Opening…" : "Click Here to Install"}
-              </button>
-            ) : (
-              <ol style={{ margin:0, paddingLeft:20, fontSize:14, color:"#cfd8f0", lineHeight:1.6 }}>
-                <li>Tap the menu icon (&#8942;) in the top right</li>
-                <li>Tap <b>Add to Home screen</b> (or <b>Install app</b>)</li>
-                <li>Tap <b>Add</b> / <b>Install</b> to confirm</li>
-              </ol>
+            {showIOSSteps && (
+              <>
+                <div style={{ fontSize:13, fontWeight:700, color:"#eef2ff", marginBottom:6 }}>On iPhone (must be on Safari)</div>
+                <ol style={{ margin: showAndroidSteps ? "0 0 14px" : 0, paddingLeft:20, fontSize:14, color:"#cfd8f0", lineHeight:1.6 }}>
+                  <li>Tap the <b>Share</b> icon (square with an arrow up)</li>
+                  <li>Scroll down and tap <b>Add to Home Screen</b></li>
+                  <li>Tap <b>Add</b> in the top right</li>
+                </ol>
+              </>
+            )}
+            {showAndroidSteps && (
+              <>
+                <div style={{ fontSize:13, fontWeight:700, color:"#eef2ff", marginBottom:6 }}>On Android (Chrome)</div>
+                {androidInstallAvailable ? (
+                  <button
+                    onClick={handleAndroidInstallClick}
+                    disabled={androidInstalling}
+                    style={{ width:"100%", background:"#1a6b46", color:"#fff", border:0, padding:"9px 14px", borderRadius:10, fontWeight:600, cursor:"pointer", marginBottom:2 }}
+                  >
+                    {androidInstalling ? "Opening…" : "Click Here to Install"}
+                  </button>
+                ) : (
+                  <ol style={{ margin:0, paddingLeft:20, fontSize:14, color:"#cfd8f0", lineHeight:1.6 }}>
+                    <li>Tap the menu icon (&#8942;) in the top right</li>
+                    <li>Tap <b>Add to Home screen</b> (or <b>Install app</b>)</li>
+                    <li>Tap <b>Add</b> / <b>Install</b> to confirm</li>
+                  </ol>
+                )}
+              </>
             )}
           </div>
           <div style={{ display:"flex", gap:10, marginBottom:14 }}>
