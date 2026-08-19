@@ -338,9 +338,9 @@ function Header({ user, isAdmin, setPage }) {
               <>
                 <div style={{ fontSize:13, fontWeight:700, color:"#eef2ff", marginBottom:6 }}>On iPhone (must be on Safari)</div>
                 <ol style={{ margin: showAndroidSteps ? "0 0 14px" : 0, paddingLeft:20, fontSize:14, color:"#cfd8f0", lineHeight:1.6 }}>
-                  <li>Tap the <b>Share</b> icon (square with an arrow up)</li>
-                  <li>Scroll down and tap <b>Add to Home Screen</b></li>
-                  <li>Tap <b>Add</b> in the top right</li>
+                  <li>Tap the <b>Share</b> icon (square with an arrow up, or <b>&#8226;&#8226;&#8226;</b> on newer iOS)</li>
+                  <li>Tap <b>View More</b> if you don't see &ldquo;Add to Home Screen&rdquo; right away</li>
+                  <li>Tap <b>Add to Home Screen</b>, then <b>Add</b></li>
                 </ol>
               </>
             )}
