@@ -2894,25 +2894,59 @@ const kickoffLabel = (g, opts = {}) => {
   }
 };
 
-const isKickoffTbd = (g) => !kickoffDate(g);function AdminPage({ user, isAdmin, setPage }) {
-  const [live, setLive] = useState({ year: null, week: null });
-  const [year, setYear] = useState(null);
-  const [week, setWeek] = useState(null);
-  const [games, setGames] = useState([]);
-  const [pickCount, setPickCount] = useState(0);
+const isKickoffTbd = (g) => !kickoffDate(g);
+
+function AdminNotificationsPage({ user, isAdmin, setPage }) {
   const [msg, setMsg] = useState("");
-  const [weeksForYear, setWeeksForYear] = useState([]);
-  const [apiKey, setApiKey] = useState("");
-  const [showApiKey, setShowApiKey] = useState(false);
-  const [appCfg, setAppCfg] = useState({ leaderboardLocked: false, leaderboardPicksPublic: false, picksLocked: false });
-  const [dummyWeekExists, setDummyWeekExists] = useState(false);
-  const [localFixture, setLocalFixture] = useState(() => {
-    try { return localStorage.getItem("sbLocalFixture") === "1"; } catch { return false; }
-  });
+  const [live, setLive] = useState({ year: null, week: null });
   useEffect(() => {
-    try { localStorage.setItem("sbLocalFixture", localFixture ? "1" : "0"); } catch {}
-  }, [localFixture]);
-  const pot = useMemo(() => (pickCount * 5), [pickCount]);
+    const unsub = onSnapshot(doc(db, "config", "live"), (s) => setLive(s.data() || {}));
+    return () => unsub();
+  }, []);
+  const year = live.year, week = live.week;
+
+  const [notifCfg, setNotifCfg] = useState({});
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, "config", "app"), (s) => {
+      const d = s.data() || {};
+      const def = {
+        reminder2dEnabled: true, reminderMorningEnabled: true, reminder2hEnabled: true,
+        reminderEnabled: true, kickoffEnabled: true, resultsEnabled: true,
+        reminder2dSentWeekKey: null, reminderMorningSentWeekKey: null, reminder2hSentWeekKey: null,
+        reminderSentWeekKey: null, kickoffSentWeekKey: null, resultsSentWeekKey: null
+      };
+      setNotifCfg({ ...def, ...(d.notifications || {}) });
+    });
+    return () => unsub();
+  }, []);
+  async function toggleAutoNotif(key) {
+    try {
+      const next = notifCfg[key] === false;
+      await setDoc(doc(db, "config", "app"), { notifications: { [key]: next }, updatedAt: serverTimestamp() }, { merge: true });
+      setMsg(`Notification ${next ? "enabled" : "disabled"}.`);
+    } catch (e) {
+      setMsg("Failed to save: " + (e?.message || String(e)));
+    }
+  }
+
+  const [pushDevices, setPushDevices] = useState([]);
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "pushTokens"), (snap) => {
+      const rows = [];
+      snap.forEach(d => rows.push({ token: d.id, ...d.data() }));
+      rows.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+      setPushDevices(rows);
+    }, () => setPushDevices([]));
+    return () => unsub();
+  }, []);
+  async function toggleDeviceBlocked(token, blocked) {
+    try {
+      await setDoc(doc(db, "pushTokens", token), { blocked }, { merge: true });
+    } catch (e) {
+      setMsg("Failed to update device: " + (e?.message || String(e)));
+    }
+  }
+
   const [customNotifTitle, setCustomNotifTitle] = useState("");
   const [customNotifBody, setCustomNotifBody] = useState("");
   const [sendingCustomNotif, setSendingCustomNotif] = useState(false);
@@ -2933,24 +2967,138 @@ const isKickoffTbd = (g) => !kickoffDate(g);function AdminPage({ user, isAdmin, 
     }
   }
 
-  // Registered notification devices, for the Manage Devices panel below.
-  const [pushDevices, setPushDevices] = useState([]);
+  return (<Container maxWidth={1200}>
+    <Header user={user} isAdmin={isAdmin} setPage={setPage} />
+    <Card style={{ maxWidth: 1200 }}>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:10 }}>
+        <h2 style={{ margin:0 }}>Notifications</h2>
+        <button style={adminBtn("neutral")} onClick={() => { window.history.pushState(null, "", "/admin"); setPage("admin"); }}>&larr; Back to Admin</button>
+      </div>
+      {msg && (
+        <div style={{ marginTop:12, padding:"8px 12px", borderRadius:10, background:"rgba(106,162,255,.1)", border:"1px solid rgba(106,162,255,.3)", color:"#cfe0ff", fontSize:13 }}>{msg}</div>
+      )}
+
+      <AdminSection title="Automated Notifications" tone="neutral">
+        <p style={{ margin:"0 0 12px", fontSize:13, color:"#9aa4c7" }}>
+          These fire on their own as part of the kickoff automation. Turning one off here only stops that notification &mdash; the underlying automation (locking picks, re-engaging the hard stop, etc.) still runs.
+        </p>
+        {(() => {
+          const weekKey = (hasWeekValue(year) && hasWeekValue(week)) ? `${year}_W${week}` : null;
+          const notif = notifCfg || {};
+          const rows = [
+            { key: "reminder2dEnabled", sentField: "reminder2dSentWeekKey", label: "2-day reminder", desc: "Sent ~2 days before the week's first game" },
+            { key: "reminderMorningEnabled", sentField: "reminderMorningSentWeekKey", label: "Game day morning reminder", desc: "Sent at 9:00 AM ET the day of the first game" },
+            { key: "reminder2hEnabled", sentField: "reminder2hSentWeekKey", label: "2-hour reminder", desc: "Sent ~2 hours before the week's first game" },
+            { key: "reminderEnabled", sentField: "reminderSentWeekKey", label: "1-hour reminder", desc: "Sent ~1 hour before the week's first game" },
+            { key: "kickoffEnabled", sentField: "kickoffSentWeekKey", label: "Picks locked / leaderboard live", desc: "Sent the moment the first game kicks off" },
+            { key: "resultsEnabled", sentField: "resultsSentWeekKey", label: "Final standings are in", desc: "Sent once every game that week is final" }
+          ];
+          return (
+            <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+              {rows.map(r => {
+                const enabled = notif[r.key] !== false;
+                const sent = weekKey && notif[r.sentField] === weekKey;
+                return (
+                  <div key={r.key} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:8, padding:"10px 12px", background:"#0e1730", border:"1px solid #1f2a44", borderRadius:10 }}>
+                    <div>
+                      <div style={{ fontWeight:600, fontSize:14 }}>{r.label}</div>
+                      <div style={{ fontSize:12, color:"#9aa4c7" }}>{r.desc}</div>
+                    </div>
+                    <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                      <StatusBadge tone={sent ? "success" : "neutral"}>{sent ? `Sent for ${weekKey}` : "Not sent yet"}</StatusBadge>
+                      <StatusBadge tone={enabled ? "primary" : "danger"}>{enabled ? "On" : "Off"}</StatusBadge>
+                      <button style={adminBtn(enabled ? "neutral" : "primary")} onClick={() => toggleAutoNotif(r.key)}>
+                        {enabled ? "Turn Off" : "Turn On"}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })()}
+      </AdminSection>
+
+      <AdminSection title="Manage Devices" tone="neutral" right={<StatusBadge tone="neutral">{pushDevices.length} registered</StatusBadge>}>
+        <p style={{ margin:"0 0 12px", fontSize:13, color:"#9aa4c7" }}>
+          Every device that's enabled notifications. Devices are only labeled with a name once that browser submits picks &mdash; otherwise they show as unknown. Blocking a device stops every notification (automated and custom) from reaching it.
+        </p>
+        {pushDevices.length === 0 ? (
+          <div style={{ fontSize:13, color:"#9aa4c7" }}>No devices have enabled notifications yet.</div>
+        ) : (
+          <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+            {pushDevices.map(d => {
+              const blocked = d.blocked === true;
+              return (
+                <div key={d.token} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:8, padding:"9px 12px", background:"#0e1730", border:"1px solid #1f2a44", borderRadius:10 }}>
+                  <div>
+                    <div style={{ fontWeight:600, fontSize:14 }}>{d.name || "Unknown device"}</div>
+                    <div style={{ fontSize:11, color:"#9aa4c7", fontFamily:"monospace" }}>{d.token.slice(0, 24)}&hellip;</div>
+                  </div>
+                  <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                    <StatusBadge tone={blocked ? "danger" : "success"}>{blocked ? "Blocked" : "Active"}</StatusBadge>
+                    <button style={adminBtn(blocked ? "primary" : "danger")} onClick={() => toggleDeviceBlocked(d.token, !blocked)}>
+                      {blocked ? "Unblock" : "Block"}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </AdminSection>
+
+      <AdminSection title="Send a Notification" tone="success">
+        <p style={{ margin:"0 0 10px", fontSize:13, color:"#9aa4c7" }}>
+          Sends a push notification to everyone who's enabled notifications &mdash; use this for anything the automatic ones don't cover (deadline changes, reminders, etc).
+        </p>
+        <Field label="Title">
+          <input
+            style={{...inputStyle, width:"100%"}}
+            value={customNotifTitle}
+            onChange={e=>setCustomNotifTitle(e.target.value)}
+            placeholder="e.g. Deadline extended!"
+            maxLength={80}
+          />
+        </Field>
+        <Field label="Message (optional)">
+          <textarea
+            style={{...inputStyle, width:"100%", minHeight:70, fontFamily:"inherit", resize:"vertical"}}
+            value={customNotifBody}
+            onChange={e=>setCustomNotifBody(e.target.value)}
+            placeholder="e.g. Picks now close Sunday at noon instead."
+            maxLength={200}
+          />
+        </Field>
+        <Row style={{ marginTop: 10 }}>
+          <button style={adminBtn("success")} onClick={sendCustomNotification} disabled={sendingCustomNotif || !customNotifTitle.trim()}>
+            {sendingCustomNotif ? "Sending…" : "Send Notification"}
+          </button>
+        </Row>
+      </AdminSection>
+    </Card>
+  </Container>);
+}
+
+function AdminPage({ user, isAdmin, setPage }) {
+  const [live, setLive] = useState({ year: null, week: null });
+  const [year, setYear] = useState(null);
+  const [week, setWeek] = useState(null);
+  const [games, setGames] = useState([]);
+  const [pickCount, setPickCount] = useState(0);
+  const [msg, setMsg] = useState("");
+  const [weeksForYear, setWeeksForYear] = useState([]);
+  const [apiKey, setApiKey] = useState("");
+  const [showApiKey, setShowApiKey] = useState(false);
+  const [appCfg, setAppCfg] = useState({ leaderboardLocked: false, leaderboardPicksPublic: false, picksLocked: false });
+  const [dummyWeekExists, setDummyWeekExists] = useState(false);
+  const [localFixture, setLocalFixture] = useState(() => {
+    try { return localStorage.getItem("sbLocalFixture") === "1"; } catch { return false; }
+  });
   useEffect(() => {
-    const unsub = onSnapshot(collection(db, "pushTokens"), (snap) => {
-      const rows = [];
-      snap.forEach(d => rows.push({ token: d.id, ...d.data() }));
-      rows.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
-      setPushDevices(rows);
-    }, () => setPushDevices([]));
-    return () => unsub();
-  }, []);
-  async function toggleDeviceBlocked(token, blocked) {
-    try {
-      await setDoc(doc(db, "pushTokens", token), { blocked }, { merge: true });
-    } catch (e) {
-      setMsg("Failed to update device: " + (e?.message || String(e)));
-    }
-  }
+    try { localStorage.setItem("sbLocalFixture", localFixture ? "1" : "0"); } catch {}
+  }, [localFixture]);
+  const pot = useMemo(() => (pickCount * 5), [pickCount]);
 
   // Does the 2099/W1 test sandbox currently exist?
   useEffect(() => {
@@ -3049,32 +3197,15 @@ const isKickoffTbd = (g) => !kickoffDate(g);function AdminPage({ user, isAdmin, 
         autoWriteWinners: true, // server-side auto-winner writer on/off (publishLiveMap)
         autoLockPicks: true // server-side auto-lock-at-kickoff on/off (publishLiveMap)
       };
-      const defNotif = {
-        reminder2dEnabled: true, reminderMorningEnabled: true, reminder2hEnabled: true,
-        reminderEnabled: true, kickoffEnabled: true, resultsEnabled: true,
-        reminder2dSentWeekKey: null, reminderMorningSentWeekKey: null, reminder2hSentWeekKey: null,
-        reminderSentWeekKey: null, kickoffSentWeekKey: null, resultsSentWeekKey: null
-      };
       setAppCfg({
         leaderboardLocked: !!d.leaderboardLocked,
         leaderboardPicksPublic: !!d.leaderboardPicksPublic,
         picksLocked: !!d.picksLocked,
-        scoreboard: { ...defSb, ...(d.scoreboard || {}) },
-        notifications: { ...defNotif, ...(d.notifications || {}) }
+        scoreboard: { ...defSb, ...(d.scoreboard || {}) }
       });
     });
     return () => unsub();
   }, []);
-
-  async function toggleAutoNotif(key) {
-    try {
-      const next = appCfg.notifications?.[key] === false;
-      await setDoc(doc(db, "config", "app"), { notifications: { [key]: next }, updatedAt: serverTimestamp() }, { merge: true });
-      setMsg(`Notification ${next ? "enabled" : "disabled"}.`);
-    } catch (e) {
-      setMsg("Failed to save: " + (e?.message || String(e)));
-    }
-  }
 
   const toggleLeaderboardLock = async () => {
     try {
@@ -3401,103 +3532,11 @@ await setDoc(doc(db,"config","app"), { currentYear: year, currentWeek: week, upd
           </Row>
         </AdminSection>
 
-        <AdminSection title="Automated Notifications" tone="neutral">
-          <p style={{ margin:"0 0 12px", fontSize:13, color:"#9aa4c7" }}>
-            These fire on their own as part of the kickoff automation above. Turning one off here only stops that notification &mdash; the underlying automation (locking picks, re-engaging the hard stop, etc.) still runs.
-          </p>
-          {(() => {
-            const weekKey = (hasWeekValue(year) && hasWeekValue(week)) ? `${year}_W${week}` : null;
-            const notif = appCfg.notifications || {};
-            const rows = [
-              { key: "reminder2dEnabled", sentField: "reminder2dSentWeekKey", label: "2-day reminder", desc: "Sent ~2 days before the week's first game" },
-              { key: "reminderMorningEnabled", sentField: "reminderMorningSentWeekKey", label: "Game day morning reminder", desc: "Sent at 9:00 AM ET the day of the first game" },
-              { key: "reminder2hEnabled", sentField: "reminder2hSentWeekKey", label: "2-hour reminder", desc: "Sent ~2 hours before the week's first game" },
-              { key: "reminderEnabled", sentField: "reminderSentWeekKey", label: "1-hour reminder", desc: "Sent ~1 hour before the week's first game" },
-              { key: "kickoffEnabled", sentField: "kickoffSentWeekKey", label: "Picks locked / leaderboard live", desc: "Sent the moment the first game kicks off" },
-              { key: "resultsEnabled", sentField: "resultsSentWeekKey", label: "Final standings are in", desc: "Sent once every game that week is final" }
-            ];
-            return (
-              <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-                {rows.map(r => {
-                  const enabled = notif[r.key] !== false;
-                  const sent = weekKey && notif[r.sentField] === weekKey;
-                  return (
-                    <div key={r.key} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:8, padding:"10px 12px", background:"#0e1730", border:"1px solid #1f2a44", borderRadius:10 }}>
-                      <div>
-                        <div style={{ fontWeight:600, fontSize:14 }}>{r.label}</div>
-                        <div style={{ fontSize:12, color:"#9aa4c7" }}>{r.desc}</div>
-                      </div>
-                      <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-                        <StatusBadge tone={sent ? "success" : "neutral"}>{sent ? `Sent for ${weekKey}` : "Not sent yet"}</StatusBadge>
-                        <StatusBadge tone={enabled ? "primary" : "danger"}>{enabled ? "On" : "Off"}</StatusBadge>
-                        <button style={adminBtn(enabled ? "neutral" : "primary")} onClick={() => toggleAutoNotif(r.key)}>
-                          {enabled ? "Turn Off" : "Turn On"}
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            );
-          })()}
-        </AdminSection>
-
-        <AdminSection title="Manage Devices" tone="neutral" right={<StatusBadge tone="neutral">{pushDevices.length} registered</StatusBadge>}>
-          <p style={{ margin:"0 0 12px", fontSize:13, color:"#9aa4c7" }}>
-            Every device that's enabled notifications. Devices are only labeled with a name once that browser submits picks &mdash; otherwise they show as unknown. Blocking a device stops every notification (automated and custom) from reaching it.
-          </p>
-          {pushDevices.length === 0 ? (
-            <div style={{ fontSize:13, color:"#9aa4c7" }}>No devices have enabled notifications yet.</div>
-          ) : (
-            <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
-              {pushDevices.map(d => {
-                const blocked = d.blocked === true;
-                return (
-                  <div key={d.token} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:8, padding:"9px 12px", background:"#0e1730", border:"1px solid #1f2a44", borderRadius:10 }}>
-                    <div>
-                      <div style={{ fontWeight:600, fontSize:14 }}>{d.name || "Unknown device"}</div>
-                      <div style={{ fontSize:11, color:"#9aa4c7", fontFamily:"monospace" }}>{d.token.slice(0, 24)}&hellip;</div>
-                    </div>
-                    <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-                      <StatusBadge tone={blocked ? "danger" : "success"}>{blocked ? "Blocked" : "Active"}</StatusBadge>
-                      <button style={adminBtn(blocked ? "primary" : "danger")} onClick={() => toggleDeviceBlocked(d.token, !blocked)}>
-                        {blocked ? "Unblock" : "Block"}
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </AdminSection>
-
-        <AdminSection title="Send a Notification" tone="success">
+        <AdminSection title="Notifications" tone="neutral">
           <p style={{ margin:"0 0 10px", fontSize:13, color:"#9aa4c7" }}>
-            Sends a push notification to everyone who's enabled notifications &mdash; use this for anything the automatic ones don't cover (deadline changes, reminders, etc).
+            Automated reminder/kickoff/results toggles, device management, and sending a custom push all live on their own page now.
           </p>
-          <Field label="Title">
-            <input
-              style={{...inputStyle, width:"100%"}}
-              value={customNotifTitle}
-              onChange={e=>setCustomNotifTitle(e.target.value)}
-              placeholder="e.g. Deadline extended!"
-              maxLength={80}
-            />
-          </Field>
-          <Field label="Message (optional)">
-            <textarea
-              style={{...inputStyle, width:"100%", minHeight:70, fontFamily:"inherit", resize:"vertical"}}
-              value={customNotifBody}
-              onChange={e=>setCustomNotifBody(e.target.value)}
-              placeholder="e.g. Picks now close Sunday at noon instead."
-              maxLength={200}
-            />
-          </Field>
-          <Row style={{ marginTop: 10 }}>
-            <button style={adminBtn("success")} onClick={sendCustomNotification} disabled={sendingCustomNotif || !customNotifTitle.trim()}>
-              {sendingCustomNotif ? "Sending…" : "Send Notification"}
-            </button>
-          </Row>
+          <button style={adminBtn("primary")} onClick={() => { window.history.pushState(null, "", "/admin/notifications"); setPage("adminnotifications"); }}>Manage Notifications</button>
         </AdminSection>
 
         <BulkImportPicksPreview year={year} week={week} />
@@ -4094,13 +4133,14 @@ function ModalOverlay({ children }) {
 export default function App() {
   const { user, isAdmin } = useAuthAdmin();
   const [page, setPage] = useState("picks");
-  // --- Path router shim (picks|leader|admin|admin/picks) ---
+  // --- Path router shim (picks|leader|admin|admin/picks|admin/notifications) ---
   useEffect(() => {
     const readPath = () => {
       const p = (window.location.pathname || "/").replace(/^\/|\/$/g, "");
       if (p === "") { setPage("picks"); return; }
       if (p === "picks" || p === "leader" || p === "admin") { setPage(p); return; }
       if (p === "admin/picks") { setPage("adminpicks"); return; }
+      if (p === "admin/notifications") { setPage("adminnotifications"); return; }
     };
     readPath(); // on load
     window.addEventListener("popstate", readPath);
@@ -4152,6 +4192,7 @@ export default function App() {
       {page === "leader" && <LeaderboardPage user={user} isAdmin={isAdmin} setPage={setPage} />}
       {page === "admin" && <AdminPage user={user} isAdmin={isAdmin} setPage={setPage} />}
       {page === "adminpicks" && <AdminPicksPage user={user} isAdmin={isAdmin} setPage={setPage} />}
+      {page === "adminnotifications" && <AdminNotificationsPage user={user} isAdmin={isAdmin} setPage={setPage} />}
       {page === "confirm" && <ModalOverlay><ConfirmPage setPage={setPage} /></ModalOverlay>}
       {page === "receipt" && <ModalOverlay><ReceiptPage setPage={setPage} /></ModalOverlay>}
     </>
