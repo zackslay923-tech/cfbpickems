@@ -171,7 +171,7 @@ function Header({ user, isAdmin, setPage }) {
   const [notifDontShowAgain, setNotifDontShowAgain] = useState(false);
   const needsHomeScreenFirst = isIOSDevice() && !isStandaloneMode();
   const [showWhatsNewModal, setShowWhatsNewModal] = useState(() => {
-    if (typeof window === "undefined" || !isMobile) return false;
+    if (typeof window === "undefined" || !isMobile || isStandaloneMode()) return false;
     try {
       if (localStorage.getItem("whatsNewDismissedForever") === "1") return false;
       if (sessionStorage.getItem("whatsNewShownThisSession") === "1") return false;
