@@ -46,6 +46,7 @@ export async function enablePushNotifications() {
   if (!token) throw new Error("Could not get a push token for this device.");
 
   await setDoc(doc(db, "pushTokens", token), { token, createdAt: serverTimestamp() }, { merge: true });
+  try { localStorage.setItem("pushToken", token); } catch (e) {}
 
   onMessage(messaging, (payload) => {
     const { title, body } = payload.notification || {};

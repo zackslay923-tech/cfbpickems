@@ -86,14 +86,16 @@ service cloud.firestore {
     }
 
     // Push notification tokens: any device can register itself (doc id is the
-    // token, so a device can only touch its own doc); no reads (nothing to
-    // read), no updates (just re-create); topic subscription happens
-    // server-side in a Cloud Function.
+    // token, so a device can only touch its own doc) and self-tag a display
+    // name when it submits picks. Only admins can read the list (to manage
+    // recipients) or set `blocked` (to mute a specific device).
     match /pushTokens/{token} {
-      allow get: if false;
-      allow list: if false;
+      allow get: if isAdmin();
+      allow list: if isAdmin();
       allow create: if request.resource.data.token == token;
-      allow update: if false;
+      allow update: if isAdmin()
+        || (request.resource.data.token == token
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["name"]));
       allow delete: if true;
     }
 

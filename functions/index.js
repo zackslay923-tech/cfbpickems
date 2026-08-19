@@ -6,24 +6,39 @@ const logger = require("firebase-functions/logger");
 const admin = require("firebase-admin");
 admin.initializeApp();
 
-const NOTIFICATION_TOPIC = "all-players";
-
-// Broadcast a push notification to every device that's subscribed. Failures
-// are logged and swallowed - a missed notification shouldn't break the
-// automation that triggered it.
-async function sendPush({ title, body }) {
+// Broadcast a push notification to every registered device that isn't
+// individually blocked by an admin, optionally skipping a specific set of
+// tokens too (e.g. people who've already submitted picks - see the reminder
+// tiers below). Sent as a direct per-token multicast rather than a topic so
+// blocking/exclusion can actually apply. Failures are logged and swallowed -
+// a missed notification shouldn't break the automation that triggered it.
+async function sendPush({ title, body }, { excludeTokens } = {}) {
   try {
-    await admin.messaging().send({
-      topic: NOTIFICATION_TOPIC,
-      notification: { title, body }
-    });
-    logger.info(`sendPush: sent "${title}"`);
+    const exclude = excludeTokens || new Set();
+    const snap = await admin.firestore().collection("pushTokens").get();
+    const tokens = snap.docs
+      .filter(d => d.data()?.blocked !== true && !exclude.has(d.id))
+      .map(d => d.id);
+    if (!tokens.length) {
+      logger.info(`sendPush: no eligible recipients for "${title}"`);
+      return;
+    }
+    // FCM multicast caps at 500 recipients per call
+    for (let i = 0; i < tokens.length; i += 500) {
+      const batch = tokens.slice(i, i + 500);
+      const res = await admin.messaging().sendEachForMulticast({ tokens: batch, notification: { title, body } });
+      logger.info(`sendPush: sent "${title}" to ${res.successCount}/${batch.length} device(s)`);
+    }
   } catch (e) {
     logger.warn("sendPush failed:", e?.message || e);
   }
 }
 
-// New device registers a push token -> subscribe it to the broadcast topic.
+// Kept deployed for backward compatibility (removing it would orphan the
+// already-deployed function, same issue as updateScoreboard). No longer
+// load-bearing: sendPush() now messages tokens directly instead of via this
+// topic, so this subscription is unused but harmless.
+const NOTIFICATION_TOPIC = "all-players";
 exports.subscribePushToken = onDocumentCreated(
   { document: "pushTokens/{token}", region: "us-east4" },
   async (event) => {
@@ -36,6 +51,15 @@ exports.subscribePushToken = onDocumentCreated(
     }
   }
 );
+
+// Push tokens tied to a picks submission for the given week (used to skip
+// reminder notifications for people who've already submitted).
+async function getSubmittedTokensForWeek(db, year, week) {
+  const snap = await db.collection("picks").where("year", "==", year).where("week", "==", week).get();
+  const tokens = new Set();
+  snap.forEach(d => { const t = d.data()?.pushToken; if (t) tokens.add(t); });
+  return tokens;
+}
 
 // Admin drops a {title, body} doc in notificationOutbox -> broadcast it, then
 // clean up the doc.
@@ -309,10 +333,11 @@ async function maybeSendReminderTier(db, { enabledField, sentField, title, body,
   const weekKey = `${year}_W${week}`;
   if (app?.notifications?.[sentField] === weekKey) return;
 
+  const excludeTokens = await getSubmittedTokensForWeek(db, year, week);
   await sendPush({
     title: typeof title === "function" ? title(firstGame, kickoffMs) : title,
     body: body(firstGame, kickoffMs)
-  });
+  }, { excludeTokens });
   await db.doc("config/app").set(
     { notifications: { [sentField]: weekKey }, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
     { merge: true }

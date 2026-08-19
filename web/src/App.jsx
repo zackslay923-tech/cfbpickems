@@ -2933,6 +2933,25 @@ const isKickoffTbd = (g) => !kickoffDate(g);function AdminPage({ user, isAdmin, 
     }
   }
 
+  // Registered notification devices, for the Manage Devices panel below.
+  const [pushDevices, setPushDevices] = useState([]);
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "pushTokens"), (snap) => {
+      const rows = [];
+      snap.forEach(d => rows.push({ token: d.id, ...d.data() }));
+      rows.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+      setPushDevices(rows);
+    }, () => setPushDevices([]));
+    return () => unsub();
+  }, []);
+  async function toggleDeviceBlocked(token, blocked) {
+    try {
+      await setDoc(doc(db, "pushTokens", token), { blocked }, { merge: true });
+    } catch (e) {
+      setMsg("Failed to update device: " + (e?.message || String(e)));
+    }
+  }
+
   // Does the 2099/W1 test sandbox currently exist?
   useEffect(() => {
     const unsub = onSnapshot(
@@ -3423,6 +3442,35 @@ await setDoc(doc(db,"config","app"), { currentYear: year, currentWeek: week, upd
           })()}
         </AdminSection>
 
+        <AdminSection title="Manage Devices" tone="neutral" right={<StatusBadge tone="neutral">{pushDevices.length} registered</StatusBadge>}>
+          <p style={{ margin:"0 0 12px", fontSize:13, color:"#9aa4c7" }}>
+            Every device that's enabled notifications. Devices are only labeled with a name once that browser submits picks &mdash; otherwise they show as unknown. Blocking a device stops every notification (automated and custom) from reaching it.
+          </p>
+          {pushDevices.length === 0 ? (
+            <div style={{ fontSize:13, color:"#9aa4c7" }}>No devices have enabled notifications yet.</div>
+          ) : (
+            <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+              {pushDevices.map(d => {
+                const blocked = d.blocked === true;
+                return (
+                  <div key={d.token} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:8, padding:"9px 12px", background:"#0e1730", border:"1px solid #1f2a44", borderRadius:10 }}>
+                    <div>
+                      <div style={{ fontWeight:600, fontSize:14 }}>{d.name || "Unknown device"}</div>
+                      <div style={{ fontSize:11, color:"#9aa4c7", fontFamily:"monospace" }}>{d.token.slice(0, 24)}&hellip;</div>
+                    </div>
+                    <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                      <StatusBadge tone={blocked ? "danger" : "success"}>{blocked ? "Blocked" : "Active"}</StatusBadge>
+                      <button style={adminBtn(blocked ? "primary" : "danger")} onClick={() => toggleDeviceBlocked(d.token, !blocked)}>
+                        {blocked ? "Unblock" : "Block"}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </AdminSection>
+
         <AdminSection title="Send a Notification" tone="success">
           <p style={{ margin:"0 0 10px", fontSize:13, color:"#9aa4c7" }}>
             Sends a push notification to everyone who's enabled notifications &mdash; use this for anything the automatic ones don't cover (deadline changes, reminders, etc).
@@ -3739,6 +3787,16 @@ const normVenmo = (s) => String(s||"").trim().toLowerCase().replace(/^@+/, "");c
         picks,
         updatedAt: serverTimestamp()
       };
+      // If this browser has notifications enabled, tag the submission with
+      // its push token so reminder notifications can skip devices that
+      // already submitted for this week.
+      try {
+        const pushToken = localStorage.getItem("pushToken");
+        if (pushToken) {
+          payload.pushToken = pushToken;
+          setDoc(doc(db, "pushTokens", pushToken), { name: `${firstTrim} ${lastTrim}`.trim() }, { merge: true }).catch(()=>{});
+        }
+      } catch (e) {}
 
       if (gd) {
         const tbTotal = tiebreaker && tiebreaker.total !== "" ? Number(tiebreaker.total) : NaN;
