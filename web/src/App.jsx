@@ -97,6 +97,37 @@ function isStandaloneMode() {
   return window.matchMedia?.("(display-mode: standalone)")?.matches || window.navigator?.standalone === true;
 }
 
+// Android Chrome fires this before the page has any React state to catch it
+// in, so it's captured at module scope and replayed to whichever component
+// asks for it via useInstallPromptAvailable(). iOS has no equivalent event -
+// Apple only allows the manual Share > Add to Home Screen flow.
+let deferredInstallPrompt = null;
+const installPromptListeners = new Set();
+if (typeof window !== "undefined") {
+  window.addEventListener("beforeinstallprompt", (e) => {
+    e.preventDefault();
+    deferredInstallPrompt = e;
+    installPromptListeners.forEach(fn => fn());
+  });
+}
+function useInstallPromptAvailable() {
+  const [available, setAvailable] = useState(!!deferredInstallPrompt);
+  useEffect(() => {
+    const fn = () => setAvailable(true);
+    installPromptListeners.add(fn);
+    return () => installPromptListeners.delete(fn);
+  }, []);
+  return available;
+}
+async function triggerAndroidInstallPrompt() {
+  if (!deferredInstallPrompt) return false;
+  const evt = deferredInstallPrompt;
+  deferredInstallPrompt = null;
+  evt.prompt();
+  try { await evt.userChoice; } catch (e) {}
+  return true;
+}
+
 // ---------- small UI helpers ----------
 function Row({ children, style }) {
   return <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", ...style }}>{children}</div>;
@@ -110,6 +141,14 @@ function Card({ children, style }) {
 function Container({ children, maxWidth = 720 }) { return <div style={{ maxWidth: maxWidth, margin: "0 auto", padding: 24 }}>{children}</div>; }
 function Header({ user, isAdmin, setPage }) {
   const isMobile = useIsMobile();
+  const androidInstallAvailable = useInstallPromptAvailable();
+  const [androidInstalling, setAndroidInstalling] = useState(false);
+  async function handleAndroidInstallClick() {
+    setAndroidInstalling(true);
+    const worked = await triggerAndroidInstallPrompt();
+    setAndroidInstalling(false);
+    if (worked) setShowInstallModal(false);
+  }
   const logoTapsRef = useRef({ count: 0, timer: null });
   function handleLogoTap() {
     if (user) return;
@@ -243,11 +282,21 @@ function Header({ user, isAdmin, setPage }) {
               <li>Tap <b>Add</b> in the top right</li>
             </ol>
             <div style={{ fontSize:13, fontWeight:700, color:"#eef2ff", marginBottom:6 }}>On Android (Chrome)</div>
-            <ol style={{ margin:0, paddingLeft:20, fontSize:14, color:"#cfd8f0", lineHeight:1.6 }}>
-              <li>Tap the menu icon (&#8942;) in the top right</li>
-              <li>Tap <b>Add to Home screen</b> (or <b>Install app</b>)</li>
-              <li>Tap <b>Add</b> / <b>Install</b> to confirm</li>
-            </ol>
+            {androidInstallAvailable ? (
+              <button
+                onClick={handleAndroidInstallClick}
+                disabled={androidInstalling}
+                style={{ width:"100%", background:"#1a6b46", color:"#fff", border:0, padding:"9px 14px", borderRadius:10, fontWeight:600, cursor:"pointer", marginBottom:2 }}
+              >
+                {androidInstalling ? "Opening…" : "Click Here to Install"}
+              </button>
+            ) : (
+              <ol style={{ margin:0, paddingLeft:20, fontSize:14, color:"#cfd8f0", lineHeight:1.6 }}>
+                <li>Tap the menu icon (&#8942;) in the top right</li>
+                <li>Tap <b>Add to Home screen</b> (or <b>Install app</b>)</li>
+                <li>Tap <b>Add</b> / <b>Install</b> to confirm</li>
+              </ol>
+            )}
           </div>
           <div style={{ display:"flex", gap:10, marginBottom:14 }}>
             <button
