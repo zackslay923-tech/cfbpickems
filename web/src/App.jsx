@@ -964,6 +964,17 @@ function PicksPage({ user, isAdmin, setPage }) {
   const [games, setGames] = useState([]);
   const [pickCount, setPickCount] = useState(0);
 const pot = useMemo(() => (pickCount * 5), [pickCount]);
+  // If games still haven't loaded 5s in (e.g. a slow first load on a freshly
+  // installed home-screen app), offer a manual refresh instead of sitting blank.
+  const [showSlowLoadHint, setShowSlowLoadHint] = useState(false);
+  const gamesRef = useRef(games);
+  useEffect(() => { gamesRef.current = games; }, [games]);
+  useEffect(() => {
+    const t = setTimeout(() => {
+      if (!gamesRef.current || gamesRef.current.length === 0) setShowSlowLoadHint(true);
+    }, 5000);
+    return () => clearTimeout(t);
+  }, []);
 
 useEffect(() => {
   (async () => {
@@ -1555,6 +1566,17 @@ const id = `${year}_W${week}_${nextCode}`;
             </Field>
           </Row>
 
+          {showSlowLoadHint && games.length === 0 && (
+            <div style={{
+              margin:"12px 0", padding:"10px 14px", borderRadius:10, textAlign:"center",
+              background:"rgba(240,180,41,0.12)", color:"#f0b429", border:"1px solid rgba(240,180,41,0.45)", fontSize:14
+            }}>
+              Games are taking a while to load.{" "}
+              <a href="#" onClick={(e)=>{e.preventDefault(); window.location.reload();}} style={{ color:"#f0b429", fontWeight:700, textDecoration:"underline" }}>
+                Tap here to refresh
+              </a>
+            </div>
+          )}
           <div style={{ margintop:-4, display:"flex", flexDirection:"column", alignItems:"center" }}>
             {pickGroups.map(grp => (
               <section key={grp.key} style={{ margin: "24px 0 6px", width: "100%" }}>
