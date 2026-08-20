@@ -158,6 +158,52 @@ async function readCfbdToken(db) {
   return token;
 }
 
+// How long CFBD fetches need to be failing in a row before alerting the
+// admin (bad/expired API key, CFBD outage, etc.) rather than a single
+// transient blip.
+const CFBD_FAILURE_ALERT_MINUTES = 30;
+
+// Tracks whether the most recent CFBD fetch attempts are succeeding or
+// failing. On the first failure after a success, starts a timer; once
+// that's been failing continuously for CFBD_FAILURE_ALERT_MINUTES+, alerts
+// the admin's device once. Resets as soon as a fetch succeeds again, so a
+// later failure streak can alert fresh.
+async function recordCfbdResult(db, ok) {
+  try {
+    const appSnap = await db.doc("config/app").get();
+    const app = appSnap.exists ? appSnap.data() : {};
+    const notif = app.notifications || {};
+
+    if (ok) {
+      if (notif.cfbdFailureSince || notif.cfbdFailureAlertSent) {
+        await db.doc("config/app").set(
+          { notifications: { cfbdFailureSince: null, cfbdFailureAlertSent: false } },
+          { merge: true }
+        );
+      }
+      return;
+    }
+
+    const now = Date.now();
+    let since = notif.cfbdFailureSince;
+    if (!since) {
+      since = now;
+      await db.doc("config/app").set({ notifications: { cfbdFailureSince: now } }, { merge: true });
+    }
+
+    const failingMinutes = (now - since) / 60000;
+    if (failingMinutes >= CFBD_FAILURE_ALERT_MINUTES && !notif.cfbdFailureAlertSent) {
+      await sendPushToAdmins({
+        title: "⚠️ Live scores aren't updating",
+        body: `CFBD fetches have been failing for ${CFBD_FAILURE_ALERT_MINUTES}+ minutes - check the API key in config/cfbd, or CFBD's own status.`
+      });
+      await db.doc("config/app").set({ notifications: { cfbdFailureAlertSent: true } }, { merge: true });
+    }
+  } catch (e) {
+    logger.warn("recordCfbdResult failed:", e?.message || e);
+  }
+}
+
 // Get ET "YYYY-MM-DD" for today (so we always fetch today's live slate)
 function todayET() {
   const fmt = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" });
@@ -577,6 +623,7 @@ exports.publishLiveMap = onSchedule(
       token = await readCfbdToken(db);
     } catch (err) {
       logger.error("CFBD token missing:", err?.message || err);
+      await recordCfbdResult(db, false);
       return;
     }
 
@@ -590,10 +637,12 @@ exports.publishLiveMap = onSchedule(
       if (!res.ok) {
         const text = await res.text().catch(() => "");
         logger.warn("CFBD non-2xx:", res.status, text?.slice(0, 200));
+        await recordCfbdResult(db, false);
         return;
       }
       const json = await res.json();
       const mapObj = normalizeScoreboardItems(json);
+      await recordCfbdResult(db, true);
 
       // Lightweight dedupe using a short hash of the payload
       const hash = JSON.stringify(mapObj).slice(0, 2048); // cheap hash proxy
@@ -667,6 +716,7 @@ exports.publishLiveMap = onSchedule(
       }
     } catch (e) {
       logger.error("CFBD fetch/publish error:", e?.message || e);
+      await recordCfbdResult(db, false);
     }
   }
 );
