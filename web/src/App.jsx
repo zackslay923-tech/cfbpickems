@@ -3089,6 +3089,116 @@ function AdminNotificationsPage({ user, isAdmin, setPage }) {
   </Container>);
 }
 
+const ENTRY_FEE = 5;
+
+function AdminPaymentsPage({ user, isAdmin, setPage }) {
+  const [live, setLive] = useState({ year: null, week: null });
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, "config", "live"), (s) => setLive(s.data() || {}));
+    return () => unsub();
+  }, []);
+  const [year, setYear] = useState(new Date().getFullYear());
+  const [week, setWeek] = useState(null);
+  const syncedRef = useRef(false);
+  useEffect(() => {
+    if (!syncedRef.current && hasWeekValue(live.year) && hasWeekValue(live.week)) {
+      setYear(Number(live.year));
+      setWeek(Number(live.week));
+      syncedRef.current = true;
+    }
+  }, [live]);
+
+  const [rows, setRows] = useState([]);
+  useEffect(() => {
+    if (!hasWeekValue(year) || !hasWeekValue(week)) { setRows([]); return; }
+    const q = query(collection(db, "picks"), where("year", "==", Number(year)), where("week", "==", Number(week)));
+    const unsub = onSnapshot(q, (snap) => {
+      const all = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      all.sort((a, b) => (a.lastNameLower || "").localeCompare(b.lastNameLower || "") || (a.firstName || "").localeCompare(b.firstName || ""));
+      setRows(all);
+    });
+    return () => unsub();
+  }, [year, week]);
+
+  const [qtext, setQtext] = useState("");
+  const filtered = useMemo(() => {
+    const t = qtext.trim().toLowerCase();
+    if (!t) return rows;
+    return rows.filter(p => {
+      const name = `${p.firstName || ""} ${p.lastName || ""}`.toLowerCase();
+      return name.includes(t) || (p.venmo || "").toLowerCase().includes(t) || (p.code || "").includes(t);
+    });
+  }, [rows, qtext]);
+
+  const paidCount = rows.filter(p => p.paid === true).length;
+
+  async function togglePaid(p) {
+    try {
+      await setDoc(doc(db, "picks", p.id), { paid: !p.paid }, { merge: true });
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  return (<Container maxWidth={900}>
+    <Header user={user} isAdmin={isAdmin} setPage={setPage} />
+    <Card style={{ maxWidth: 900 }}>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:10 }}>
+        <h2 style={{ margin:0 }}>Payment Tracking</h2>
+        <button style={adminBtn("neutral")} onClick={() => { window.history.pushState(null, "", "/admin"); setPage("admin"); }}>&larr; Back to Admin</button>
+      </div>
+
+      <Row style={{ marginTop:16, gap:16 }}>
+        <Field label="Year"><input style={{...inputStyle, width:"6rem"}} type="number" value={year ?? ""} onChange={e=>setYear(Number(e.target.value))} /></Field>
+        <Field label="Week"><input style={{...inputStyle, width:"4rem"}} type="number" value={week ?? ""} onChange={e=>setWeek(Number(e.target.value))} /></Field>
+        <Field label="Filter (name, code, venmo)"><input style={{...inputStyle, width:"16rem"}} value={qtext} onChange={e=>setQtext(e.target.value)} placeholder="Start typing…" /></Field>
+      </Row>
+
+      <div style={{ marginTop:14, display:"flex", gap:8, flexWrap:"wrap" }}>
+        <StatusBadge tone={paidCount === rows.length && rows.length > 0 ? "success" : "primary"}>
+          {paidCount} / {rows.length} paid
+        </StatusBadge>
+        <StatusBadge tone="neutral">
+          ${paidCount * ENTRY_FEE} / ${rows.length * ENTRY_FEE} collected
+        </StatusBadge>
+      </div>
+
+      <div style={{ marginTop:14, overflowX:"auto" }}>
+        <table style={{ width:"100%", borderCollapse:"collapse", minWidth:520 }}>
+          <thead>
+            <tr style={{ textAlign:"left" }}>
+              <th style={{ padding:"8px 10px", borderBottom:"1px solid #1f2a44" }}>Name</th>
+              <th style={{ padding:"8px 10px", borderBottom:"1px solid #1f2a44" }}>Code</th>
+              <th style={{ padding:"8px 10px", borderBottom:"1px solid #1f2a44" }}>Venmo</th>
+              <th style={{ padding:"8px 10px", borderBottom:"1px solid #1f2a44" }}>Owes</th>
+              <th style={{ padding:"8px 10px", borderBottom:"1px solid #1f2a44" }}>Paid</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map(p => {
+              const name = `${p.firstName || ""} ${p.lastName || ""}`.trim() || p.email || "(no name)";
+              return (
+                <tr key={p.id} style={{ borderBottom:"1px solid #1f2a44" }}>
+                  <td style={{ padding:"8px 10px" }}>{name}</td>
+                  <td style={{ padding:"8px 10px", opacity:.9 }}>{p.code}</td>
+                  <td style={{ padding:"8px 10px", opacity:.9 }}>{p.venmo}</td>
+                  <td style={{ padding:"8px 10px", opacity:.9 }}>${ENTRY_FEE}</td>
+                  <td style={{ padding:"8px 10px" }}>
+                    <input type="checkbox" checked={p.paid === true} onChange={()=>togglePaid(p)} style={{ width:18, height:18, cursor:"pointer" }} />
+                  </td>
+                </tr>
+              );
+            })}
+            {filtered.length === 0 && (
+              <tr><td colSpan={5} style={{ padding:"16px 10px", opacity:.7 }}>No picks for {year} / W{week}.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  </Container>);
+}
+
 function AdminPage({ user, isAdmin, setPage }) {
   const [live, setLive] = useState({ year: null, week: null });
   const [year, setYear] = useState(null);
@@ -3506,7 +3616,10 @@ Type "home" or "away".`,
       <Card style={{ maxWidth: 1200 }}>
         <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:10 }}>
           <h2 style={{ margin:0 }}>Admin</h2>
-          <button style={adminBtn("neutral")} onClick={() => { window.history.pushState(null, "", "/admin/picks"); setPage("adminpicks"); }}>Open Picks Management</button>
+          <Row style={{ gap:8 }}>
+            <button style={adminBtn("neutral")} onClick={() => { window.history.pushState(null, "", "/admin/picks"); setPage("adminpicks"); }}>Open Picks Management</button>
+            <button style={adminBtn("neutral")} onClick={() => { window.history.pushState(null, "", "/admin/payments"); setPage("adminpayments"); }}>Payment Tracking</button>
+          </Row>
         </div>
         {msg && (
           <div style={{ marginTop:12, padding:"8px 12px", borderRadius:10, background:"rgba(106,162,255,.1)", border:"1px solid rgba(106,162,255,.3)", color:"#cfe0ff", fontSize:13 }}>{msg}</div>
@@ -4150,6 +4263,7 @@ export default function App() {
       if (p === "picks" || p === "leader" || p === "admin") { setPage(p); return; }
       if (p === "admin/picks") { setPage("adminpicks"); return; }
       if (p === "admin/notifications") { setPage("adminnotifications"); return; }
+      if (p === "admin/payments") { setPage("adminpayments"); return; }
     };
     readPath(); // on load
     window.addEventListener("popstate", readPath);
@@ -4202,6 +4316,7 @@ export default function App() {
       {page === "admin" && <AdminPage user={user} isAdmin={isAdmin} setPage={setPage} />}
       {page === "adminpicks" && <AdminPicksPage user={user} isAdmin={isAdmin} setPage={setPage} />}
       {page === "adminnotifications" && <AdminNotificationsPage user={user} isAdmin={isAdmin} setPage={setPage} />}
+      {page === "adminpayments" && <AdminPaymentsPage user={user} isAdmin={isAdmin} setPage={setPage} />}
       {page === "confirm" && <ModalOverlay><ConfirmPage setPage={setPage} /></ModalOverlay>}
       {page === "receipt" && <ModalOverlay><ReceiptPage setPage={setPage} /></ModalOverlay>}
     </>
