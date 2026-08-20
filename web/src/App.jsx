@@ -2568,13 +2568,13 @@ useEffect(() => {
     <span>{sbUpdated || "—"}</span>
     <span style={{opacity:.8}}>Status:</span>
     <span>{(sbSource === "none" ? "Paused" : (sbPaused ? "Paused" : "Running"))}</span>
-    <span style={{opacity:.8, marginLeft:12}}>Hard Stop:</span>
+    <span style={{opacity:.8, marginLeft:12}}>Live Scores:</span>
     <button
       onClick={async (e) => { e.preventDefault(); const next = !(sbHardStopGlobal ?? sbHardStop); try { await setDoc(doc(db,"config","app"), { scoreboard: { hardStop: next, mode: next ? "off" : "on" } }, { merge:true }); } catch (err) { console.error("[hardStop] update failed", err); } }}
       style={{ padding:"4px 8px", borderRadius:6, border:"1px solid rgba(255,255,255,.2)", background: (sbHardStopGlobal ?? sbHardStop) ? "#B91C1C" : "#065F46", color:"#fff", fontWeight:600 }}
-      title="Master kill switch for scoreboard polling"
+      title="Turn live scores on or off (master kill switch)"
     >
-      {(sbHardStopGlobal ?? sbHardStop) ? "ON" : "OFF"}
+      {(sbHardStopGlobal ?? sbHardStop) ? "OFF" : "ON"}
     </button>
     <span style={{opacity:.8, marginLeft:12}}>Scorebug:</span>
     <button
@@ -2980,7 +2980,7 @@ function AdminNotificationsPage({ user, isAdmin, setPage }) {
 
       <AdminSection title="Automated Notifications" tone="neutral">
         <p style={{ margin:"0 0 12px", fontSize:13, color:"#9aa4c7" }}>
-          These fire on their own as part of the kickoff automation. Turning one off here only stops that notification &mdash; the underlying automation (locking picks, re-engaging the hard stop, etc.) still runs.
+          These fire on their own as part of the kickoff automation. Turning one off here only stops that notification &mdash; the underlying automation (locking picks, turning live score polling back off, etc.) still runs.
         </p>
         {(() => {
           const weekKey = (hasWeekValue(year) && hasWeekValue(week)) ? `${year}_W${week}` : null;
