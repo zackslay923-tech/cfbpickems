@@ -11,6 +11,10 @@ service cloud.firestore {
       return !(get(/databases/$(database)/documents/config/app).data.picksLocked == true);
     }
 
+    function leaderboardLocked() {
+      return get(/databases/$(database)/documents/config/app).data.leaderboardLocked == true;
+    }
+
     // Picks: public create/update with code+lastNameLower checks; reads allowed
     match /picks/{pickId} {
       allow get: if true;
@@ -35,10 +39,14 @@ service cloud.firestore {
         && request.resource.data.year == resource.data.year
         && request.resource.data.week == resource.data.week;
 
-      // Real season picks are permanently immutable (no delete, ever, even for admins).
-      // Exception: admin-only cleanup of the built-in dummy/test sandbox (year >= 2090),
-      // so "Clear Dummy Week" can actually delete its own test picks.
-      allow delete: if isAdmin() && resource.data.year is number && resource.data.year >= 2090;
+      // Real season picks are immutable once the leaderboard opens - no delete,
+      // ever, even for admins, past that point. Before the leaderboard opens
+      // (or for the year >= 2090 dummy/test sandbox), an admin can still
+      // delete a mistaken/duplicate entry.
+      allow delete: if isAdmin() && (
+        (resource.data.year is number && resource.data.year >= 2090)
+        || leaderboardLocked()
+      );
     }
 
     // Keys: helper collection

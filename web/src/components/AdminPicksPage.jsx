@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { db, googleLogin } from "../firebase";
-import { collection, doc, onSnapshot, query, where } from "firebase/firestore";
+import { collection, deleteDoc, doc, onSnapshot, query, where } from "firebase/firestore";
 
 function Row({ children, style }) {
   return <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap", ...style }}>{children}</div>;
@@ -78,7 +78,7 @@ export default function AdminPicksPage({ user, isAdmin, setPage }) {
 
   useEffect(() => {
     if (!user || !isAdmin) return;
-    setMsg("Loading picks…");
+    setMsg("Loading picksï¿½");
     setRows([]);
     const q = query(collection(db, "picks"), where("year", "==", Number(year)), where("week", "==", Number(week)));
     const unsub = onSnapshot(q, (snap) => {
@@ -111,11 +111,35 @@ export default function AdminPicksPage({ user, isAdmin, setPage }) {
   const openPick = (p) => setSelected(p);
   const closePick = () => setSelected(null);
 
+  // Deleting a pick is only allowed while the leaderboard is still locked
+  // (i.e. before it's gone live for the week) - once it opens, real picks
+  // are permanently immutable, even for admins. See firestore.rules.
+  const [leaderboardLocked, setLeaderboardLocked] = useState(false);
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, "config", "app"), (s) => {
+      setLeaderboardLocked(!!(s.data() || {}).leaderboardLocked);
+    });
+    return () => unsub();
+  }, []);
+  const canDelete = leaderboardLocked || (Number(year) >= 2090);
+
+  async function handleDelete(p) {
+    const name = `${p.firstName||""} ${p.lastName||""}`.trim() || p.email || p.code;
+    if (!window.confirm(`Delete the pick for ${name} (code ${p.code})? This cannot be undone.`)) return;
+    try {
+      await deleteDoc(doc(db, "picks", p.id));
+      if (selected?.id === p.id) closePick();
+      setMsg(`Deleted pick for ${name}.`);
+    } catch (e) {
+      setMsg(`Failed to delete: ${e?.message || e}`);
+    }
+  }
+
   if (!user) {
     return (
       <Container>
         <Card>
-          <h2>Admin Picks — Sign In Required</h2>
+          <h2>Admin Picks ï¿½ Sign In Required</h2>
           <p>Please sign in with your admin Google account to continue.</p>
           <button onClick={googleLogin}>Admin Login</button>
         </Card>
@@ -126,7 +150,7 @@ export default function AdminPicksPage({ user, isAdmin, setPage }) {
     return (
       <Container>
         <Card>
-          <h2>Admin Picks — Access Denied</h2>
+          <h2>Admin Picks ï¿½ Access Denied</h2>
           <p>Your account is not in <code>admins</code>. Ask an owner to add you.</p>
           <button onClick={()=>setPage("admin")}>Go to Admin Home</button>
         </Card>
@@ -143,7 +167,7 @@ export default function AdminPicksPage({ user, isAdmin, setPage }) {
         </Row>
 
         <div style={{ marginTop:8, color:"#9aa4c7" }}>
-          Live view of <b>all picks</b> for the selected Year/Week. Click a row to view details (read-only).
+          Live view of <b>all picks</b> for the selected Year/Week. Click a row to view details. Deleting a pick is only possible while the leaderboard for that week is still locked.
         </div>
 
         <Row style={{ marginTop:16, gap:16 }}>
@@ -154,7 +178,7 @@ export default function AdminPicksPage({ user, isAdmin, setPage }) {
             <input style={{ ...inputStyle, width:"4rem" }} type="number" value={week} onChange={e=>setWeek(Number(e.target.value))} />
           </Field>
           <Field label="Filter (name, code, phone, venmo)">
-            <input style={{ ...inputStyle, width:"18rem" }} value={qtext} onChange={e=>setQtext(e.target.value)} placeholder="Start typing…" />
+            <input style={{ ...inputStyle, width:"18rem" }} value={qtext} onChange={e=>setQtext(e.target.value)} placeholder="Start typingï¿½" />
           </Field>
         </Row>
 
@@ -190,7 +214,17 @@ export default function AdminPicksPage({ user, isAdmin, setPage }) {
                     <td style={{ padding:"8px 10px", opacity:.9 }}>{formatTs(p.createdAt)}</td>
                     <td style={{ padding:"8px 10px", opacity:.9 }}>{formatTs(p.updatedAt)}</td>
                     <td style={{ padding:"8px 10px" }}>
-                      <button onClick={(e)=>{ e.stopPropagation(); openPick(p); }}>View</button>
+                      <Row style={{ gap:6 }}>
+                        <button onClick={(e)=>{ e.stopPropagation(); openPick(p); }}>View</button>
+                        {canDelete && (
+                          <button
+                            onClick={(e)=>{ e.stopPropagation(); handleDelete(p); }}
+                            style={{ background:"#7a2530", color:"#fff", border:"1px solid #9c303d" }}
+                          >
+                            Delete
+                          </button>
+                        )}
+                      </Row>
                     </td>
                   </tr>
                 );
@@ -199,7 +233,7 @@ export default function AdminPicksPage({ user, isAdmin, setPage }) {
           </table>
         </div>
 
-        <Drawer open={!!selected} onClose={closePick} title={selected ? `Pick • ${selected.firstName||""} ${selected.lastName||""}` : "Pick"}>
+        <Drawer open={!!selected} onClose={closePick} title={selected ? `Pick ï¿½ ${selected.firstName||""} ${selected.lastName||""}` : "Pick"}>
           {selected && (
             <div>
               <Card>
@@ -268,8 +302,20 @@ export default function AdminPicksPage({ user, isAdmin, setPage }) {
               <div style={{ height:12 }} />
 
               <Row style={{ justifyContent:"space-between" }}>
-                <div style={{ opacity:.7, fontSize:12 }}>Read-only view (no admin editing).</div>
-                <button onClick={closePick}>Close</button>
+                <div style={{ opacity:.7, fontSize:12 }}>
+                  {canDelete ? "Deletable while the leaderboard is locked." : "Locked from deletion â€” the leaderboard is live."}
+                </div>
+                <Row style={{ gap:8 }}>
+                  {canDelete && (
+                    <button
+                      onClick={()=>handleDelete(selected)}
+                      style={{ background:"#7a2530", color:"#fff", border:"1px solid #9c303d" }}
+                    >
+                      Delete Pick
+                    </button>
+                  )}
+                  <button onClick={closePick}>Close</button>
+                </Row>
               </Row>
             </div>
           )}
