@@ -377,10 +377,13 @@ async function maybeSendReminders(db) {
   });
 }
 
-// Cheap check (Firestore only, no CFBD call): has the current live week's
-// first game reached its scheduled kickoff time? Used to auto-disengage the
-// scoreboard hard stop without needing to poll CFBD while stopped.
-async function isPastScheduledKickoff(db) {
+// Cheap check (Firestore only, no CFBD call): is there an included game in
+// the current live week whose scheduled kickoff has already passed but
+// doesn't have a recorded winner yet? If so, Live Scores should be running
+// to track it - whether that's the very first game of the week, or a later
+// one after a gap (e.g. Thursday/Friday games finish, nothing happening
+// until Saturday's slate kicks off).
+async function hasGameNeedingTracking(db) {
   const liveSnap = await db.doc("config/live").get();
   const liveCfg = liveSnap.exists ? liveSnap.data() : {};
   const year = Number(liveCfg?.year), week = Number(liveCfg?.week);
@@ -392,14 +395,18 @@ async function isPastScheduledKickoff(db) {
     .get();
   if (gamesSnap.empty) return false;
 
-  const startTimes = gamesSnap.docs
-    .map(d => d.data())
-    .filter(g => g.included !== false && g.startTimeStr)
-    .map(g => new Date(g.startTimeStr).getTime())
-    .filter(Number.isFinite);
-  if (!startTimes.length) return false;
+  const games = gamesSnap.docs.map(d => d.data()).filter(g => g.included !== false && g.startTimeStr);
+  if (!games.length) return false;
 
-  return Date.now() >= Math.min(...startTimes);
+  const now = Date.now();
+  const pending = games.filter(g => {
+    const t = new Date(g.startTimeStr).getTime();
+    return Number.isFinite(t) && now >= t;
+  });
+  if (!pending.length) return false;
+
+  const results = await Promise.all(pending.map(g => db.doc(`results/${g.id}`).get()));
+  return results.some(r => !(r.exists && r.data()?.winner));
 }
 
 // Has every included game in the current live week been recorded with a
@@ -454,21 +461,23 @@ exports.publishLiveMap = onSchedule(
       logger.warn("publishLiveMap: kickoff reminder check failed", e?.message || e);
     }
 
-    // Respect admin hard stop (config/app.scoreboard.mode !== "on" / hardStop === true).
-    // Before giving up, do a cheap Firestore-only check (no CFBD call) for
-    // whether we've reached the current week's scheduled kickoff - if so,
-    // auto-disengage the hard stop so live polling can start on its own.
+    // Respect the Live Scores hard stop (config/app.scoreboard.mode !== "on" /
+    // hardStop === true). Before giving up, do a cheap Firestore-only check
+    // (no CFBD call) for whether any included game needs tracking right now -
+    // if so, auto-disengage the hard stop so live polling can start on its
+    // own. This also covers turning back on for a later game (e.g. Saturday's
+    // slate) after an earlier gap where nothing was happening.
     const mode = scoreboardCfg.mode ? String(scoreboardCfg.mode).toLowerCase() : "on";
     const hardStopped = scoreboardCfg.hardStop === true || mode !== "on";
     if (hardStopped) {
-      let pastKickoff = false;
+      let needsPolling = false;
       try {
-        pastKickoff = await isPastScheduledKickoff(db);
+        needsPolling = await hasGameNeedingTracking(db);
       } catch (e) {
-        logger.warn("publishLiveMap: scheduled-kickoff check failed", e?.message || e);
+        logger.warn("publishLiveMap: game-tracking check failed", e?.message || e);
       }
-      if (!pastKickoff) {
-        logger.info("publishLiveMap skipped (scoreboard hard-stopped)");
+      if (!needsPolling) {
+        logger.info("publishLiveMap skipped (Live Scores off, nothing to track)");
         return;
       }
       await db.doc("config/app").set(
@@ -476,7 +485,7 @@ exports.publishLiveMap = onSchedule(
         { merge: true }
       );
       scoreboardCfg = { ...scoreboardCfg, hardStop: false, mode: "on" };
-      logger.info("publishLiveMap: reached scheduled kickoff - auto-disengaged hard stop");
+      logger.info("publishLiveMap: a game needs tracking - auto-enabled Live Scores");
     }
 
     // Only poll during actual game hours (default noon-2am ET; configurable via
@@ -546,32 +555,40 @@ exports.publishLiveMap = onSchedule(
         await autoLockAtKickoff(db, mapObj);
       }
 
-      // Once every game in the week has a recorded winner, re-engage the hard
-      // stop so we stop polling CFBD until the next game week begins.
+      // Once no included game currently needs tracking (either the whole
+      // week is done, or there's just a gap - e.g. Thursday/Friday games
+      // finished and Saturday's slate hasn't kicked off yet), re-engage the
+      // hard stop so we're not polling CFBD for no reason. It'll auto-turn
+      // back on above once the next kickoff arrives.
       if (!scoreboardCfg.hardStop) {
         try {
-          if (await isWeekComplete(db)) {
+          if (!(await hasGameNeedingTracking(db))) {
             await db.doc("config/app").set(
               { scoreboard: { hardStop: true, mode: "off" }, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
               { merge: true }
             );
-            logger.info("publishLiveMap: week complete - auto re-engaged hard stop");
-            if (notifCfg.resultsEnabled !== false) {
-              await sendPush({
-                title: "🏆 Final standings are in",
-                body: "This week's games are all final - check the leaderboard for results."
-              });
-              const weekKey = await getLiveWeekKey(db);
-              if (weekKey) {
-                await db.doc("config/app").set(
-                  { notifications: { resultsSentWeekKey: weekKey }, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
-                  { merge: true }
-                );
+            logger.info("publishLiveMap: no games currently need tracking - auto re-engaged Live Scores hard stop");
+
+            // Only announce final standings once the *entire* week is done,
+            // not just a mid-week gap between games.
+            if (await isWeekComplete(db)) {
+              if (notifCfg.resultsEnabled !== false) {
+                await sendPush({
+                  title: "🏆 Final standings are in",
+                  body: "This week's games are all final - check the leaderboard for results."
+                });
+                const weekKey = await getLiveWeekKey(db);
+                if (weekKey) {
+                  await db.doc("config/app").set(
+                    { notifications: { resultsSentWeekKey: weekKey }, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
+                    { merge: true }
+                  );
+                }
               }
             }
           }
         } catch (e) {
-          logger.warn("publishLiveMap: week-complete check failed", e?.message || e);
+          logger.warn("publishLiveMap: game-tracking re-check failed", e?.message || e);
         }
       }
     } catch (e) {
