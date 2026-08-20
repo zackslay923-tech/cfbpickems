@@ -3199,6 +3199,127 @@ function AdminPaymentsPage({ user, isAdmin, setPage }) {
   </Container>);
 }
 
+function personKey(p) {
+  return `${(p.firstName || "").trim().toLowerCase()}_${(p.lastName || "").trim().toLowerCase()}`;
+}
+
+function AdminMissingPicksPage({ user, isAdmin, setPage }) {
+  const [live, setLive] = useState({ year: null, week: null });
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, "config", "live"), (s) => setLive(s.data() || {}));
+    return () => unsub();
+  }, []);
+  const [year, setYear] = useState(new Date().getFullYear());
+  const [week, setWeek] = useState(null);
+  const syncedRef = useRef(false);
+  useEffect(() => {
+    if (!syncedRef.current && hasWeekValue(live.year) && hasWeekValue(live.week)) {
+      setYear(Number(live.year));
+      setWeek(Number(live.week));
+      syncedRef.current = true;
+    }
+  }, [live]);
+
+  // Everyone who has ever submitted picks, any year/week - the "roster" to
+  // check this week's submissions against, since the app has no separate
+  // participant list. Keyed by normalized name, keeping their most recent
+  // contact info for display.
+  const [everyone, setEveryone] = useState(null);
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "picks"), (snap) => {
+      const byKey = new Map();
+      snap.forEach(d => {
+        const p = d.data();
+        const key = personKey(p);
+        if (!key.trim().replace("_", "")) return;
+        const existing = byKey.get(key);
+        const updatedMs = p.updatedAt?.toMillis ? p.updatedAt.toMillis() : (p.createdAt?.toMillis ? p.createdAt.toMillis() : 0);
+        if (!existing || updatedMs >= existing._ms) {
+          byKey.set(key, { key, firstName: p.firstName, lastName: p.lastName, phone: p.phone, venmo: p.venmo, _ms: updatedMs });
+        }
+      });
+      setEveryone(byKey);
+    });
+    return () => unsub();
+  }, []);
+
+  const [thisWeekKeys, setThisWeekKeys] = useState(null);
+  useEffect(() => {
+    if (!hasWeekValue(year) || !hasWeekValue(week)) { setThisWeekKeys(null); return; }
+    const q = query(collection(db, "picks"), where("year", "==", Number(year)), where("week", "==", Number(week)));
+    const unsub = onSnapshot(q, (snap) => {
+      const keys = new Set();
+      snap.forEach(d => keys.add(personKey(d.data())));
+      setThisWeekKeys(keys);
+    });
+    return () => unsub();
+  }, [year, week]);
+
+  const missing = useMemo(() => {
+    if (!everyone || !thisWeekKeys) return [];
+    return [...everyone.values()]
+      .filter(p => !thisWeekKeys.has(p.key))
+      .sort((a, b) => (a.lastName || "").localeCompare(b.lastName || "") || (a.firstName || "").localeCompare(b.firstName || ""));
+  }, [everyone, thisWeekKeys]);
+
+  const loaded = everyone && thisWeekKeys;
+  const totalEver = everyone ? everyone.size : 0;
+  const submittedCount = totalEver - missing.length;
+
+  return (<Container maxWidth={900}>
+    <Header user={user} isAdmin={isAdmin} setPage={setPage} />
+    <Card style={{ maxWidth: 900 }}>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:10 }}>
+        <h2 style={{ margin:0 }}>Who Hasn't Submitted</h2>
+        <button style={adminBtn("neutral")} onClick={() => { window.history.pushState(null, "", "/admin"); setPage("admin"); }}>&larr; Back to Admin</button>
+      </div>
+      <p style={{ margin:"10px 0 0", fontSize:13, color:"#9aa4c7" }}>
+        Compares this week's submissions against everyone who's ever played, by name.
+      </p>
+
+      <Row style={{ marginTop:16, gap:16 }}>
+        <Field label="Year"><input style={{...inputStyle, width:"6rem"}} type="number" value={year ?? ""} onChange={e=>setYear(Number(e.target.value))} /></Field>
+        <Field label="Week"><input style={{...inputStyle, width:"4rem"}} type="number" value={week ?? ""} onChange={e=>setWeek(Number(e.target.value))} /></Field>
+      </Row>
+
+      {loaded && (
+        <div style={{ marginTop:14, display:"flex", gap:8, flexWrap:"wrap" }}>
+          <StatusBadge tone={missing.length === 0 ? "success" : "warning"}>
+            {submittedCount} / {totalEver} submitted
+          </StatusBadge>
+          <StatusBadge tone={missing.length === 0 ? "success" : "danger"}>
+            {missing.length} not yet submitted
+          </StatusBadge>
+        </div>
+      )}
+
+      <div style={{ marginTop:14, overflowX:"auto" }}>
+        <table style={{ width:"100%", borderCollapse:"collapse", minWidth:480 }}>
+          <thead>
+            <tr style={{ textAlign:"left" }}>
+              <th style={{ padding:"8px 10px", borderBottom:"1px solid #1f2a44" }}>Name</th>
+              <th style={{ padding:"8px 10px", borderBottom:"1px solid #1f2a44" }}>Phone</th>
+              <th style={{ padding:"8px 10px", borderBottom:"1px solid #1f2a44" }}>Venmo</th>
+            </tr>
+          </thead>
+          <tbody>
+            {missing.map(p => (
+              <tr key={p.key} style={{ borderBottom:"1px solid #1f2a44" }}>
+                <td style={{ padding:"8px 10px" }}>{`${p.firstName || ""} ${p.lastName || ""}`.trim()}</td>
+                <td style={{ padding:"8px 10px", opacity:.9 }}>{p.phone}</td>
+                <td style={{ padding:"8px 10px", opacity:.9 }}>{p.venmo}</td>
+              </tr>
+            ))}
+            {loaded && missing.length === 0 && (
+              <tr><td colSpan={3} style={{ padding:"16px 10px", opacity:.7 }}>Everyone who's ever played has submitted for {year} / W{week}.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  </Container>);
+}
+
 function AdminPage({ user, isAdmin, setPage }) {
   const [live, setLive] = useState({ year: null, week: null });
   const [year, setYear] = useState(null);
@@ -3619,6 +3740,7 @@ Type "home" or "away".`,
           <Row style={{ gap:8 }}>
             <button style={adminBtn("neutral")} onClick={() => { window.history.pushState(null, "", "/admin/picks"); setPage("adminpicks"); }}>Open Picks Management</button>
             <button style={adminBtn("neutral")} onClick={() => { window.history.pushState(null, "", "/admin/payments"); setPage("adminpayments"); }}>Payment Tracking</button>
+            <button style={adminBtn("neutral")} onClick={() => { window.history.pushState(null, "", "/admin/missing"); setPage("adminmissing"); }}>Who Hasn't Submitted</button>
           </Row>
         </div>
         {msg && (
@@ -4264,6 +4386,7 @@ export default function App() {
       if (p === "admin/picks") { setPage("adminpicks"); return; }
       if (p === "admin/notifications") { setPage("adminnotifications"); return; }
       if (p === "admin/payments") { setPage("adminpayments"); return; }
+      if (p === "admin/missing") { setPage("adminmissing"); return; }
     };
     readPath(); // on load
     window.addEventListener("popstate", readPath);
@@ -4317,6 +4440,7 @@ export default function App() {
       {page === "adminpicks" && <AdminPicksPage user={user} isAdmin={isAdmin} setPage={setPage} />}
       {page === "adminnotifications" && <AdminNotificationsPage user={user} isAdmin={isAdmin} setPage={setPage} />}
       {page === "adminpayments" && <AdminPaymentsPage user={user} isAdmin={isAdmin} setPage={setPage} />}
+      {page === "adminmissing" && <AdminMissingPicksPage user={user} isAdmin={isAdmin} setPage={setPage} />}
       {page === "confirm" && <ModalOverlay><ConfirmPage setPage={setPage} /></ModalOverlay>}
       {page === "receipt" && <ModalOverlay><ReceiptPage setPage={setPage} /></ModalOverlay>}
     </>
