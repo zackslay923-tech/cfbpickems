@@ -235,7 +235,7 @@ function Header({ user, isAdmin, setPage }) {
   async function handleEnableNotifications() {
     setNotifState("working");
     try {
-      await enablePushNotifications();
+      await enablePushNotifications({ isAdmin });
       setNotifState("on");
       setShowNotifModal(false);
     } catch (e) {
@@ -243,6 +243,15 @@ function Header({ user, isAdmin, setPage }) {
       alert((e && e.message) ? e.message : "Couldn't enable notifications.");
     }
   }
+  // Covers signing in as admin *after* already enabling notifications on this
+  // device - retags the existing token so admin-only alerts still reach it.
+  useEffect(() => {
+    if (!isAdmin || notifState !== "on") return;
+    let token = null;
+    try { token = localStorage.getItem("pushToken"); } catch (e) {}
+    if (!token) return;
+    setDoc(doc(db, "pushTokens", token), { isAdmin: true }, { merge: true }).catch(() => {});
+  }, [isAdmin, notifState]);
 
   async function loadByCode() {
     setMsg("");

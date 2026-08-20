@@ -95,12 +95,14 @@ service cloud.firestore {
 
     // Push notification tokens: any device can register itself (doc id is the
     // token, so a device can only touch its own doc) and self-tag a display
-    // name when it submits picks. Only admins can read the list (to manage
-    // recipients) or set `blocked` (to mute a specific device).
+    // name when it submits picks. Only a genuine admin can mark their own
+    // token isAdmin:true (so admin-only alerts can't be self-granted). Only
+    // admins can read the list (to manage recipients) or set `blocked`.
     match /pushTokens/{token} {
       allow get: if isAdmin();
       allow list: if isAdmin();
-      allow create: if request.resource.data.token == token;
+      allow create: if request.resource.data.token == token
+        && (request.resource.data.isAdmin != true || isAdmin());
       allow update: if isAdmin()
         || (request.resource.data.token == token
             && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["name"]));

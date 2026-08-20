@@ -35,7 +35,7 @@ export const onAuth = (cb) => onAuthStateChanged(auth, cb);
 // Push notifications: request permission, register this device's token, and
 // keep listening for messages that arrive while the tab is open (background
 // messages while the tab is closed are handled by firebase-messaging-sw.js).
-export async function enablePushNotifications() {
+export async function enablePushNotifications({ isAdmin = false } = {}) {
   if (!(await isSupported())) throw new Error("Push notifications aren't supported in this browser.");
   const permission = await Notification.requestPermission();
   if (permission !== "granted") throw new Error("Notification permission was not granted.");
@@ -45,7 +45,10 @@ export async function enablePushNotifications() {
   const token = await getToken(messaging, { vapidKey: VAPID_KEY, serviceWorkerRegistration: registration });
   if (!token) throw new Error("Could not get a push token for this device.");
 
-  await setDoc(doc(db, "pushTokens", token), { token, createdAt: serverTimestamp() }, { merge: true });
+  // Tagging isAdmin here (only when actually signed in as admin) is what lets
+  // admin-only alerts (e.g. a stuck game with no recorded winner) go to just
+  // this device instead of broadcasting to the whole pool.
+  await setDoc(doc(db, "pushTokens", token), { token, createdAt: serverTimestamp(), ...(isAdmin ? { isAdmin: true } : {}) }, { merge: true });
   try { localStorage.setItem("pushToken", token); } catch (e) {}
 
   onMessage(messaging, (payload) => {

@@ -34,6 +34,30 @@ async function sendPush({ title, body }, { excludeTokens } = {}) {
   }
 }
 
+// Same as sendPush, but only to devices tagged isAdmin:true (set when
+// someone enables notifications while actually signed in as admin - see
+// enablePushNotifications in web/src/firebase.js). Used for internal alerts
+// that shouldn't go out to the whole pool.
+async function sendPushToAdmins({ title, body }) {
+  try {
+    const snap = await admin.firestore().collection("pushTokens").get();
+    const tokens = snap.docs
+      .filter(d => d.data()?.isAdmin === true && d.data()?.blocked !== true)
+      .map(d => d.id);
+    if (!tokens.length) {
+      logger.info(`sendPushToAdmins: no admin devices registered for "${title}"`);
+      return;
+    }
+    for (let i = 0; i < tokens.length; i += 500) {
+      const batch = tokens.slice(i, i + 500);
+      const res = await admin.messaging().sendEachForMulticast({ tokens: batch, notification: { title, body } });
+      logger.info(`sendPushToAdmins: sent "${title}" to ${res.successCount}/${batch.length} admin device(s)`);
+    }
+  } catch (e) {
+    logger.warn("sendPushToAdmins failed:", e?.message || e);
+  }
+}
+
 // Kept deployed for backward compatibility (removing it would orphan the
 // already-deployed function, same issue as updateScoreboard). No longer
 // load-bearing: sendPush() now messages tokens directly instead of via this
@@ -377,12 +401,20 @@ async function maybeSendReminders(db) {
   });
 }
 
+// How long past a game's scheduled kickoff to wait before treating a
+// still-missing winner as "stuck" (CFBD name mismatch, API hiccup, etc.)
+// rather than just a long or weather-delayed game. Generous on purpose - a
+// real game, even badly delayed, should essentially never take this long.
+const STUCK_GAME_HOURS = 8;
+
 // Cheap check (Firestore only, no CFBD call): is there an included game in
 // the current live week whose scheduled kickoff has already passed but
 // doesn't have a recorded winner yet? If so, Live Scores should be running
 // to track it - whether that's the very first game of the week, or a later
 // one after a gap (e.g. Thursday/Friday games finish, nothing happening
-// until Saturday's slate kicks off).
+// until Saturday's slate kicks off). Games stuck past STUCK_GAME_HOURS are
+// excluded here (see maybeAlertStuckGames) so one bad game can't keep Live
+// Scores running for the rest of the week.
 async function hasGameNeedingTracking(db) {
   const liveSnap = await db.doc("config/live").get();
   const liveCfg = liveSnap.exists ? liveSnap.data() : {};
@@ -399,14 +431,50 @@ async function hasGameNeedingTracking(db) {
   if (!games.length) return false;
 
   const now = Date.now();
+  const stuckCutoffMs = STUCK_GAME_HOURS * 60 * 60 * 1000;
   const pending = games.filter(g => {
     const t = new Date(g.startTimeStr).getTime();
-    return Number.isFinite(t) && now >= t;
+    return Number.isFinite(t) && now >= t && (now - t) < stuckCutoffMs;
   });
   if (!pending.length) return false;
 
   const results = await Promise.all(pending.map(g => db.doc(`results/${g.id}`).get()));
   return results.some(r => !(r.exists && r.data()?.winner));
+}
+
+// Once, the first time a game crosses STUCK_GAME_HOURS past its scheduled
+// kickoff with no recorded winner, alert the admin's device (not the whole
+// pool) so it can be checked and set manually if needed.
+async function maybeAlertStuckGames(db) {
+  const liveSnap = await db.doc("config/live").get();
+  const liveCfg = liveSnap.exists ? liveSnap.data() : {};
+  const year = Number(liveCfg?.year), week = Number(liveCfg?.week);
+  if (!Number.isFinite(year) || !Number.isFinite(week)) return;
+
+  const gamesSnap = await db.collection("games")
+    .where("year", "==", year)
+    .where("week", "==", week)
+    .get();
+  if (gamesSnap.empty) return;
+
+  const now = Date.now();
+  const stuckCutoffMs = STUCK_GAME_HOURS * 60 * 60 * 1000;
+
+  for (const d of gamesSnap.docs) {
+    const g = d.data();
+    if (g.included === false || !g.startTimeStr || g.stuckAlertSent) continue;
+    const kickoffMs = new Date(g.startTimeStr).getTime();
+    if (!Number.isFinite(kickoffMs) || (now - kickoffMs) < stuckCutoffMs) continue;
+
+    const resultSnap = await db.doc(`results/${d.id}`).get();
+    if (resultSnap.exists && resultSnap.data()?.winner) continue;
+
+    await sendPushToAdmins({
+      title: "⚠️ Game still missing a winner",
+      body: `${g.away} @ ${g.home} still has no recorded winner ${STUCK_GAME_HOURS}+ hours after kickoff. Set it manually on the Leaderboard page if needed.`
+    });
+    await d.ref.set({ stuckAlertSent: true }, { merge: true });
+  }
 }
 
 // Has every included game in the current live week been recorded with a
@@ -453,12 +521,18 @@ exports.publishLiveMap = onSchedule(
       return;
     }
 
-    // Cheap check (Firestore only, runs regardless of hard-stop state): send
-    // the pre-kickoff reminder push if we're within the window for it.
+    // Cheap checks (Firestore only, run regardless of hard-stop state): send
+    // the pre-kickoff reminder pushes, and flag any game that's gone stuck
+    // (no recorded winner well past its scheduled kickoff) to the admin.
     try {
       await maybeSendReminders(db);
     } catch (e) {
       logger.warn("publishLiveMap: kickoff reminder check failed", e?.message || e);
+    }
+    try {
+      await maybeAlertStuckGames(db);
+    } catch (e) {
+      logger.warn("publishLiveMap: stuck-game check failed", e?.message || e);
     }
 
     // Respect the Live Scores hard stop (config/app.scoreboard.mode !== "on" /
