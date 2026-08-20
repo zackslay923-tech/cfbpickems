@@ -3200,7 +3200,31 @@ function AdminPaymentsPage({ user, isAdmin, setPage }) {
 }
 
 function personKey(p) {
-  return `${(p.firstName || "").trim().toLowerCase()}_${(p.lastName || "").trim().toLowerCase()}`;
+  const n = `${(p.firstName || "").trim().toLowerCase()}_${(p.lastName || "").trim().toLowerCase()}`;
+  return n.replace(/^_+|_+$/g, "") || null;
+}
+function venmoKeyOf(p) {
+  const v = String(p.venmo || "").trim().toLowerCase().replace(/^@+/, "");
+  return v ? `v:${v}` : null;
+}
+// Simple union-find: two picks docs count as the same person if they share
+// either a normalized name or a normalized Venmo username, so a typo'd or
+// nicknamed name still gets matched via a consistent Venmo.
+function makeDSU() {
+  const parent = new Map();
+  function find(x) {
+    if (!parent.has(x)) parent.set(x, x);
+    let root = x;
+    while (parent.get(root) !== root) root = parent.get(root);
+    let cur = x;
+    while (parent.get(cur) !== root) { const next = parent.get(cur); parent.set(cur, root); cur = next; }
+    return root;
+  }
+  function union(a, b) {
+    const ra = find(a), rb = find(b);
+    if (ra !== rb) parent.set(ra, rb);
+  }
+  return { find, union };
 }
 
 function AdminMissingPicksPage({ user, isAdmin, setPage }) {
@@ -3220,50 +3244,56 @@ function AdminMissingPicksPage({ user, isAdmin, setPage }) {
     }
   }, [live]);
 
-  // Everyone who has ever submitted picks, any year/week - the "roster" to
-  // check this week's submissions against, since the app has no separate
-  // participant list. Keyed by normalized name, keeping their most recent
-  // contact info for display.
-  const [everyone, setEveryone] = useState(null);
+  // Everyone who has ever submitted picks, any year/week, grouped into
+  // people (not raw docs) via the name/Venmo union-find above - the
+  // "roster" to check this week's submissions against, since the app has
+  // no separate participant list.
+  const [data, setData] = useState(null);
   useEffect(() => {
+    if (!hasWeekValue(year) || !hasWeekValue(week)) { setData(null); return; }
     const unsub = onSnapshot(collection(db, "picks"), (snap) => {
-      const byKey = new Map();
+      const dsu = makeDSU();
+      const docs = [];
       snap.forEach(d => {
         const p = d.data();
-        const key = personKey(p);
-        if (!key.trim().replace("_", "")) return;
-        const existing = byKey.get(key);
-        const updatedMs = p.updatedAt?.toMillis ? p.updatedAt.toMillis() : (p.createdAt?.toMillis ? p.createdAt.toMillis() : 0);
-        if (!existing || updatedMs >= existing._ms) {
-          byKey.set(key, { key, firstName: p.firstName, lastName: p.lastName, phone: p.phone, venmo: p.venmo, _ms: updatedMs });
-        }
+        const nk = personKey(p);
+        const vk = venmoKeyOf(p);
+        if (!nk && !vk) return;
+        if (nk && vk) dsu.union(nk, vk);
+        docs.push({ p, key: nk || vk });
       });
-      setEveryone(byKey);
-    });
-    return () => unsub();
-  }, []);
 
-  const [thisWeekKeys, setThisWeekKeys] = useState(null);
-  useEffect(() => {
-    if (!hasWeekValue(year) || !hasWeekValue(week)) { setThisWeekKeys(null); return; }
-    const q = query(collection(db, "picks"), where("year", "==", Number(year)), where("week", "==", Number(week)));
-    const unsub = onSnapshot(q, (snap) => {
-      const keys = new Set();
-      snap.forEach(d => keys.add(personKey(d.data())));
-      setThisWeekKeys(keys);
+      const submittedRoots = new Set();
+      for (const rec of docs) {
+        if (Number(rec.p.year) === Number(year) && Number(rec.p.week) === Number(week)) {
+          submittedRoots.add(dsu.find(rec.key));
+        }
+      }
+
+      const clusters = new Map();
+      for (const rec of docs) {
+        const root = dsu.find(rec.key);
+        const existing = clusters.get(root);
+        const ms = rec.p.updatedAt?.toMillis ? rec.p.updatedAt.toMillis() : (rec.p.createdAt?.toMillis ? rec.p.createdAt.toMillis() : 0);
+        if (!existing || ms >= existing._ms) {
+          clusters.set(root, { key: root, firstName: rec.p.firstName, lastName: rec.p.lastName, phone: rec.p.phone, venmo: rec.p.venmo, _ms: ms });
+        }
+      }
+
+      setData({ clusters, submittedRoots });
     });
     return () => unsub();
   }, [year, week]);
 
   const missing = useMemo(() => {
-    if (!everyone || !thisWeekKeys) return [];
-    return [...everyone.values()]
-      .filter(p => !thisWeekKeys.has(p.key))
+    if (!data) return [];
+    return [...data.clusters.values()]
+      .filter(c => !data.submittedRoots.has(c.key))
       .sort((a, b) => (a.lastName || "").localeCompare(b.lastName || "") || (a.firstName || "").localeCompare(b.firstName || ""));
-  }, [everyone, thisWeekKeys]);
+  }, [data]);
 
-  const loaded = everyone && thisWeekKeys;
-  const totalEver = everyone ? everyone.size : 0;
+  const loaded = !!data;
+  const totalEver = data ? data.clusters.size : 0;
   const submittedCount = totalEver - missing.length;
 
   return (<Container maxWidth={900}>
