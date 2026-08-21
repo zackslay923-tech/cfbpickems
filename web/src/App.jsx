@@ -1820,6 +1820,39 @@ try {
       return { name, email: p.email, points: correct, picks: p.picks || {}, tb: (tbVal === null || tbVal === "" ? null : Number(tbVal)) };
     }).sort((a,b)=> (b.points - a.points) || a.name.localeCompare(b.name));
 
+    // Break ties for first place using the GameDay tiebreaker (closest guess to
+    // the actual combined score wins; still tied -> pot split, per the rules).
+    if (rows.length) {
+      const gdGame = g.find(x => x && x.gameday);
+      const gdTotalRaw = gdGame ? r[gdGame.id]?.totalPoints : null;
+      const gdTotal = Number.isFinite(+gdTotalRaw) ? +gdTotalRaw : null;
+      const topPoints = rows[0].points;
+      const topGroup = rows.filter(p => p.points === topPoints);
+      if (topGroup.length === 1) {
+        topGroup[0].isWinner = true;
+      } else if (gdTotal == null) {
+        topGroup.forEach(p => { p.isWinner = true; p.winNote = "Tied for 1st — GameDay tiebreaker not final yet"; });
+      } else {
+        const diffOf = (p) => p.tb == null ? Infinity : Math.abs(p.tb - gdTotal);
+        const bestDiff = Math.min(...topGroup.map(diffOf));
+        if (bestDiff === Infinity) {
+          topGroup.forEach(p => { p.isWinner = true; p.winNote = "Tied for 1st — no tiebreaker guess on file"; });
+        } else {
+          const coWinners = topGroup.filter(p => diffOf(p) === bestDiff);
+          if (coWinners.length > 1) {
+            coWinners.forEach(p => { p.isWinner = true; p.winNote = "Tied for 1st — pot split (tiebreaker also tied)"; });
+          } else {
+            coWinners[0].isWinner = true;
+            coWinners[0].winNote = `Won on tiebreaker — guessed ${coWinners[0].tb}, GameDay total was ${gdTotal}`;
+          }
+          // Reorder so the tiebreaker winner(s) sit at the very top of the tied group.
+          topGroup.sort((a, b) => diffOf(a) - diffOf(b) || a.name.localeCompare(b.name));
+          const rest = rows.filter(p => p.points !== topPoints);
+          rows.splice(0, rows.length, ...topGroup, ...rest);
+        }
+      }
+    }
+
     setPlayers(rows); console.debug(`[lb] done games=${Array.isArray(g)?g.length:0} players=${Array.isArray(rows)?rows.length:0}`); try { console.debug("[lb] loadAll:done", { games: g?.length ?? 0, players: rows?.length ?? 0 }); } catch {}
     const played = ids.filter(id => !!r[id]?.winner).length;
     setMsg(`Week ${week}  -  Included games: ${g.length}  -  Finished: ${played}`);
@@ -2351,7 +2384,11 @@ return liveItem || fromWinners;
             <tbody>
               {players.map(p => (
                 <tr key={p.id || p.code || p.email || p.name}>
-                  <td style={{ ...cell, ...sticky1() }}>{p.name}</td>
+                  <td style={{ ...cell, ...sticky1() }}>
+                    {p.isWinner && <span title={p.winNote || "Winner"} style={{ marginRight: 6 }}>🏆</span>}
+                    {p.name}
+                    {p.winNote && <div style={{ fontSize: 10, fontWeight: 400, opacity: 0.75, marginTop: 2 }}>{p.winNote}</div>}
+                  </td>
                   <td style={{ ...cell, ...sticky2({ textAlign:"center", fontWeight:700 }) }}>{p.points}</td>
                   {displayGames.map(g => {
                     const canSeePicks = lbPicksPublic || isAdmin;
