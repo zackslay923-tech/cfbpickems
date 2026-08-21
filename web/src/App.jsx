@@ -2132,11 +2132,12 @@ useEffect(() => {
         if (!ourGame) { skippedNoMatch++; continue; }
 
         const winner = hp > ap ? ourGame.home : ourGame.away;
-        batch.set(doc(db, "results", ourGame.id), {
-          winner, totalPoints: hp + ap,
-          updatedAt: serverTimestamp(),
-          source: "cfbd-manual"
-        }, { merge: true });
+        // The GameDay game's totalPoints feeds the weekly tiebreaker, so it's
+        // deliberately left for an admin to enter by hand via "Set Winner"
+        // instead of trusting CFBD's auto-reported score.
+        const payload = { winner, updatedAt: serverTimestamp(), source: "cfbd-manual" };
+        if (!ourGame.gameday) payload.totalPoints = hp + ap;
+        batch.set(doc(db, "results", ourGame.id), payload, { merge: true });
         written++;
       }
       await batch.commit();
@@ -3128,7 +3129,19 @@ Type "home" or "away".`,
   if (val === "home" || val === g.home.toLowerCase()) w = g.home;
   else if (val === "away" || val === g.away.toLowerCase()) w = g.away;
   else { setMsg('Cancelled: type "home" or "away" (or the full team name).'); return; }
-  await setResult(g.id, w);
+
+  let totalPoints;
+  if (g.gameday) {
+    // This is the week's tiebreaker game — capture the final combined score
+    // by hand instead of trusting an auto-reported CFBD score.
+    const totalStr = window.prompt(`Combined final score for the GameDay tiebreaker (${g.away} + ${g.home} points):`);
+    if (totalStr === null) { setMsg("Cancelled: total points required to save the GameDay result."); return; }
+    const n = Number(totalStr);
+    if (!Number.isFinite(n)) { setMsg("Cancelled: enter a valid number for total points."); return; }
+    totalPoints = n;
+  }
+
+  await setResult(g.id, w, totalPoints);
   setMsg("Saved result. Refresh Leaderboard to update.");
 };
 
