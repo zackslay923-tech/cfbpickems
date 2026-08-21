@@ -262,16 +262,12 @@ async function autoWriteWinners(db, mapObj) {
     if (hp === null || ap === null || hp === ap) return; // incomplete or tied (shouldn't happen in CFB)
 
     const winner = hp > ap ? g.home : g.away;
-    // The GameDay game's totalPoints feeds the weekly tiebreaker, so it's
-    // deliberately left for an admin to enter by hand (see chooseWinner in
-    // App.jsx) instead of trusting CFBD's auto-reported score.
-    const payload = {
+    batch.set(db.doc(`results/${g.id}`), {
       winner,
+      totalPoints: hp + ap,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       source: "auto-cron"
-    };
-    if (!g.gameday) payload.totalPoints = hp + ap;
-    batch.set(db.doc(`results/${g.id}`), payload, { merge: true });
+    }, { merge: true });
     writes++;
   });
 

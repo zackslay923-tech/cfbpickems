@@ -2132,12 +2132,11 @@ useEffect(() => {
         if (!ourGame) { skippedNoMatch++; continue; }
 
         const winner = hp > ap ? ourGame.home : ourGame.away;
-        // The GameDay game's totalPoints feeds the weekly tiebreaker, so it's
-        // deliberately left for an admin to enter by hand via "Set Winner"
-        // instead of trusting CFBD's auto-reported score.
-        const payload = { winner, updatedAt: serverTimestamp(), source: "cfbd-manual" };
-        if (!ourGame.gameday) payload.totalPoints = hp + ap;
-        batch.set(doc(db, "results", ourGame.id), payload, { merge: true });
+        batch.set(doc(db, "results", ourGame.id), {
+          winner, totalPoints: hp + ap,
+          updatedAt: serverTimestamp(),
+          source: "cfbd-manual"
+        }, { merge: true });
         written++;
       }
       await batch.commit();
