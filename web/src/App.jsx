@@ -262,6 +262,7 @@ function Header({ user, isAdmin, setPage }) {
 
     history.pushState(null, "", "/picks"); setPage("picks");}}>Picks</a>
         <a href="#" onClick={(e)=>{e.preventDefault(); history.pushState(null, "", "/leader"); setPage("leader");}}>Leaderboard</a>
+        <a href="#" onClick={(e)=>{e.preventDefault(); history.pushState(null, "", "/myseason"); setPage("myseason");}}>My Season</a>
         {isAdmin && <a href="#" onClick={(e)=>{e.preventDefault(); history.pushState(null, "", "/admin"); setPage("admin");}}>Admin</a>}
         {isMobile && !isStandaloneMode() && (
           <a href="#" onClick={(e)=>{e.preventDefault(); setShowInstallModal(true);}} title="Add to home screen" aria-label="Add to home screen">📲</a>
@@ -613,7 +614,76 @@ async function getPicksForWeek(year, week) {
     if (out2.length) out = out2;
   }
   return out;
-}// ---------- Import helpers (CFBD + ESPN with CORS fallback) ----------
+}
+
+// Compute one week's standings: each submitted player's correct-pick count,
+// sorted, with the winner marked (via the GameDay tiebreaker when there's a
+// tie for first, only once every game that week is final). Shared by the
+// Leaderboard page and MySeasonPage so both agree on who won a given week.
+async function computeWeekStandings(year, week) {
+  let g = await listGames({ year, week, includedOnly: true });
+  if (!Array.isArray(g) || g.length === 0) { g = await listGames({ year, week, includedOnly: false }); }
+  const ids = g.map(x => x.id);
+  const [rFromWeek, rFromGames] = await Promise.all([
+    getWeekResultsMap(year, week, g),
+    getResultsMap(ids)
+  ]);
+  const r = { ...(rFromWeek || {}), ...(rFromGames || {}) };
+  const picks = await getPicksForWeek(year, week);
+
+  const rows = picks.map(p => {
+    let correct = 0;
+    for (const id of ids) {
+      const w = r[id]?.winner;
+      const pick = p.picks?.[id];
+      if (w && pick && w === pick) correct++;
+    }
+    const name = `${p.firstName||""} ${p.lastName||""}`.trim() || p.email;
+    const tbVal = (p?.tiebreaker?.total ?? p?.tieBreaker ?? p?.tiebreak ?? p?.tb ?? null);
+    return {
+      name, firstName: p.firstName || "", lastName: p.lastName || "",
+      email: p.email, venmo: p.venmo || "",
+      points: correct, picks: p.picks || {},
+      tb: (tbVal === null || tbVal === "" ? null : Number(tbVal)),
+    };
+  }).sort((a,b)=> (b.points - a.points) || a.name.localeCompare(b.name));
+
+  const allGamesFinal = ids.length > 0 && ids.every(id => !!r[id]?.winner);
+  if (rows.length && allGamesFinal) {
+    const gdGame = g.find(x => x && x.gameday);
+    const gdTotalRaw = gdGame ? r[gdGame.id]?.totalPoints : null;
+    const gdTotal = Number.isFinite(+gdTotalRaw) ? +gdTotalRaw : null;
+    const topPoints = rows[0].points;
+    const topGroup = rows.filter(p => p.points === topPoints);
+    if (topGroup.length === 1) {
+      topGroup[0].isWinner = true;
+    } else if (gdTotal == null) {
+      topGroup.forEach(p => { p.isWinner = true; p.winNote = "Tied for 1st — GameDay tiebreaker not final yet"; });
+    } else {
+      const diffOf = (p) => p.tb == null ? Infinity : Math.abs(p.tb - gdTotal);
+      const bestDiff = Math.min(...topGroup.map(diffOf));
+      if (bestDiff === Infinity) {
+        topGroup.forEach(p => { p.isWinner = true; p.winNote = "Tied for 1st — no tiebreaker guess on file"; });
+      } else {
+        const coWinners = topGroup.filter(p => diffOf(p) === bestDiff);
+        if (coWinners.length > 1) {
+          coWinners.forEach(p => { p.isWinner = true; p.winNote = "Tied for 1st — pot split (tiebreaker also tied)"; });
+        } else {
+          coWinners[0].isWinner = true;
+          coWinners[0].winNote = `Won on tiebreaker — guessed ${coWinners[0].tb}, GameDay total was ${gdTotal}`;
+        }
+        topGroup.sort((a, b) => diffOf(a) - diffOf(b) || a.name.localeCompare(b.name));
+        const rest = rows.filter(p => p.points !== topPoints);
+        rows.splice(0, rows.length, ...topGroup, ...rest);
+      }
+    }
+  }
+
+  const playedGames = ids.filter(id => !!r[id]?.winner).length;
+  return { games: g, results: r, rows, allGamesFinal, totalGames: ids.length, playedGames };
+}
+
+// ---------- Import helpers (CFBD + ESPN with CORS fallback) ----------
 const FBS_CONF = new Set([
   "ACC","American Athletic","American","Big 12","Big Ten",
   "Conference USA","CUSA","Mid-American","MAC","Mountain West","Pac-12","SEC","Sun Belt",
@@ -1777,89 +1847,19 @@ useEffect(() => {
 
   
 const GAME_COL_W = 140;
-const loadAll = async () => { try { console.debug("[lb] loadAll:start", { year, week }); } catch {}
-  if (!(hasWeekValue(year) && hasWeekValue(week))) { return; }if (!(hasWeekValue(year) && hasWeekValue(week))) { return; }setMsg("Loading..."); console.debug(`[lb] start y=${year} w=${week}`);
-    let g = await listGames({ year, week, includedOnly: true });
-    if (!Array.isArray(g) || g.length === 0) { g = await listGames({ year, week, includedOnly: false }); }
+const loadAll = async () => {
+  if (!(hasWeekValue(year) && hasWeekValue(week))) { return; }
+  setMsg("Loading...");
+  try {
+    const { games: g, results: r, rows, playedGames } = await computeWeekStandings(year, week);
     setGames(g);
-    const ids = g.map(x => x.id);
-const [rFromWeek, rFromGames] = await Promise.all([
-  getWeekResultsMap(year, week, g),
-  getResultsMap(ids)
-]);
-// Merge both result sources (both keyed by game id): per-game docs (written by
-// "Set Winner" and the auto-winner hook) win over the bulk weekly snapshot
-// (written by "Write Winners (CFBD)") when both exist for the same game.
-const r = { ...(rFromWeek || {}), ...(rFromGames || {}) };
     setResults(r);
-    let picks = [];
-try {
-  // Unconditional fetch for debugging; we will re-tighten after it works.
-  picks = await getPicksForWeek(year, week);
-
-  // Fallback: if zero results, try string-typed fields (some legacy docs may store year/week as strings)
-  if (!Array.isArray(picks) || picks.length === 0) {
-    const snap2 = await getDocs(query(collection(db, "picks"), where("year","==", String(year)), where("week","==", String(week))));
-    picks = snap2.docs.map(d => d.data());
+    setPlayers(rows);
+    setMsg(`Week ${week}  -  Included games: ${g.length}  -  Finished: ${playedGames}`);
+  } catch (e) {
+    setMsg("Load failed: " + (e?.message || String(e)));
   }
-} catch (e) {
-  setMsg("Picks load failed: " + (e?.message || String(e)));
-  picks = [];
-}
-
-    // compute points for each player
-    const rows = picks.map(p => {
-      let correct = 0;
-      for (const id of ids) {
-        const w = r[id]?.winner;
-        const pick = p.picks?.[id];
-        if (w && pick && w === pick) correct++;
-      }
-      const name = `${p.firstName||""} ${p.lastName||""}`.trim() || p.email;
-      const tbVal = (p?.tiebreaker?.total ?? p?.tieBreaker ?? p?.tiebreak ?? p?.tb ?? null);
-      return { name, email: p.email, points: correct, picks: p.picks || {}, tb: (tbVal === null || tbVal === "" ? null : Number(tbVal)) };
-    }).sort((a,b)=> (b.points - a.points) || a.name.localeCompare(b.name));
-
-    // Break ties for first place using the GameDay tiebreaker (closest guess to
-    // the actual combined score wins; still tied -> pot split, per the rules).
-    // Only mark a winner once every game in the week is final — no trophy on a
-    // leader who's just ahead mid-week.
-    const allGamesFinal = ids.length > 0 && ids.every(id => !!r[id]?.winner);
-    if (rows.length && allGamesFinal) {
-      const gdGame = g.find(x => x && x.gameday);
-      const gdTotalRaw = gdGame ? r[gdGame.id]?.totalPoints : null;
-      const gdTotal = Number.isFinite(+gdTotalRaw) ? +gdTotalRaw : null;
-      const topPoints = rows[0].points;
-      const topGroup = rows.filter(p => p.points === topPoints);
-      if (topGroup.length === 1) {
-        topGroup[0].isWinner = true;
-      } else if (gdTotal == null) {
-        topGroup.forEach(p => { p.isWinner = true; p.winNote = "Tied for 1st — GameDay tiebreaker not final yet"; });
-      } else {
-        const diffOf = (p) => p.tb == null ? Infinity : Math.abs(p.tb - gdTotal);
-        const bestDiff = Math.min(...topGroup.map(diffOf));
-        if (bestDiff === Infinity) {
-          topGroup.forEach(p => { p.isWinner = true; p.winNote = "Tied for 1st — no tiebreaker guess on file"; });
-        } else {
-          const coWinners = topGroup.filter(p => diffOf(p) === bestDiff);
-          if (coWinners.length > 1) {
-            coWinners.forEach(p => { p.isWinner = true; p.winNote = "Tied for 1st — pot split (tiebreaker also tied)"; });
-          } else {
-            coWinners[0].isWinner = true;
-            coWinners[0].winNote = `Won on tiebreaker — guessed ${coWinners[0].tb}, GameDay total was ${gdTotal}`;
-          }
-          // Reorder so the tiebreaker winner(s) sit at the very top of the tied group.
-          topGroup.sort((a, b) => diffOf(a) - diffOf(b) || a.name.localeCompare(b.name));
-          const rest = rows.filter(p => p.points !== topPoints);
-          rows.splice(0, rows.length, ...topGroup, ...rest);
-        }
-      }
-    }
-
-    setPlayers(rows); console.debug(`[lb] done games=${Array.isArray(g)?g.length:0} players=${Array.isArray(rows)?rows.length:0}`); try { console.debug("[lb] loadAll:done", { games: g?.length ?? 0, players: rows?.length ?? 0 }); } catch {}
-    const played = ids.filter(id => !!r[id]?.winner).length;
-    setMsg(`Week ${week}  -  Included games: ${g.length}  -  Finished: ${played}`);
-  };
+};
 
   useEffect(() => {
   if (!(hasWeekValue(year) && hasWeekValue(week))) return;
@@ -2932,6 +2932,153 @@ function AdminMissingPicksPage({ user, isAdmin, setPage }) {
           </tbody>
         </table>
       </div>
+    </Card>
+  </Container>);
+}
+
+// Look up everything a person has ever submitted, across all years/weeks,
+// using the same name+Venmo identity matching as AdminMissingPicksPage
+// (there's no login/account system, so this is the only way to tie someone's
+// weeks together — a fresh random code is generated per week's submission).
+async function findMySeason({ firstName, lastName, venmo }) {
+  const ln = (lastName || "").trim().toLowerCase();
+  if (!ln) throw new Error("Enter your last name.");
+
+  const snap = await getDocs(query(collection(db, "picks"), where("lastNameLower", "==", ln)));
+  const docs = [];
+  snap.forEach(d => docs.push(d.data()));
+  if (docs.length === 0) return { weeks: [] };
+
+  const dsu = makeDSU();
+  const keyed = [];
+  for (const p of docs) {
+    const nk = personKey(p);
+    const vk = venmoKeyOf(p);
+    if (!nk && !vk) continue;
+    if (nk && vk) dsu.union(nk, vk);
+    keyed.push({ p, key: nk || vk });
+  }
+
+  const targetKey = venmoKeyOf({ venmo }) || personKey({ firstName, lastName });
+  if (!targetKey) throw new Error("Enter your first and last name.");
+  const targetRoot = dsu.find(targetKey);
+  const mine = keyed.filter(rec => dsu.find(rec.key) === targetRoot);
+  if (mine.length === 0) return { weeks: [] };
+
+  // One entry per year/week (in case of duplicate submissions, keep the latest).
+  const byWeek = new Map();
+  for (const { p } of mine) {
+    const wk = `${p.year}_${p.week}`;
+    const ms = p.updatedAt?.toMillis ? p.updatedAt.toMillis() : (p.createdAt?.toMillis ? p.createdAt.toMillis() : 0);
+    const existing = byWeek.get(wk);
+    if (!existing || ms >= existing._ms) byWeek.set(wk, { year: Number(p.year), week: Number(p.week), email: p.email, _ms: ms });
+  }
+  const weekRefs = [...byWeek.values()].sort((a, b) => a.year - b.year || a.week - b.week);
+
+  const weeks = [];
+  for (const wr of weekRefs) {
+    const { rows, totalGames } = await computeWeekStandings(wr.year, wr.week);
+    const mineRow = rows.find(r => r.email && wr.email && r.email === wr.email) || null;
+    weeks.push({
+      year: wr.year, week: wr.week,
+      points: mineRow?.points ?? null,
+      totalGames,
+      isWinner: !!mineRow?.isWinner,
+      winNote: mineRow?.winNote || null,
+    });
+  }
+  return { weeks };
+}
+
+function MySeasonPage({ user, isAdmin, setPage }) {
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
+  const [venmo, setVenmo] = useState("");
+  const [status, setStatus] = useState("idle"); // idle | loading | done | error
+  const [error, setError] = useState("");
+  const [weeks, setWeeks] = useState(null);
+
+  const onSubmit = async (e) => {
+    e.preventDefault();
+    setStatus("loading"); setError(""); setWeeks(null);
+    try {
+      const result = await findMySeason({ firstName, lastName, venmo });
+      setWeeks(result.weeks);
+      setStatus("done");
+    } catch (err) {
+      setError(err?.message || "Something went wrong looking that up.");
+      setStatus("error");
+    }
+  };
+
+  const weeksWon = weeks ? weeks.filter(w => w.isWinner).length : 0;
+  const totalCorrect = weeks ? weeks.reduce((sum, w) => sum + (w.points ?? 0), 0) : 0;
+  const bestWeek = weeks && weeks.length ? weeks.reduce((a, b) => (b.points ?? -1) > (a.points ?? -1) ? b : a) : null;
+
+  return (<Container maxWidth={720}>
+    <Header user={user} isAdmin={isAdmin} setPage={setPage} />
+    <Card>
+      <h2 style={{ margin: 0 }}>My Season</h2>
+      <p style={{ margin: "10px 0 0", fontSize: 13, color: "#9aa4c7" }}>
+        See every week you've played, your record, and any weeks you've won. We match you by name and Venmo — the same edit code you use each week doesn't carry over between weeks.
+      </p>
+
+      <form onSubmit={onSubmit}>
+        <Row style={{ marginTop: 16, gap: 14 }}>
+          <Field label="First name"><input style={inputStyle} value={firstName} onChange={e => setFirstName(e.target.value)} placeholder="Jane" /></Field>
+          <Field label="Last name"><input style={inputStyle} value={lastName} onChange={e => setLastName(e.target.value)} placeholder="Smith" /></Field>
+          <Field label="Venmo (optional)"><input style={inputStyle} value={venmo} onChange={e => setVenmo(e.target.value)} placeholder="@jane-smith" /></Field>
+        </Row>
+        <button type="submit" style={{ marginTop: 14, padding: "10px 16px", borderRadius: 10, border: "1px solid #1f2a44", background: "#6aa2ff", color: "#07152b", fontWeight: 700, cursor: "pointer" }} disabled={status === "loading"}>
+          {status === "loading" ? "Looking..." : "Find My Season"}
+        </button>
+      </form>
+
+      {status === "error" && (
+        <div style={{ marginTop: 16, padding: "10px 12px", borderRadius: 10, background: "rgba(239,68,68,.1)", border: "1px solid rgba(239,68,68,.3)", color: "#fca5a5", fontSize: 13 }}>{error}</div>
+      )}
+
+      {status === "done" && weeks && weeks.length === 0 && (
+        <div style={{ marginTop: 16, padding: "10px 12px", borderRadius: 10, background: "rgba(240,180,41,.1)", border: "1px solid rgba(240,180,41,.3)", color: "#f0b429", fontSize: 13 }}>
+          No submissions found under that name{venmo ? " or Venmo" : ""}. Double check the spelling of your last name, or try adding your Venmo username.
+        </div>
+      )}
+
+      {status === "done" && weeks && weeks.length > 0 && (
+        <>
+          <div style={{ marginTop: 16, display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <StatusBadge tone="neutral">{weeks.length} week{weeks.length === 1 ? "" : "s"} played</StatusBadge>
+            <StatusBadge tone={weeksWon > 0 ? "success" : "neutral"}>{weeksWon} week{weeksWon === 1 ? "" : "s"} won</StatusBadge>
+            <StatusBadge tone="neutral">{totalCorrect} total correct picks</StatusBadge>
+            {bestWeek && <StatusBadge tone="primary">Best week: W{bestWeek.week} ({bestWeek.points}/{bestWeek.totalGames})</StatusBadge>}
+          </div>
+
+          <div style={{ marginTop: 14, overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 480 }}>
+              <thead>
+                <tr style={{ textAlign: "left" }}>
+                  <th style={{ padding: "8px 10px", borderBottom: "1px solid #1f2a44" }}>Year</th>
+                  <th style={{ padding: "8px 10px", borderBottom: "1px solid #1f2a44" }}>Week</th>
+                  <th style={{ padding: "8px 10px", borderBottom: "1px solid #1f2a44" }}>Record</th>
+                  <th style={{ padding: "8px 10px", borderBottom: "1px solid #1f2a44" }}>Result</th>
+                </tr>
+              </thead>
+              <tbody>
+                {weeks.map(w => (
+                  <tr key={`${w.year}_${w.week}`} style={{ borderBottom: "1px solid #1f2a44" }}>
+                    <td style={{ padding: "8px 10px" }}>{w.year}</td>
+                    <td style={{ padding: "8px 10px" }}>{w.week}</td>
+                    <td style={{ padding: "8px 10px" }}>{w.points ?? "-"} / {w.totalGames}</td>
+                    <td style={{ padding: "8px 10px" }}>
+                      {w.isWinner ? <span title={w.winNote || "Winner"}>🏆 Won{w.winNote ? " (tiebreaker)" : ""}</span> : "-"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
     </Card>
   </Container>);
 }
@@ -4010,7 +4157,7 @@ export default function App() {
     const readPath = () => {
       const p = (window.location.pathname || "/").replace(/^\/|\/$/g, "");
       if (p === "") { setPage("picks"); return; }
-      if (p === "picks" || p === "leader" || p === "admin") { setPage(p); return; }
+      if (p === "picks" || p === "leader" || p === "admin" || p === "myseason") { setPage(p); return; }
       if (p === "admin/picks") { setPage("adminpicks"); return; }
       if (p === "admin/notifications") { setPage("adminnotifications"); return; }
       if (p === "admin/payments") { setPage("adminpayments"); return; }
@@ -4032,6 +4179,7 @@ export default function App() {
     <>
       {(page === "picks" || page === "confirm" || page === "receipt") && <PicksPage user={user} isAdmin={isAdmin} setPage={setPage} />}
       {page === "leader" && <LeaderboardPage user={user} isAdmin={isAdmin} setPage={setPage} />}
+      {page === "myseason" && <MySeasonPage user={user} isAdmin={isAdmin} setPage={setPage} />}
       {page === "admin" && <AdminPage user={user} isAdmin={isAdmin} setPage={setPage} />}
       {page === "adminpicks" && <AdminPicksPage user={user} isAdmin={isAdmin} setPage={setPage} />}
       {page === "adminnotifications" && <AdminNotificationsPage user={user} isAdmin={isAdmin} setPage={setPage} />}
