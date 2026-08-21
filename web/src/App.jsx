@@ -1822,7 +1822,10 @@ try {
 
     // Break ties for first place using the GameDay tiebreaker (closest guess to
     // the actual combined score wins; still tied -> pot split, per the rules).
-    if (rows.length) {
+    // Only mark a winner once every game in the week is final — no trophy on a
+    // leader who's just ahead mid-week.
+    const allGamesFinal = ids.length > 0 && ids.every(id => !!r[id]?.winner);
+    if (rows.length && allGamesFinal) {
       const gdGame = g.find(x => x && x.gameday);
       const gdTotalRaw = gdGame ? r[gdGame.id]?.totalPoints : null;
       const gdTotal = Number.isFinite(+gdTotalRaw) ? +gdTotalRaw : null;
