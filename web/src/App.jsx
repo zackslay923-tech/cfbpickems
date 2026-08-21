@@ -253,37 +253,6 @@ function Header({ user, isAdmin, setPage }) {
     setDoc(doc(db, "pushTokens", token), { isAdmin: true }, { merge: true }).catch(() => {});
   }, [isAdmin, notifState]);
 
-  async function loadByCode() {
-    setMsg("");
-    const c = (loadCode || "").trim();
-    const ln = (loadLastName || "").trim().toLowerCase();
-    if (!/^\d{6}$/.test(c) || ln.length === 0) {
-      setMsg("Enter your 6-digit code and last name."); return;
-    }
-    const id = year + "_W" + week + "_" + c;
-    try {
-      const ref = doc(db, "picks", id);
-      const snap = await getDoc(ref);
-      if (!snap.exists()) { setMsg("No picks found for that code."); return; }
-      const d = snap.data();
-      const storedLower = (d.lastNameLower || (d.lastName || "").toLowerCase().trim());
-      if (storedLower !== ln) { setMsg("Code and last name do not match."); return; }
-
-      setForm(f => ({
-        ...f,
-        firstName: d.firstName || "",
-        lastName: d.lastName || "",
-        phone: d.phone || "", venmo: d.venmo || ""
-      }));
-      setPicks(d.picks || {});
-      setCode(c);
-      setEditing(true);
-      setMsg("Loaded. Editing code " + c + ".");
-    } catch (e) {
-      const m = (e && e.message) ? String(e.message) : String(e);
-      setMsg("Load failed: " + m);
-    }
-  }
   return (
     <>
     <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", rowGap: 8, marginBottom: 16 }}>
@@ -873,40 +842,8 @@ function stripMascot(name) {
   return parts.join(" ");
 }
 
-function teamLabelNoMascot(name, rank) { if (String(rank) === "99" || Number(rank) === 99) rank = null; 
+function teamLabelNoMascot(name, rank) { if (String(rank) === "99" || Number(rank) === 99) rank = null;
   const base = stripMascot(name);
-
-  async function loadByCode() {
-    setMsg("");
-    const c = (loadCode || "").trim();
-    const ln = (loadLastName || "").trim().toLowerCase();
-    if (!/^\d{6}$/.test(c) || ln.length === 0) {
-      setMsg("Enter your 6-digit code and last name."); return;
-    }
-    const id = year + "_W" + week + "_" + c;
-    try {
-      const ref = doc(db, "picks", id);
-      const snap = await getDoc(ref);
-      if (!snap.exists()) { setMsg("No picks found for that code."); return; }
-      const d = snap.data();
-      const storedLower = (d.lastNameLower || (d.lastName || "").toLowerCase().trim());
-      if (storedLower !== ln) { setMsg("Code and last name do not match."); return; }
-
-      setForm(f => ({
-        ...f,
-        firstName: d.firstName || "",
-        lastName: d.lastName || "",
-        phone: d.phone || "", venmo: d.venmo || ""
-      }));
-      setPicks(d.picks || {});
-      setCode(c);
-      setEditing(true);
-      setMsg("Loaded. Editing code " + c + ".");
-    } catch (e) {
-      const m = (e && e.message) ? String(e.message) : String(e);
-      setMsg("Load failed: " + m);
-    }
-  }
   return (rank ? `#${rank} ` : "") + base;
 }
 // ---- end helpers ----
@@ -918,42 +855,7 @@ function PicksPage({ user, isAdmin, setPage }) {
       const d = s.data() || {};
       setLive(d);
     });
-
-  async function loadByCode() {
-    setMsg("");
-    const c = (loadCode || "").trim();
-    const ln = (loadLastName || "").trim().toLowerCase();
-    if (!/^\d{6}$/.test(c) || ln.length === 0) {
-      setMsg("Enter your 6-digit code and last name."); return;
-    }
-    const id = year + "_W" + week + "_" + c;
-    try {
-      const ref = doc(db, "picks", id);
-      const snap = await getDoc(ref);
-      if (!snap.exists()) { setMsg("No picks found for that code."); return; }
-      const d = snap.data();
-      const storedLower = (d.lastNameLower || (d.lastName || "").toLowerCase().trim());
-      if (storedLower !== ln) { setMsg("Code and last name do not match."); return; }
-
-      setForm(f => ({
-        ...f,
-        firstName: d.firstName || "",
-        lastName: d.lastName || "",
-        phone: d.phone || "", venmo: d.venmo || ""
-      }));
-      setPicks(d.picks || {});
-        setTiebreaker(d.tiebreaker ? { gameId: d.tiebreaker.gameId || null, total: String(d.tiebreaker.total ?? "") } : { gameId: null, total: "" });
-      setCode(c);
-      setEditing(true);
-      setMsg("Loaded. Editing code " + c + ".");
-    } catch (e) {
-      const m = (e && e.message) ? String(e.message) : String(e);
-      setMsg("Load failed: " + m);
-    }
-  }
-  return () => unsub();
-
-
+    return () => unsub();
   }, []);
   const [year, setYear] = useState(new Date().getFullYear());
   const [week, setWeek] = useState(null);
@@ -1032,10 +934,7 @@ useEffect(() => {
 const [form, setForm] = useState({ firstName:"", lastName:"", email:"", phone:"", venmo:"", venmoConfirmed:false })
   const [errors, setErrors] = useState({});
   const [touchedSubmit, setTouchedSubmit] = useState(false);
-  const [showConfirm, setShowConfirm] = useState(false);
   const [showRules, setShowRules] = useState(false);
-  const [pending, setPending] = useState(null);
-  const [receipt, setReceipt] = useState(null);;
   const [picks, setPicks] = useState({});
   useEffect(() => { window._picks = picks; window._setPicks = setPicks; }, [picks]);
   const [msg, setMsg] = useState("");
@@ -1216,81 +1115,6 @@ const [code, setCode] = useState("");
       if (typeof setErrors === "function") setErrors(r.errors);
     }
   }, [form, picks, games, touchedSubmit]);
-const normEmail = (s) => String(s||"").trim().toLowerCase();
-const normPhone = (s) => String(s||"").replace(/[^0-9]/g, "");
-const normVenmo = (s) => String(s||"").trim().toLowerCase().replace(/^@+/, "");const confirmAndSubmit = async () => { if (picksLocked) { if (typeof setMsg==="function") setMsg("Submissions are locked right now."); return; }
-  if (!pending) return;
-  setMsg("Saving...");
-  try {
-    const year = pending.year;
-    const week = pending.week;
-    const form = pending.form;
-    const picks = pending.picks;
-    const code = pending.code;
-    const id = year + "_W" + week + "_" + code;
-
-        const gd = (Array.isArray(games) ? games.find(x => x && x.gameday) : null);
-    const payload = {
-      id, year, week, code,
-      // keep your existing identity fields:
-      firstName: form.firstName,
-      lastName: form.lastName,
-      lastNameLower: (form.lastName || "").toLowerCase().trim(),
-      phone: form.phone || "",
-      venmo: form.venmo || "",
-      email: (form.email || "").toLowerCase(),
-      venmoConfirmed: !!form.venmoConfirmed,
-      // picks & timestamps:
-      picks,
-      updatedAt: serverTimestamp()
-    };
-    if (gd) {
-      if (!tiebreaker || tiebreaker.total === "" || isNaN(Number(tiebreaker.total))) {
-        setMsg("Enter total points for the College GameDay tiebreaker.");
-        return;
-      }
-      payload.tiebreaker = { gameId: gd.id, total: Number(tiebreaker.total) };
-    }
-    try {
-  await runTransaction(db, async (tx) => {
-    const locks = [];
-    const eKey = normEmail(form.email);
-    const pKey = normPhone(form.phone);
-    const vKey = normVenmo(form.venmo);
-    if (eKey) locks.push({ ref: doc(db, "keys", `${year}_W${week}_email_${eKey}`), type: "email", value: eKey });
-    if (pKey) locks.push({ ref: doc(db, "keys", `${year}_W${week}_phone_${pKey}`), type: "phone", value: pKey });
-    if (vKey) locks.push({ ref: doc(db, "keys", `${year}_W${week}_venmo_${vKey}`), type: "venmo", value: vKey });
-
-    // If any lock exists and points to a different submission, block
-    for (const l of locks) {
-      const s = await tx.get(l.ref);
-      const existing = s.exists() ? s.data() : null;
-      if (existing && existing.picksId !== id) {
-        throw new Error("DUPLICATE_LOCK");
-      }
-    }
-
-    // Create/update locks for this submission, then write the picks
-    for (const l of locks) {
-      tx.set(l.ref, { year, week, type: l.type, value: l.value, picksId: id, code, createdAt: serverTimestamp() }, { merge: true });
-    }
-    tx.set(doc(db, "picks", id), payload, { merge: true });
-  });
-} catch (e2) {
-  const msg = String((e2 && e2.message) || e2 || "");
-  if (msg === "DUPLICATE_LOCK") {
-    setMsg("this email/number/venmo is already associated with a submission, if you feel this was reached in error contact zslay@live.com");
-    return;
-  }
-  throw e2;
-}// show SUCCESS in the same style box (receipt overlay)
-    setReceipt({ year: year, week: week, code: code, form: form, picks: picks });
-    setShowConfirm(false);     // close the review popup
-    setMsg("");                // clear page toast
-  } catch (e) {
-    setMsg("Save failed: " + (e?.message || String(e)));
-  }
-};
 const onSubmitPicks = function(e){ e.preventDefault(); if (picksLocked) { if (typeof setMsg==="function") setMsg("Submissions are locked right now."); return; }
     const result = validatePicks();
     if (!result.ok) { 
@@ -1318,70 +1142,6 @@ if (typeof window !== "undefined") window.history.pushState(null, "", "/confirm"
   setMsg("");
   return; // no write here; Confirm button will write
 };
-const save = async (e) => {
-    e.preventDefault();
-    
-    if (!form.firstName || !form.lastName) { setMsg("Enter first and last name."); return; }
-    let nextCode = (code && /^[0-9]{6}$/.test(code)) ? code : String(Math.floor(100000 + Math.random() * 900000));
-setCode(nextCode);
-const id = `${year}_W${week}_${nextCode}`;
-    const gd = (Array.isArray(games) ? games.find(x => x && x.gameday) : null);
-    const payload = {
-      id, year, week, code: nextCode,
-      // keep your existing identity fields:
-      firstName: form.firstName,
-      lastName: form.lastName,
-      lastNameLower: (form.lastName || "").toLowerCase().trim(),
-      phone: form.phone || "",
-      venmo: form.venmo || "",
-      email: (form.email || "").toLowerCase(),
-      venmoConfirmed: !!form.venmoConfirmed,
-      // picks & timestamps:
-      picks,
-      updatedAt: serverTimestamp()
-    };
-    if (gd) {
-      if (!tiebreaker || tiebreaker.total === "" || isNaN(Number(tiebreaker.total))) {
-        setMsg("Enter total points for the College GameDay tiebreaker.");
-        return;
-      }
-      payload.tiebreaker = { gameId: gd.id, total: Number(tiebreaker.total) };
-    }
-    try {
-  await runTransaction(db, async (tx) => {
-    const locks = [];
-    const eKey = normEmail(form.email);
-    const pKey = normPhone(form.phone);
-    const vKey = normVenmo(form.venmo);
-    if (eKey) locks.push({ ref: doc(db, "keys", `${year}_W${week}_email_${eKey}`), type: "email", value: eKey });
-    if (pKey) locks.push({ ref: doc(db, "keys", `${year}_W${week}_phone_${pKey}`), type: "phone", value: pKey });
-    if (vKey) locks.push({ ref: doc(db, "keys", `${year}_W${week}_venmo_${vKey}`), type: "venmo", value: vKey });
-
-    // If any lock exists and points to a different submission, block
-    for (const l of locks) {
-      const s = await tx.get(l.ref);
-      const existing = s.exists() ? s.data() : null;
-      if (existing && existing.picksId !== id) {
-        throw new Error("DUPLICATE_LOCK");
-      }
-    }
-
-    // Create/update locks for this submission, then write the picks
-    for (const l of locks) {
-      tx.set(l.ref, { year, week, type: l.type, value: l.value, picksId: id, code, createdAt: serverTimestamp() }, { merge: true });
-    }
-    tx.set(doc(db, "picks", id), payload, { merge: true });
-  });
-} catch (e2) {
-  const msg = String((e2 && e2.message) || e2 || "");
-  if (msg === "DUPLICATE_LOCK") {
-    setMsg("this email/number/venmo is already associated with a submission, if you feel this was reached in error contact zslay@live.com");
-    return;
-  }
-  throw e2;
-}setMsg("Saved! Your edit code is " + nextCode + ". You can update any time before kickoff.");
-  };
-
   async function loadByCode() {
     setMsg("");
     const c = (loadCode || "").trim();
@@ -1649,108 +1409,6 @@ const id = `${year}_W${week}_${nextCode}`;
           <div style={{ color:'#9aa4c7', margintop:-4, fontSize:13 }}>{msg}</div>
           </Row>
         </form>
-{showConfirm && pending && (
-  <div style={{position:"fixed", inset:0, background:"rgba(0,0,0,.6)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:9999}}>
-    <div style={{ background:"#121a2b", border:"1px solid #1f2a44", borderRadius:16, padding:16, maxWidth:720, width:"90%", boxShadow:"0 10px 24px rgba(0,0,0,.35)" }}>
-      <h3 style={{ marginTop:0, marginBottom:8 }}>Confirm Your Picks ? Week {pending.week}</h3>
-
-      <div style={{ marginBottom:12 }}>
-        <span style={{ fontWeight:700, marginRight:8 }}>Your edit code:</span>
-        <code style={{ fontSize:18 }}>{pending.code}</code>
-      </div>
-
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:12 }}>
-        <div><div style={{ opacity:.7, fontSize:12 }}>First</div><div>{pending.form.firstName}</div></div>
-        <div><div style={{ opacity:.7, fontSize:12 }}>Last</div><div>{pending.form.lastName}</div></div>
-        <div><div style={{ opacity:.7, fontSize:12 }}>Email</div><div>{pending.form.email || "-"}</div></div>
-        <div><div style={{ opacity:.7, fontSize:12 }}>Phone</div><div>{pending.form.phone}</div></div>
-        <div><div style={{ opacity:.7, fontSize:12 }}>Venmo</div><div>{pending.form.venmo}</div></div>
-        <div><div style={{ opacity:.7, fontSize:12 }}>Venmo'd @ZackSlay?</div><div>{pending.form.venmoConfirmed ? "Yes" : "No"}</div></div>
-      </div>
-
-      <div style={{ fontWeight:600, marginBottom:6 }}>Your Picks</div>
-            <div style={{ display:"grid", gap:6, maxHeight:280, overflow:"auto", paddingRight:4 }}>
-        {(() => {
-  const tz = "America/New_York";
-  const fmtDay = new Intl.DateTimeFormat("en-US",{ weekday:"long", timeZone: tz });
-  const fmtTime = new Intl.DateTimeFormat("en-US",{ hour:"numeric", minute:"2-digit", hour12:true, timeZone: tz });
-
-  // Robust GameDay detection: allow flag on the game OR a live config id match if present
-  const isGameDay = (g) => {
-  const id = String(g?.id ?? "");
-  const liveId = String((live && (live.gameDayId ?? live.gamedayId)) ?? "");
-  if (liveId) return id === liveId; // single source of truth when provided
-  return g?.gameday === true || g?.isGameDay === true || g?.gameDay === true;
-};
-
-  // Local date extraction (donâ€™t depend on external helpers here)
-  const dateOf = (g) => {
-    try {
-      let s = g?.startTimeStr ?? g?.start ?? g?.start_time ?? g?.kickoff ?? g?.date;
-      if (!s) return null;
-      if (typeof s === "object" && typeof s.toDate === "function") return s.toDate();
-      if (typeof s === "object" && typeof s.seconds === "number") return new Date(s.seconds * 1000);
-      if (typeof s === "number") return new Date(s < 1e12 ? s * 1000 : s);
-      if (typeof s === "string") return new Date(s);
-    } catch (_) {}
-    return null;
-  };
-
-  // Label rules: non-Sat -> "<Day> Night Games"; Sat 12:00 PM -> "Noon Games"; else "<h:mm AM/PM> Kickoff"; fallback "TBD"
-  const labelFor = (g) => {
-    const d = dateOf(g);
-    if (!d || isNaN(+d)) return "TBD";
-    const weekday = fmtDay.format(d);
-    if (weekday !== "Saturday") return `${weekday} Night Games`;
-    const time = fmtTime.format(d);
-    if (time === "12:00 PM") return "Noon Games";
-    return `${time} Kickoff`;
-  };
-
-  // Build spans across ALL games; insert a standalone cell wherever GameDay appears
-  const spans = [];
-  let i = 0;
-// Force GameDay to the end for grouping labels only (does not reorder table columns)
-const seq = [
-  ...games.filter(g => !(g?.gameday || (live?.gamedayGameId && g?.id === live?.gamedayGameId))),
-  ...games.filter(g =>  (g?.gameday || (live?.gamedayGameId && g?.id === live?.gamedayGameId)))
-];
-while (i < seq.length) {
-    const g = seq[i];
-    if (g?.gameday || (live?.gamedayGameId && g?.id === live?.gamedayGameId)) {
-      spans.push({ type: "gameday", span: 1 });
-      i++;
-      continue;
-    }
-    const lbl = labelFor(g);
-    let span = 1; i++;
-    while (i < seq.length && !(seq[i]?.gameday || (live?.gamedayGameId && seq[i]?.id === live?.gamedayGameId)) && labelFor(seq[i]) === lbl) { span++; i++; }
-    spans.push({ type: "group", label: lbl, span });
-  }
-
-  return <>
-    {spans.map((sp, idx) => sp.type === "group" ? (
-      <th key={"grp-"+idx}
-          colSpan={sp.span}
-          style={{ ...headerCell, textAlign:"center", fontSize:11, padding:"1px 4px", lineHeight:1, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis", background:"rgba(0,0,0,0.04)" }}>
-        {sp.label}
-      </th>
-    ) : (
-      <th key={"grp-gameday-"+idx}
-          style={{ ...headerCell, textAlign:"center", fontSize:11, padding:"1px 4px", lineHeight:1, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis", background:"rgba(0,0,0,0.04)" }} colSpan={2}>
-        College GameDay
-      </th>
-    ))}
-  </>;
-})()}
-      </div><div style={{ display:"flex", justifyContent:"space-between", marginTop:16, gap:12, alignItems:"center" }}>
-        <button type="button" onClick={() => setShowConfirm(false)}>Back to Edit</button>
-        <div style={{ color:"#9aa4c7", fontSize:13, flex:1, textAlign:"center" }}>{msg}</div>
-        <button type="button" onClick={confirmAndSubmit} disabled={!!(picksLocked)}>Confirm & Submit</button>
-      </div>
-    </div>
-  </div>
-)}
 
         
       {showRules && (
@@ -1771,18 +1429,6 @@ while (i < seq.length) {
 </div>
       <div style={{ display:"flex", justifyContent:"flex-end", marginTop:16 }}>
         <button type="button" onClick={()=>setShowRules(false)}>Close</button>
-      </div>
-    </div>
-  </div>
-)}{receipt && (
-  <div style={{position:"fixed", inset:0, background:"rgba(0,0,0,.6)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:9999}}>
-    <div style={{ background:"#121a2b", border:"1px solid #1f2a44", borderRadius:16, padding:16, maxWidth:720, width:"90%", boxShadow:"0 10px 24px rgba(0,0,0,.35)" }}>
-      <h3 style={{ marginTop:0, marginBottom:8 }}>Picks Submitted for Week {receipt.week}<span style={{ fontWeight:400 }}> (*SCREENSHOT THIS*)</span></h3>
-      <p style={{ marginTop:0 }}>
-        If you need to change or edit your picks before kickoff your code is <b>{receipt.code}</b>.
-      </p>
-      <div style={{ display:"flex", justifyContent:"flex-end", marginTop:16 }}>
-        <button type="button" onClick={()=>{ setReceipt(null); }}>Done</button>
       </div>
     </div>
   </div>
@@ -2003,47 +1649,13 @@ useEffect(() => {
         if (typeof sbRefresh === "function") sbRefresh();
       }
     } catch (_) {}
-  }, [sbSource, cfbdTok]);useEffect(() => {
+  }, [sbSource, cfbdTok]);
+  useEffect(() => {
     const unsub = onSnapshot(doc(db, "config", "live"), (s) => {
       const d = s.data() || {};
       setLive(d);
     });
-
-  async function loadByCode() {
-    setMsg("");
-    const c = (loadCode || "").trim();
-    const ln = (loadLastName || "").trim().toLowerCase();
-    if (!/^\d{6}$/.test(c) || ln.length === 0) {
-      setMsg("Enter your 6-digit code and last name."); return;
-    }
-    const id = year + "_W" + week + "_" + c;
-    try {
-      const ref = doc(db, "picks", id);
-      const snap = await getDoc(ref);
-      if (!snap.exists()) { setMsg("No picks found for that code."); return; }
-      const d = snap.data();
-      const storedLower = (d.lastNameLower || (d.lastName || "").toLowerCase().trim());
-      if (storedLower !== ln) { setMsg("Code and last name do not match."); return; }
-
-      setForm(f => ({
-        ...f,
-        firstName: d.firstName || "",
-        lastName: d.lastName || "",
-        phone: d.phone || "", venmo: d.venmo || ""
-      }));
-      setPicks(d.picks || {});
-        setTiebreaker(d.tiebreaker ? { gameId: d.tiebreaker.gameId || null, total: String(d.tiebreaker.total ?? "") } : { gameId: null, total: "" });
-      setCode(c);
-      setEditing(true);
-      setMsg("Loaded. Editing code " + c + ".");
-    } catch (e) {
-      const m = (e && e.message) ? String(e.message) : String(e);
-      setMsg("Load failed: " + m);
-    }
-  }
-  return () => unsub();
-
-
+    return () => unsub();
   }, []);
   const [year, setYear] = useState(new Date().getFullYear());
   const [week, setWeek] = useState(null);
@@ -2344,42 +1956,8 @@ useEffect(() => {
     if (!w) return "";
     const isHome = w === g.home;
     const rank = isHome ? g.homeRank : g.awayRank;
-
-  async function loadByCode() {
-    setMsg("");
-    const c = (loadCode || "").trim();
-    const ln = (loadLastName || "").trim().toLowerCase();
-    if (!/^\d{6}$/.test(c) || ln.length === 0) {
-      setMsg("Enter your 6-digit code and last name."); return;
-    }
-    const id = year + "_W" + week + "_" + c;
-    try {
-      const ref = doc(db, "picks", id);
-      const snap = await getDoc(ref);
-      if (!snap.exists()) { setMsg("No picks found for that code."); return; }
-      const d = snap.data();
-      const storedLower = (d.lastNameLower || (d.lastName || "").toLowerCase().trim());
-      if (storedLower !== ln) { setMsg("Code and last name do not match."); return; }
-
-      setForm(f => ({
-        ...f,
-        firstName: d.firstName || "",
-        lastName: d.lastName || "",
-        phone: d.phone || "", venmo: d.venmo || ""
-      }));
-      setPicks(d.picks || {});
-        setTiebreaker(d.tiebreaker ? { gameId: d.tiebreaker.gameId || null, total: String(d.tiebreaker.total ?? "") } : { gameId: null, total: "" });
-      setCode(c);
-      setEditing(true);
-      setMsg("Loaded. Editing code " + c + ".");
-    } catch (e) {
-      const m = (e && e.message) ? String(e.message) : String(e);
-      setMsg("Load failed: " + m);
-    }
-  }
-  return (
+    return (
       <span style={{ display:"inline-flex", flexWrap:"wrap", justifyContent:"center", alignItems:"center", width:"100%", textAlign:"center", rowGap:"0", lineHeight: 1.24, fontWeight:700, fontSize: fitFontByLen(((teamLabelNoMascot(g.away,g.awayRank)||"").length + (teamLabelNoMascot(g.home,g.homeRank)||"").length)), gap: 8 }}>
-        
         <span>{teamLabel(w, rank)}</span>
       </span>
     );
@@ -2387,38 +1965,6 @@ useEffect(() => {
 
   const playedCount = games.filter(g => !!results[g.id]?.winner).length;
 
-  async function loadByCode() {
-    setMsg("");
-    const c = (loadCode || "").trim();
-    const ln = (loadLastName || "").trim().toLowerCase();
-    if (!/^\d{6}$/.test(c) || ln.length === 0) {
-      setMsg("Enter your 6-digit code and last name."); return;
-    }
-    const id = year + "_W" + week + "_" + c;
-    try {
-      const ref = doc(db, "picks", id);
-      const snap = await getDoc(ref);
-      if (!snap.exists()) { setMsg("No picks found for that code."); return; }
-      const d = snap.data();
-      const storedLower = (d.lastNameLower || (d.lastName || "").toLowerCase().trim());
-      if (storedLower !== ln) { setMsg("Code and last name do not match."); return; }
-
-      setForm(f => ({
-        ...f,
-        firstName: d.firstName || "",
-        lastName: d.lastName || "",
-        phone: d.phone || "", venmo: d.venmo || ""
-      }));
-      setPicks(d.picks || {});
-        setTiebreaker(d.tiebreaker ? { gameId: d.tiebreaker.gameId || null, total: String(d.tiebreaker.total ?? "") } : { gameId: null, total: "" });
-      setCode(c);
-      setEditing(true);
-      setMsg("Loaded. Editing code " + c + ".");
-    } catch (e) {
-      const m = (e && e.message) ? String(e.message) : String(e);
-      setMsg("Load failed: " + m);
-    }
-  }
     // Clear selected week if it has NO picks (safety guard)
   const clearWeekIfNoPicks = async () => {
     try {
@@ -4428,40 +3974,8 @@ export default function App() {
     document.body.style.background = "#0b1220";
     document.body.style.color = "#eef2ff";
     document.body.style.fontFamily = "Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif";
-
   }, []);
 
-  async function loadByCode() {
-    setMsg("");
-    const c = (loadCode || "").trim();
-    const ln = (loadLastName || "").trim().toLowerCase();
-    if (!/^\d{6}$/.test(c) || ln.length === 0) {
-      setMsg("Enter your 6-digit code and last name."); return;
-    }
-    const id = year + "_W" + week + "_" + c;
-    try {
-      const ref = doc(db, "picks", id);
-      const snap = await getDoc(ref);
-      if (!snap.exists()) { setMsg("No picks found for that code."); return; }
-      const d = snap.data();
-      const storedLower = (d.lastNameLower || (d.lastName || "").toLowerCase().trim());
-      if (storedLower !== ln) { setMsg("Code and last name do not match."); return; }
-
-      setForm(f => ({
-        ...f,
-        firstName: d.firstName || "",
-        lastName: d.lastName || "",
-        phone: d.phone || "", venmo: d.venmo || ""
-      }));
-      setPicks(d.picks || {});
-      setCode(c);
-      setEditing(true);
-      setMsg("Loaded. Editing code " + c + ".");
-    } catch (e) {
-      const m = (e && e.message) ? String(e.message) : String(e);
-      setMsg("Load failed: " + m);
-    }
-  }
   return (
     <>
       {(page === "picks" || page === "confirm" || page === "receipt") && <PicksPage user={user} isAdmin={isAdmin} setPage={setPage} />}
@@ -4615,37 +4129,6 @@ function renderGamesGroupedByDate(games, { timeZone = _tzDefault, renderRow } = 
 groups.forEach(g => { if (Array.isArray(g.items)) g.items.sort((a,b)=>((a.orderDay ?? 1e9)-(b.orderDay ?? 1e9)) || ((a.order ?? 1e9)-(b.order ?? 1e9))); });
 groups.forEach(g => { if (Array.isArray(g.items)) g.items.sort((a,b)=>((a.orderDay ?? 1e9)-(b.orderDay ?? 1e9)) || ((a.order ?? 1e9)-(b.order ?? 1e9))); });
 
-  async function loadByCode() {
-    setMsg("");
-    const c = (loadCode || "").trim();
-    const ln = (loadLastName || "").trim().toLowerCase();
-    if (!/^\d{6}$/.test(c) || ln.length === 0) {
-      setMsg("Enter your 6-digit code and last name."); return;
-    }
-    const id = year + "_W" + week + "_" + c;
-    try {
-      const ref = doc(db, "picks", id);
-      const snap = await getDoc(ref);
-      if (!snap.exists()) { setMsg("No picks found for that code."); return; }
-      const d = snap.data();
-      const storedLower = (d.lastNameLower || (d.lastName || "").toLowerCase().trim());
-      if (storedLower !== ln) { setMsg("Code and last name do not match."); return; }
-
-      setForm(f => ({
-        ...f,
-        firstName: d.firstName || "",
-        lastName: d.lastName || "",
-        phone: d.phone || "", venmo: d.venmo || ""
-      }));
-      setPicks(d.picks || {});
-      setCode(c);
-      setEditing(true);
-      setMsg("Loaded. Editing code " + c + ".");
-    } catch (e) {
-      const m = (e && e.message) ? String(e.message) : String(e);
-      setMsg("Load failed: " + m);
-    }
-  }
   return (
     <div className="space-y-10">
       {groups.map(grp => (
