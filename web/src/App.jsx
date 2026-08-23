@@ -1059,10 +1059,12 @@ const [form, setForm] = useState({ firstName:"", lastName:"", email:"", phone:""
   const [msg, setMsg] = useState("");
   // Submissions lock (config/app.picksLocked)
   const [picksLocked, setPicksLocked] = useState(false);
+  const [potHidden, setPotHidden] = useState(false);
   useEffect(() => {
     const unsub = onSnapshot(doc(db, "config", "app"), (s) => {
       const d = s.data() || {};
       setPicksLocked(!!d.picksLocked);
+      setPotHidden(!!d.potHidden);
     });
     return () => unsub && unsub();
   }, []);
@@ -1337,10 +1339,12 @@ if (typeof window !== "undefined") window.history.pushState(null, "", "/confirm"
 <Header user={user} isAdmin={isAdmin} setPage={setPage} />
       <Card style={{ background:"#121a2b" , position:"relative" }}>
         <div style={{ position:"absolute", top:8, left:8, zIndex:2 }}>
-    <div style={{ fontSize:"0.95rem", fontWeight:600 }}>Current Pot</div>
-    <div style={{ fontSize:"1.5rem", fontWeight:800, lineHeight:1 }}>
-      ${pot.toLocaleString()} 💰
-    </div>
+    {(!potHidden || isAdmin) && (<>
+      <div style={{ fontSize:"0.95rem", fontWeight:600 }}>Current Pot{potHidden ? " (hidden)" : ""}</div>
+      <div style={{ fontSize:"1.5rem", fontWeight:800, lineHeight:1 }}>
+        ${pot.toLocaleString()} 💰
+      </div>
+    </>)}
   </div><div style={{ position:"absolute", top:8, right:8, zIndex:2 }}>
     <button onClick={()=>setShowRules(true)} type="button">Rules</button>
   </div>
@@ -1858,10 +1862,12 @@ useEffect(() => {
   const [msg, setMsg] = useState("");
   // Submissions lock (config/app.picksLocked)
   const [picksLocked, setPicksLocked] = useState(false);
+  const [potHidden, setPotHidden] = useState(false);
   useEffect(() => {
     const unsub = onSnapshot(doc(db, "config", "app"), (s) => {
       const d = s.data() || {};
       setPicksLocked(!!d.picksLocked);
+      setPotHidden(!!d.potHidden);
     });
     return () => unsub && unsub();
   }, []);
@@ -2353,11 +2359,13 @@ while (i < seq.length) {
 {showScorebug && (
   <tr className="scorebug-row"> {/* SCOREBUG ROW v1 (disabled by flag) */}
     <td style={{ ...cell, ...sticky1() }}>
-  <div style={{ fontSize:"0.95rem", fontWeight:600 }}>
-    This Week&apos;s Pot:
-  </div>
-  <div style={{ fontSize:"1.5rem", fontWeight:800, lineHeight:1 }}>
-    ${pot.toLocaleString()} 💰</div>
+  {(!potHidden || isAdmin) && (<>
+    <div style={{ fontSize:"0.95rem", fontWeight:600 }}>
+      This Week&apos;s Pot{potHidden ? " (hidden)" : ""}:
+    </div>
+    <div style={{ fontSize:"1.5rem", fontWeight:800, lineHeight:1 }}>
+      ${pot.toLocaleString()} 💰</div>
+  </>)}
 </td>
     <td style={{ ...cell, ...sticky2({ textAlign: "center", fontWeight: 600 }) }} />
     {displayGames.map(g => (
@@ -3415,7 +3423,7 @@ function AdminPage({ user, isAdmin, setPage }) {
   const [weeksForYear, setWeeksForYear] = useState([]);
   const [apiKey, setApiKey] = useState("");
   const [showApiKey, setShowApiKey] = useState(false);
-  const [appCfg, setAppCfg] = useState({ leaderboardLocked: false, leaderboardPicksPublic: false, picksLocked: false });
+  const [appCfg, setAppCfg] = useState({ leaderboardLocked: false, leaderboardPicksPublic: false, picksLocked: false, potHidden: false });
   const [dummyWeekExists, setDummyWeekExists] = useState(false);
   const [localFixture, setLocalFixture] = useState(() => {
     try { return localStorage.getItem("sbLocalFixture") === "1"; } catch { return false; }
@@ -3526,11 +3534,21 @@ function AdminPage({ user, isAdmin, setPage }) {
         leaderboardLocked: !!d.leaderboardLocked,
         leaderboardPicksPublic: !!d.leaderboardPicksPublic,
         picksLocked: !!d.picksLocked,
+        potHidden: !!d.potHidden,
         scoreboard: { ...defSb, ...(d.scoreboard || {}) }
       });
     });
     return () => unsub();
   }, []);
+
+  const togglePotHidden = async () => {
+    try {
+      await setDoc(doc(db, "config", "app"), { potHidden: !appCfg.potHidden, updatedAt: serverTimestamp() }, { merge: true });
+      setMsg(`Pot ${appCfg.potHidden ? "shown" : "hidden"} for everyone but admins.`);
+    } catch (e) {
+      setMsg("Failed to save: " + (e?.message || String(e)));
+    }
+  };
 
   const toggleLeaderboardLock = async () => {
     try {
@@ -3942,6 +3960,14 @@ await setDoc(doc(db,"config","app"), { currentYear: year, currentWeek: week, upd
             </button>
             <StatusBadge tone={appCfg.leaderboardPicksPublic ? "primary" : "neutral"}>
               {appCfg.leaderboardPicksPublic ? "Public (everyone can see picks)" : "Admin-Only"}
+            </StatusBadge>
+          </Row>
+          <Row style={{ marginTop: 10 }}>
+            <button style={adminBtn(appCfg.potHidden ? "success" : "warning")} onClick={togglePotHidden}>
+              {appCfg.potHidden ? "Show Pot" : "Hide Pot"}
+            </button>
+            <StatusBadge tone={appCfg.potHidden ? "danger" : "success"}>
+              {appCfg.potHidden ? "Hidden from everyone but admins" : "Visible to everyone"}
             </StatusBadge>
           </Row>
         </AdminSection>
