@@ -3041,6 +3041,15 @@ function AdminMissingPicksPage({ user, isAdmin, setPage }) {
       alert("Couldn't add to the roster: " + (err?.message || String(err)));
     }
   };
+  const promoteAllUnassigned = async () => {
+    if (unassignedList.length === 0) return;
+    if (!window.confirm(`Add all ${unassignedList.length} unassigned email(s) to the roster now? You can opt out or fill in names/edit afterward.`)) return;
+    try {
+      await Promise.all(unassignedList.map(u => setDoc(doc(db, "unassignedContacts", u.id), { promoted: true }, { merge: true })));
+    } catch (err) {
+      alert("Couldn't add everyone to the roster: " + (err?.message || String(err)));
+    }
+  };
   const removeUnassigned = async (id) => {
     try { await deleteDoc(doc(db, "unassignedContacts", id)); } catch (err) { alert("Couldn't remove: " + (err?.message || String(err))); }
   };
@@ -3196,6 +3205,14 @@ function AdminMissingPicksPage({ user, isAdmin, setPage }) {
         />
         <button style={adminBtn("primary")} onClick={addUnassignedEmails}>Add</button>
       </Row>
+
+      {unassignedList.length > 0 && (
+        <div style={{ marginTop: 14 }}>
+          <button style={adminBtn("success")} onClick={promoteAllUnassigned}>
+            Add All {unassignedList.length} to Roster
+          </button>
+        </div>
+      )}
 
       {unassignedList.length > 0 && (
         <div style={{ marginTop: 14, overflowX: "auto" }}>
