@@ -2895,18 +2895,13 @@ function AdminMissingPicksPage({ user, isAdmin, setPage }) {
     }
   };
 
-  const missing = useMemo(() => {
-    if (!data) return [];
-    return [...data.clusters.values()]
-      .filter(c => !data.submittedRoots.has(c.key))
-      .map(c => ({ ...c, email: c.email || contactOverrides[c.key] || "" }))
-      .sort((a, b) => (a.lastName || "").localeCompare(b.lastName || "") || (a.firstName || "").localeCompare(b.firstName || ""));
-  }, [data, contactOverrides]);
-
   // Emails that don't belong to anyone in the roster yet - e.g. a new invite
   // list where names haven't been sorted out. Kept separate from `contacts`
   // (which is keyed to an existing player's name/Venmo identity) since there's
-  // no identity to attach these to until someone assigns a name.
+  // no identity to attach these to until someone assigns a name. Once named
+  // and promoted, they're merged into the roster below like anyone else who
+  // hasn't submitted - there's no picks doc for them, so they're always
+  // "missing" until they actually play a week.
   const [unassigned, setUnassigned] = useState({});
   useEffect(() => {
     if (!isAdmin) return;
@@ -2918,10 +2913,16 @@ function AdminMissingPicksPage({ user, isAdmin, setPage }) {
     return () => unsub();
   }, [isAdmin]);
   const unassignedList = useMemo(
-    () => Object.entries(unassigned).map(([id, v]) => ({ id, email: v.email || id, name: v.name || "" }))
+    () => Object.entries(unassigned).filter(([, v]) => !v.promoted).map(([id, v]) => ({ id, email: v.email || id, name: v.name || "" }))
       .sort((a, b) => a.email.localeCompare(b.email)),
     [unassigned]
   );
+  const promotedRoster = useMemo(() => {
+    return Object.entries(unassigned).filter(([, v]) => v.promoted).map(([id, v]) => {
+      const parts = (v.name || "").trim().split(/\s+/).filter(Boolean);
+      return { key: `unassigned:${id}`, firstName: parts[0] || v.email || id, lastName: parts.slice(1).join(" "), phone: "", venmo: "", email: v.email || id };
+    });
+  }, [unassigned]);
   const [unassignedDraft, setUnassignedDraft] = useState("");
   const [nameDrafts, setNameDrafts] = useState({});
 
@@ -2947,12 +2948,34 @@ function AdminMissingPicksPage({ user, isAdmin, setPage }) {
       alert("Couldn't save that name: " + (err?.message || String(err)));
     }
   };
+  const promoteToRoster = async (id) => {
+    try {
+      await setDoc(doc(db, "unassignedContacts", id), { promoted: true }, { merge: true });
+    } catch (err) {
+      alert("Couldn't add to the roster: " + (err?.message || String(err)));
+    }
+  };
+  const unpromoteFromRoster = async (id) => {
+    try {
+      await setDoc(doc(db, "unassignedContacts", id), { promoted: false }, { merge: true });
+    } catch (err) {
+      alert("Couldn't undo that: " + (err?.message || String(err)));
+    }
+  };
   const removeUnassigned = async (id) => {
     try { await deleteDoc(doc(db, "unassignedContacts", id)); } catch (err) { alert("Couldn't remove: " + (err?.message || String(err))); }
   };
 
+  const missing = useMemo(() => {
+    const fromRoster = data ? [...data.clusters.values()]
+      .filter(c => !data.submittedRoots.has(c.key))
+      .map(c => ({ ...c, email: c.email || contactOverrides[c.key] || "" })) : [];
+    return [...fromRoster, ...promotedRoster]
+      .sort((a, b) => (a.lastName || "").localeCompare(b.lastName || "") || (a.firstName || "").localeCompare(b.firstName || ""));
+  }, [data, contactOverrides, promotedRoster]);
+
   const loaded = !!data;
-  const totalEver = data ? data.clusters.size : 0;
+  const totalEver = (data ? data.clusters.size : 0) + promotedRoster.length;
   const submittedCount = totalEver - missing.length;
 
   const missingEmails = useMemo(() => [...new Set(missing.map(p => (p.email || "").trim()).filter(Boolean))], [missing]);
@@ -3005,6 +3028,7 @@ function AdminMissingPicksPage({ user, isAdmin, setPage }) {
               <th style={{ padding:"8px 10px", borderBottom:"1px solid #1f2a44" }}>Email</th>
               <th style={{ padding:"8px 10px", borderBottom:"1px solid #1f2a44" }}>Phone</th>
               <th style={{ padding:"8px 10px", borderBottom:"1px solid #1f2a44" }}>Venmo</th>
+              <th style={{ padding:"8px 10px", borderBottom:"1px solid #1f2a44" }}></th>
             </tr>
           </thead>
           <tbody>
@@ -3033,10 +3057,21 @@ function AdminMissingPicksPage({ user, isAdmin, setPage }) {
                 </td>
                 <td style={{ padding:"8px 10px", opacity:.9 }}>{p.phone}</td>
                 <td style={{ padding:"8px 10px", opacity:.9 }}>{p.venmo}</td>
+                <td style={{ padding:"8px 10px" }}>
+                  {p.key.startsWith("unassigned:") && (
+                    <button
+                      style={{ ...adminBtn("neutral"), padding:"4px 8px", fontSize:12 }}
+                      title="Move back to Unassigned Emails"
+                      onClick={() => unpromoteFromRoster(p.key.slice("unassigned:".length))}
+                    >
+                      Undo
+                    </button>
+                  )}
+                </td>
               </tr>
             ))}
             {loaded && missing.length === 0 && (
-              <tr><td colSpan={4} style={{ padding:"16px 10px", opacity:.7 }}>Everyone who's ever played has submitted for {year} / W{week}.</td></tr>
+              <tr><td colSpan={5} style={{ padding:"16px 10px", opacity:.7 }}>Everyone who's ever played has submitted for {year} / W{week}.</td></tr>
             )}
           </tbody>
         </table>
@@ -3084,7 +3119,12 @@ function AdminMissingPicksPage({ user, isAdmin, setPage }) {
                       <button style={{ ...adminBtn("neutral"), padding: "4px 8px", fontSize: 12 }} onClick={() => saveUnassignedName(u.id, nameDrafts[u.id])}>Save</button>
                     </div>
                   </td>
-                  <td style={{ padding: "8px 10px" }}>
+                  <td style={{ padding: "8px 10px", display: "flex", gap: 6 }}>
+                    {u.name && (
+                      <button style={{ ...adminBtn("success"), padding: "4px 8px", fontSize: 12 }} onClick={() => promoteToRoster(u.id)} title="Adds them to the main roster above, so they show up in Who Hasn't Submitted and the Email Missing draft">
+                        Add to Roster
+                      </button>
+                    )}
                     <button style={{ ...adminBtn("danger"), padding: "4px 8px", fontSize: 12 }} onClick={() => removeUnassigned(u.id)}>Remove</button>
                   </td>
                 </tr>
