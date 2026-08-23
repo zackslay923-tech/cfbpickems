@@ -1002,6 +1002,55 @@ useEffect(() => {
     }
   }, []);
 const [form, setForm] = useState({ firstName:"", lastName:"", email:"", phone:"", venmo:"", venmoConfirmed:false })
+  // Returning players shouldn't have to retype their contact info every
+  // week - once they've filled in both names (and this isn't an edit of an
+  // already-loaded submission), look up their most recent past submission
+  // by the same name/Venmo identity matching used elsewhere and fill in
+  // whatever contact fields they haven't already typed themselves.
+  const autofillFromHistory = async () => {
+    if (editing) return;
+    const fn = (form.firstName || "").trim();
+    const ln = (form.lastName || "").trim();
+    if (!fn || !ln) return;
+    if ((form.email || "").trim() && (form.phone || "").trim() && (form.venmo || "").trim()) return;
+    try {
+      const snap = await getDocs(query(collection(db, "picks"), where("lastNameLower", "==", ln.toLowerCase())));
+      const docs = [];
+      snap.forEach(d => docs.push(d.data()));
+      if (docs.length === 0) return;
+
+      const dsu = makeDSU();
+      const keyed = [];
+      for (const p of docs) {
+        const nk = personKey(p);
+        const vk = venmoKeyOf(p);
+        if (!nk && !vk) continue;
+        if (nk && vk) dsu.union(nk, vk);
+        keyed.push({ p, key: nk || vk });
+      }
+      const targetKey = personKey({ firstName: fn, lastName: ln });
+      if (!targetKey) return;
+      const targetRoot = dsu.find(targetKey);
+      const mine = keyed.filter(rec => dsu.find(rec.key) === targetRoot).map(rec => rec.p);
+      if (mine.length === 0) return;
+
+      const latest = mine.reduce((best, p) => {
+        const ms = p.updatedAt?.toMillis ? p.updatedAt.toMillis() : (p.createdAt?.toMillis ? p.createdAt.toMillis() : 0);
+        return (!best || ms >= best._ms) ? { ...p, _ms: ms } : best;
+      }, null);
+      if (!latest) return;
+
+      setForm(f => ({
+        ...f,
+        email: f.email || latest.email || "",
+        phone: f.phone || latest.phone || "",
+        venmo: f.venmo || latest.venmo || "",
+      }));
+    } catch (e) {
+      // Best-effort convenience only - a failed lookup just means the
+      // player fills the fields in themselves, same as always.
+    }
+  };
   const [errors, setErrors] = useState({});
   const [touchedSubmit, setTouchedSubmit] = useState(false);
   const [showRules, setShowRules] = useState(false);
@@ -1390,8 +1439,8 @@ if (typeof window !== "undefined") window.history.pushState(null, "", "/confirm"
 </div>
 <form onSubmit={onSubmitPicks} style={{ marginTop: 12 }}>
           <Row style={{ marginBottom: 14 }}>
-  <Field label="First name"><input style={inputStyle} name="firstName" value={form.firstName} onChange={e=>setForm({...form, firstName:e.target.value})} required/></Field>
-  <Field label="Last name"><input style={inputStyle} name="lastName" value={form.lastName} onChange={e=>setForm({...form, lastName:e.target.value})} required/></Field>
+  <Field label="First name"><input style={inputStyle} name="firstName" value={form.firstName} onChange={e=>setForm({...form, firstName:e.target.value})} onBlur={autofillFromHistory} required/></Field>
+  <Field label="Last name"><input style={inputStyle} name="lastName" value={form.lastName} onChange={e=>setForm({...form, lastName:e.target.value})} onBlur={autofillFromHistory} required/></Field>
 </Row>
           <Row style={{ marginBottom: 14 }}>
             <Field label="Email">
