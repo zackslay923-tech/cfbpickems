@@ -2879,7 +2879,7 @@ function AdminMissingPicksPage({ user, isAdmin, setPage }) {
     if (!isAdmin) return;
     const unsub = onSnapshot(collection(db, "contacts"), (snap) => {
       const m = {};
-      snap.forEach(d => { m[d.id] = d.data()?.email || ""; });
+      snap.forEach(d => { m[d.id] = d.data() || {}; });
       setContactOverrides(m);
     });
     return () => unsub();
@@ -2892,6 +2892,21 @@ function AdminMissingPicksPage({ user, isAdmin, setPage }) {
       await setDoc(doc(db, "contacts", key), { email: trimmed, updatedAt: serverTimestamp() }, { merge: true });
     } catch (err) {
       alert("Couldn't save that email: " + (err?.message || String(err)));
+    }
+  };
+  // Someone can opt out of the "Email Missing" reminder without being removed
+  // from the roster - stored alongside their contact info (contacts for
+  // existing players, unassignedContacts for promoted new invitees).
+  const toggleOptOut = async (p) => {
+    const next = !p.optedOut;
+    try {
+      if (p.key.startsWith("unassigned:")) {
+        await setDoc(doc(db, "unassignedContacts", p.key.slice("unassigned:".length)), { optedOut: next }, { merge: true });
+      } else {
+        await setDoc(doc(db, "contacts", p.key), { optedOut: next, updatedAt: serverTimestamp() }, { merge: true });
+      }
+    } catch (err) {
+      alert("Couldn't update opt-out status: " + (err?.message || String(err)));
     }
   };
 
@@ -2920,7 +2935,7 @@ function AdminMissingPicksPage({ user, isAdmin, setPage }) {
   const promotedRoster = useMemo(() => {
     return Object.entries(unassigned).filter(([, v]) => v.promoted).map(([id, v]) => {
       const parts = (v.name || "").trim().split(/\s+/).filter(Boolean);
-      return { key: `unassigned:${id}`, firstName: parts[0] || v.email || id, lastName: parts.slice(1).join(" "), phone: "", venmo: "", email: v.email || id };
+      return { key: `unassigned:${id}`, firstName: parts[0] || v.email || id, lastName: parts.slice(1).join(" "), phone: "", venmo: "", email: v.email || id, optedOut: !!v.optedOut };
     });
   }, [unassigned]);
   const [unassignedDraft, setUnassignedDraft] = useState("");
@@ -2969,7 +2984,7 @@ function AdminMissingPicksPage({ user, isAdmin, setPage }) {
   const missing = useMemo(() => {
     const fromRoster = data ? [...data.clusters.values()]
       .filter(c => !data.submittedRoots.has(c.key))
-      .map(c => ({ ...c, email: c.email || contactOverrides[c.key] || "" })) : [];
+      .map(c => ({ ...c, email: c.email || contactOverrides[c.key]?.email || "", optedOut: !!contactOverrides[c.key]?.optedOut })) : [];
     return [...fromRoster, ...promotedRoster]
       .sort((a, b) => (a.lastName || "").localeCompare(b.lastName || "") || (a.firstName || "").localeCompare(b.firstName || ""));
   }, [data, contactOverrides, promotedRoster]);
@@ -2978,7 +2993,7 @@ function AdminMissingPicksPage({ user, isAdmin, setPage }) {
   const totalEver = (data ? data.clusters.size : 0) + promotedRoster.length;
   const submittedCount = totalEver - missing.length;
 
-  const missingEmails = useMemo(() => [...new Set(missing.map(p => (p.email || "").trim()).filter(Boolean))], [missing]);
+  const missingEmails = useMemo(() => [...new Set(missing.filter(p => !p.optedOut).map(p => (p.email || "").trim()).filter(Boolean))], [missing]);
 
   const openGmailDraft = () => {
     if (missingEmails.length === 0) { alert("No email addresses on file for anyone missing."); return; }
@@ -3035,8 +3050,13 @@ function AdminMissingPicksPage({ user, isAdmin, setPage }) {
             {missing.map(p => (
               <tr key={p.key} style={{ borderBottom:"1px solid #1f2a44" }}>
                 <td style={{ padding:"8px 10px" }}>{`${p.firstName || ""} ${p.lastName || ""}`.trim()}</td>
-                <td style={{ padding:"8px 10px", opacity:.9 }}>
-                  {p.email ? p.email : (
+                <td style={{ padding:"8px 10px", opacity: p.optedOut ? 0.5 : .9 }}>
+                  {p.email ? (
+                    <>
+                      {p.email}
+                      {p.optedOut && <span style={{ marginLeft:6, fontSize:11, color:"#f0b429" }}>(opted out)</span>}
+                    </>
+                  ) : (
                     <div style={{ display:"flex", gap:6 }}>
                       <input
                         style={{ ...inputStyle, padding:"4px 8px", fontSize:12, width:160 }}
@@ -3057,7 +3077,16 @@ function AdminMissingPicksPage({ user, isAdmin, setPage }) {
                 </td>
                 <td style={{ padding:"8px 10px", opacity:.9 }}>{p.phone}</td>
                 <td style={{ padding:"8px 10px", opacity:.9 }}>{p.venmo}</td>
-                <td style={{ padding:"8px 10px" }}>
+                <td style={{ padding:"8px 10px", display:"flex", gap:6 }}>
+                  {p.email && (
+                    <button
+                      style={{ ...adminBtn(p.optedOut ? "neutral" : "warning"), padding:"4px 8px", fontSize:12 }}
+                      title={p.optedOut ? "Excluded from Email Missing — click to opt back in" : "Exclude this person from the Email Missing draft"}
+                      onClick={() => toggleOptOut(p)}
+                    >
+                      {p.optedOut ? "Opted out" : "Opt out"}
+                    </button>
+                  )}
                   {p.key.startsWith("unassigned:") && (
                     <button
                       style={{ ...adminBtn("neutral"), padding:"4px 8px", fontSize:12 }}
