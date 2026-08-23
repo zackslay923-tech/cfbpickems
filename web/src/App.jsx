@@ -2871,12 +2871,37 @@ function AdminMissingPicksPage({ user, isAdmin, setPage }) {
     return () => unsub();
   }, [year, week]);
 
+  // Manually-entered emails for people whose picks docs never captured one -
+  // keyed by the same identity key (personKey/venmoKeyOf root) used above,
+  // so it's tied to the person, not any single week's submission.
+  const [contactOverrides, setContactOverrides] = useState({});
+  useEffect(() => {
+    if (!isAdmin) return;
+    const unsub = onSnapshot(collection(db, "contacts"), (snap) => {
+      const m = {};
+      snap.forEach(d => { m[d.id] = d.data()?.email || ""; });
+      setContactOverrides(m);
+    });
+    return () => unsub();
+  }, [isAdmin]);
+  const [emailDrafts, setEmailDrafts] = useState({});
+  const saveContactEmail = async (key, email) => {
+    const trimmed = (email || "").trim();
+    if (!trimmed) return;
+    try {
+      await setDoc(doc(db, "contacts", key), { email: trimmed, updatedAt: serverTimestamp() }, { merge: true });
+    } catch (err) {
+      alert("Couldn't save that email: " + (err?.message || String(err)));
+    }
+  };
+
   const missing = useMemo(() => {
     if (!data) return [];
     return [...data.clusters.values()]
       .filter(c => !data.submittedRoots.has(c.key))
+      .map(c => ({ ...c, email: c.email || contactOverrides[c.key] || "" }))
       .sort((a, b) => (a.lastName || "").localeCompare(b.lastName || "") || (a.firstName || "").localeCompare(b.firstName || ""));
-  }, [data]);
+  }, [data, contactOverrides]);
 
   const loaded = !!data;
   const totalEver = data ? data.clusters.size : 0;
@@ -2938,7 +2963,26 @@ function AdminMissingPicksPage({ user, isAdmin, setPage }) {
             {missing.map(p => (
               <tr key={p.key} style={{ borderBottom:"1px solid #1f2a44" }}>
                 <td style={{ padding:"8px 10px" }}>{`${p.firstName || ""} ${p.lastName || ""}`.trim()}</td>
-                <td style={{ padding:"8px 10px", opacity:.9 }}>{p.email || "—"}</td>
+                <td style={{ padding:"8px 10px", opacity:.9 }}>
+                  {p.email ? p.email : (
+                    <div style={{ display:"flex", gap:6 }}>
+                      <input
+                        style={{ ...inputStyle, padding:"4px 8px", fontSize:12, width:160 }}
+                        type="email"
+                        placeholder="add email"
+                        value={emailDrafts[p.key] ?? ""}
+                        onChange={e => setEmailDrafts(d => ({ ...d, [p.key]: e.target.value }))}
+                        onKeyDown={e => { if (e.key === "Enter") saveContactEmail(p.key, emailDrafts[p.key]); }}
+                      />
+                      <button
+                        style={{ ...adminBtn("neutral"), padding:"4px 8px", fontSize:12 }}
+                        onClick={() => saveContactEmail(p.key, emailDrafts[p.key])}
+                      >
+                        Save
+                      </button>
+                    </div>
+                  )}
+                </td>
                 <td style={{ padding:"8px 10px", opacity:.9 }}>{p.phone}</td>
                 <td style={{ padding:"8px 10px", opacity:.9 }}>{p.venmo}</td>
               </tr>

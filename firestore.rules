@@ -109,6 +109,14 @@ service cloud.firestore {
       allow delete: if true;
     }
 
+    // Contact overrides: admin-entered emails for people whose picks docs
+    // never captured one, keyed by the same name/Venmo identity used on the
+    // "Who Hasn't Submitted" admin page. Admin-only.
+    match /contacts/{key} {
+      allow read: if isAdmin();
+      allow write: if isAdmin();
+    }
+
     // Notification outbox: admin drops a {title, body} doc here to broadcast
     // a push notification; a Cloud Function picks it up and deletes it.
     match /notificationOutbox/{id} {
