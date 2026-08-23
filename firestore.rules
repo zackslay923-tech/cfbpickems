@@ -117,6 +117,14 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    // Unassigned emails: same idea as /contacts, but for people who aren't on
+    // the roster yet at all (no picks doc to derive an identity key from) -
+    // keyed by the email itself until an admin attaches a name.
+    match /unassignedContacts/{key} {
+      allow read: if isAdmin();
+      allow write: if isAdmin();
+    }
+
     // Notification outbox: admin drops a {title, body} doc here to broadcast
     // a push notification; a Cloud Function picks it up and deletes it.
     match /notificationOutbox/{id} {

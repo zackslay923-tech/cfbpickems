@@ -51,7 +51,7 @@ import AdminPicksPage from "./components/AdminPicksPage";
 import BulkImportPicksPreview from "./components/BulkImportPicksPreview";
 import { db, googleLogin, logout, onAuth, enablePushNotifications } from "./firebase";
 
-import { onSnapshot, collection, doc, getDoc, getDocs, setDoc, addDoc, serverTimestamp, writeBatch, query, where , runTransaction } from "firebase/firestore";
+import { onSnapshot, collection, doc, getDoc, getDocs, setDoc, addDoc, deleteDoc, serverTimestamp, writeBatch, query, where , runTransaction } from "firebase/firestore";
 
 
 /* === Fit font helper (for header + winners) === */
@@ -2903,6 +2903,54 @@ function AdminMissingPicksPage({ user, isAdmin, setPage }) {
       .sort((a, b) => (a.lastName || "").localeCompare(b.lastName || "") || (a.firstName || "").localeCompare(b.firstName || ""));
   }, [data, contactOverrides]);
 
+  // Emails that don't belong to anyone in the roster yet - e.g. a new invite
+  // list where names haven't been sorted out. Kept separate from `contacts`
+  // (which is keyed to an existing player's name/Venmo identity) since there's
+  // no identity to attach these to until someone assigns a name.
+  const [unassigned, setUnassigned] = useState({});
+  useEffect(() => {
+    if (!isAdmin) return;
+    const unsub = onSnapshot(collection(db, "unassignedContacts"), (snap) => {
+      const m = {};
+      snap.forEach(d => { m[d.id] = d.data() || {}; });
+      setUnassigned(m);
+    });
+    return () => unsub();
+  }, [isAdmin]);
+  const unassignedList = useMemo(
+    () => Object.entries(unassigned).map(([id, v]) => ({ id, email: v.email || id, name: v.name || "" }))
+      .sort((a, b) => a.email.localeCompare(b.email)),
+    [unassigned]
+  );
+  const [unassignedDraft, setUnassignedDraft] = useState("");
+  const [nameDrafts, setNameDrafts] = useState({});
+
+  const addUnassignedEmails = async () => {
+    const knownEmails = new Set(
+      [...data?.clusters.values() || []].map(c => (c.email || "").trim().toLowerCase()).filter(Boolean)
+    );
+    const emails = [...new Set(
+      unassignedDraft.split(/[\s,;]+/).map(s => s.trim().toLowerCase()).filter(s => s && s.includes("@"))
+    )].filter(e => !knownEmails.has(e) && !unassigned[e]);
+    if (emails.length === 0) { setUnassignedDraft(""); return; }
+    try {
+      await Promise.all(emails.map(e => setDoc(doc(db, "unassignedContacts", e), { email: e, name: "", createdAt: serverTimestamp() }, { merge: true })));
+      setUnassignedDraft("");
+    } catch (err) {
+      alert("Couldn't save those emails: " + (err?.message || String(err)));
+    }
+  };
+  const saveUnassignedName = async (id, name) => {
+    try {
+      await setDoc(doc(db, "unassignedContacts", id), { name: (name || "").trim() }, { merge: true });
+    } catch (err) {
+      alert("Couldn't save that name: " + (err?.message || String(err)));
+    }
+  };
+  const removeUnassigned = async (id) => {
+    try { await deleteDoc(doc(db, "unassignedContacts", id)); } catch (err) { alert("Couldn't remove: " + (err?.message || String(err))); }
+  };
+
   const loaded = !!data;
   const totalEver = data ? data.clusters.size : 0;
   const submittedCount = totalEver - missing.length;
@@ -2993,6 +3041,58 @@ function AdminMissingPicksPage({ user, isAdmin, setPage }) {
           </tbody>
         </table>
       </div>
+    </Card>
+
+    <Card style={{ maxWidth: 900, marginTop: 16 }}>
+      <h3 style={{ margin: 0 }}>Unassigned Emails</h3>
+      <p style={{ margin: "10px 0 0", fontSize: 13, color: "#9aa4c7" }}>
+        Emails that don't belong to anyone on the roster yet - e.g. new invitees. Paste any number below (comma, space, or newline separated); attach a name to each whenever you figure out who's who.
+      </p>
+      <Row style={{ marginTop: 14, gap: 10, alignItems: "flex-start" }}>
+        <textarea
+          style={{ ...inputStyle, flex: 1, minHeight: 70, fontFamily: "inherit", resize: "vertical" }}
+          placeholder="jane@example.com, john@example.com..."
+          value={unassignedDraft}
+          onChange={e => setUnassignedDraft(e.target.value)}
+        />
+        <button style={adminBtn("primary")} onClick={addUnassignedEmails}>Add</button>
+      </Row>
+
+      {unassignedList.length > 0 && (
+        <div style={{ marginTop: 14, overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 480 }}>
+            <thead>
+              <tr style={{ textAlign: "left" }}>
+                <th style={{ padding: "8px 10px", borderBottom: "1px solid #1f2a44" }}>Email</th>
+                <th style={{ padding: "8px 10px", borderBottom: "1px solid #1f2a44" }}>Name</th>
+                <th style={{ padding: "8px 10px", borderBottom: "1px solid #1f2a44" }}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {unassignedList.map(u => (
+                <tr key={u.id} style={{ borderBottom: "1px solid #1f2a44" }}>
+                  <td style={{ padding: "8px 10px" }}>{u.email}</td>
+                  <td style={{ padding: "8px 10px" }}>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <input
+                        style={{ ...inputStyle, padding: "4px 8px", fontSize: 12, width: 180 }}
+                        placeholder="name"
+                        value={nameDrafts[u.id] ?? u.name}
+                        onChange={e => setNameDrafts(d => ({ ...d, [u.id]: e.target.value }))}
+                        onKeyDown={e => { if (e.key === "Enter") saveUnassignedName(u.id, nameDrafts[u.id]); }}
+                      />
+                      <button style={{ ...adminBtn("neutral"), padding: "4px 8px", fontSize: 12 }} onClick={() => saveUnassignedName(u.id, nameDrafts[u.id])}>Save</button>
+                    </div>
+                  </td>
+                  <td style={{ padding: "8px 10px" }}>
+                    <button style={{ ...adminBtn("danger"), padding: "4px 8px", fontSize: 12 }} onClick={() => removeUnassigned(u.id)}>Remove</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </Card>
   </Container>);
 }
