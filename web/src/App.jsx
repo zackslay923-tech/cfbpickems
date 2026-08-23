@@ -2862,7 +2862,7 @@ function AdminMissingPicksPage({ user, isAdmin, setPage }) {
         const existing = clusters.get(root);
         const ms = rec.p.updatedAt?.toMillis ? rec.p.updatedAt.toMillis() : (rec.p.createdAt?.toMillis ? rec.p.createdAt.toMillis() : 0);
         if (!existing || ms >= existing._ms) {
-          clusters.set(root, { key: root, firstName: rec.p.firstName, lastName: rec.p.lastName, phone: rec.p.phone, venmo: rec.p.venmo, _ms: ms });
+          clusters.set(root, { key: root, firstName: rec.p.firstName, lastName: rec.p.lastName, phone: rec.p.phone, venmo: rec.p.venmo, email: rec.p.email, _ms: ms });
         }
       }
 
@@ -2881,6 +2881,16 @@ function AdminMissingPicksPage({ user, isAdmin, setPage }) {
   const loaded = !!data;
   const totalEver = data ? data.clusters.size : 0;
   const submittedCount = totalEver - missing.length;
+
+  const missingEmails = useMemo(() => [...new Set(missing.map(p => (p.email || "").trim()).filter(Boolean))], [missing]);
+
+  const openGmailDraft = () => {
+    if (missingEmails.length === 0) { alert("No email addresses on file for anyone missing."); return; }
+    const subject = `Reminder: Submit your Week ${week} picks!`;
+    const body = `Hey! Just a friendly reminder that you haven't submitted your picks for Week ${week} yet.\n\nGet them in here: https://cfbpickems.web.app\n\nDon't wait until the last minute!\n\n- Zack`;
+    const url = `https://mail.google.com/mail/?view=cm&fs=1&tf=1&bcc=${encodeURIComponent(missingEmails.join(","))}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    window.open(url, "_blank", "noopener,noreferrer");
+  };
 
   return (<Container maxWidth={900}>
     <Header user={user} isAdmin={isAdmin} setPage={setPage} />
@@ -2906,6 +2916,11 @@ function AdminMissingPicksPage({ user, isAdmin, setPage }) {
           <StatusBadge tone={missing.length === 0 ? "success" : "danger"}>
             {missing.length} not yet submitted
           </StatusBadge>
+          {missing.length > 0 && (
+            <button style={adminBtn("primary")} onClick={openGmailDraft} title="Opens a Gmail compose window, BCC'd to everyone missing an email on file — nothing sends automatically">
+              ✉️ Email Missing ({missingEmails.length})
+            </button>
+          )}
         </div>
       )}
 
@@ -2914,6 +2929,7 @@ function AdminMissingPicksPage({ user, isAdmin, setPage }) {
           <thead>
             <tr style={{ textAlign:"left" }}>
               <th style={{ padding:"8px 10px", borderBottom:"1px solid #1f2a44" }}>Name</th>
+              <th style={{ padding:"8px 10px", borderBottom:"1px solid #1f2a44" }}>Email</th>
               <th style={{ padding:"8px 10px", borderBottom:"1px solid #1f2a44" }}>Phone</th>
               <th style={{ padding:"8px 10px", borderBottom:"1px solid #1f2a44" }}>Venmo</th>
             </tr>
@@ -2922,12 +2938,13 @@ function AdminMissingPicksPage({ user, isAdmin, setPage }) {
             {missing.map(p => (
               <tr key={p.key} style={{ borderBottom:"1px solid #1f2a44" }}>
                 <td style={{ padding:"8px 10px" }}>{`${p.firstName || ""} ${p.lastName || ""}`.trim()}</td>
+                <td style={{ padding:"8px 10px", opacity:.9 }}>{p.email || "—"}</td>
                 <td style={{ padding:"8px 10px", opacity:.9 }}>{p.phone}</td>
                 <td style={{ padding:"8px 10px", opacity:.9 }}>{p.venmo}</td>
               </tr>
             ))}
             {loaded && missing.length === 0 && (
-              <tr><td colSpan={3} style={{ padding:"16px 10px", opacity:.7 }}>Everyone who's ever played has submitted for {year} / W{week}.</td></tr>
+              <tr><td colSpan={4} style={{ padding:"16px 10px", opacity:.7 }}>Everyone who's ever played has submitted for {year} / W{week}.</td></tr>
             )}
           </tbody>
         </table>
