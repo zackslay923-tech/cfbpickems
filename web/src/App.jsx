@@ -2884,16 +2884,6 @@ function AdminMissingPicksPage({ user, isAdmin, setPage }) {
     });
     return () => unsub();
   }, [isAdmin]);
-  const [emailDrafts, setEmailDrafts] = useState({});
-  const saveContactEmail = async (key, email) => {
-    const trimmed = (email || "").trim();
-    if (!trimmed) return;
-    try {
-      await setDoc(doc(db, "contacts", key), { email: trimmed, updatedAt: serverTimestamp() }, { merge: true });
-    } catch (err) {
-      alert("Couldn't save that email: " + (err?.message || String(err)));
-    }
-  };
   // Someone can opt out of the "Email Missing" reminder without being removed
   // from the roster - stored alongside their contact info (contacts for
   // existing players, unassignedContacts for promoted new invitees).
@@ -2907,6 +2897,38 @@ function AdminMissingPicksPage({ user, isAdmin, setPage }) {
       }
     } catch (err) {
       alert("Couldn't update opt-out status: " + (err?.message || String(err)));
+    }
+  };
+
+  // Inline edit for any roster row - name/phone/venmo/email. For real
+  // players this writes to `contacts` as an override on top of whatever
+  // their picks doc has; for promoted invitees it writes straight to their
+  // unassignedContacts doc, which is the only record of them.
+  const [editingKey, setEditingKey] = useState(null);
+  const [editDraft, setEditDraft] = useState({ name: "", phone: "", venmo: "", email: "" });
+  const startEdit = (p) => {
+    setEditingKey(p.key);
+    setEditDraft({ name: `${p.firstName || ""} ${p.lastName || ""}`.trim(), phone: p.phone || "", venmo: p.venmo || "", email: p.email || "" });
+  };
+  const cancelEdit = () => setEditingKey(null);
+  const saveEdit = async (p) => {
+    const parts = editDraft.name.trim().split(/\s+/).filter(Boolean);
+    const firstName = parts[0] || "";
+    const lastName = parts.slice(1).join(" ");
+    try {
+      if (p.key.startsWith("unassigned:")) {
+        await setDoc(doc(db, "unassignedContacts", p.key.slice("unassigned:".length)), {
+          name: editDraft.name.trim(), phone: editDraft.phone.trim(), venmo: editDraft.venmo.trim(), email: editDraft.email.trim(),
+        }, { merge: true });
+      } else {
+        await setDoc(doc(db, "contacts", p.key), {
+          firstName, lastName, phone: editDraft.phone.trim(), venmo: editDraft.venmo.trim(), email: editDraft.email.trim(),
+          updatedAt: serverTimestamp(),
+        }, { merge: true });
+      }
+      setEditingKey(null);
+    } catch (err) {
+      alert("Couldn't save changes: " + (err?.message || String(err)));
     }
   };
 
@@ -2935,7 +2957,7 @@ function AdminMissingPicksPage({ user, isAdmin, setPage }) {
   const promotedRoster = useMemo(() => {
     return Object.entries(unassigned).filter(([, v]) => v.promoted).map(([id, v]) => {
       const parts = (v.name || "").trim().split(/\s+/).filter(Boolean);
-      return { key: `unassigned:${id}`, firstName: parts[0] || v.email || id, lastName: parts.slice(1).join(" "), phone: "", venmo: "", email: v.email || id, optedOut: !!v.optedOut };
+      return { key: `unassigned:${id}`, firstName: parts[0] || v.email || id, lastName: parts.slice(1).join(" "), phone: v.phone || "", venmo: v.venmo || "", email: v.email || id, optedOut: !!v.optedOut };
     });
   }, [unassigned]);
   const [unassignedDraft, setUnassignedDraft] = useState("");
@@ -2943,7 +2965,7 @@ function AdminMissingPicksPage({ user, isAdmin, setPage }) {
 
   const addUnassignedEmails = async () => {
     const knownEmails = new Set(
-      [...data?.clusters.values() || []].map(c => (c.email || "").trim().toLowerCase()).filter(Boolean)
+      [...data?.clusters.values() || []].map(c => String(c.email || "").trim().toLowerCase()).filter(Boolean)
     );
     const emails = [...new Set(
       unassignedDraft.split(/[\s,;]+/).map(s => s.trim().toLowerCase()).filter(s => s && s.includes("@"))
@@ -2970,13 +2992,6 @@ function AdminMissingPicksPage({ user, isAdmin, setPage }) {
       alert("Couldn't add to the roster: " + (err?.message || String(err)));
     }
   };
-  const unpromoteFromRoster = async (id) => {
-    try {
-      await setDoc(doc(db, "unassignedContacts", id), { promoted: false }, { merge: true });
-    } catch (err) {
-      alert("Couldn't undo that: " + (err?.message || String(err)));
-    }
-  };
   const removeUnassigned = async (id) => {
     try { await deleteDoc(doc(db, "unassignedContacts", id)); } catch (err) { alert("Couldn't remove: " + (err?.message || String(err))); }
   };
@@ -2984,7 +2999,18 @@ function AdminMissingPicksPage({ user, isAdmin, setPage }) {
   const missing = useMemo(() => {
     const fromRoster = data ? [...data.clusters.values()]
       .filter(c => !data.submittedRoots.has(c.key))
-      .map(c => ({ ...c, email: c.email || contactOverrides[c.key]?.email || "", optedOut: !!contactOverrides[c.key]?.optedOut })) : [];
+      .map(c => {
+        const ov = contactOverrides[c.key] || {};
+        return {
+          ...c,
+          firstName: ov.firstName || c.firstName,
+          lastName: ov.lastName || c.lastName,
+          phone: ov.phone || c.phone,
+          venmo: ov.venmo || c.venmo,
+          email: ov.email || c.email || "",
+          optedOut: !!ov.optedOut,
+        };
+      }) : [];
     return [...fromRoster, ...promotedRoster]
       .sort((a, b) => (a.lastName || "").localeCompare(b.lastName || "") || (a.firstName || "").localeCompare(b.firstName || ""));
   }, [data, contactOverrides, promotedRoster]);
@@ -2993,7 +3019,7 @@ function AdminMissingPicksPage({ user, isAdmin, setPage }) {
   const totalEver = (data ? data.clusters.size : 0) + promotedRoster.length;
   const submittedCount = totalEver - missing.length;
 
-  const missingEmails = useMemo(() => [...new Set(missing.filter(p => !p.optedOut).map(p => (p.email || "").trim()).filter(Boolean))], [missing]);
+  const missingEmails = useMemo(() => [...new Set(missing.filter(p => !p.optedOut).map(p => String(p.email || "").trim()).filter(Boolean))], [missing]);
 
   const openGmailDraft = () => {
     if (missingEmails.length === 0) { alert("No email addresses on file for anyone missing."); return; }
@@ -3047,58 +3073,58 @@ function AdminMissingPicksPage({ user, isAdmin, setPage }) {
             </tr>
           </thead>
           <tbody>
-            {missing.map(p => (
-              <tr key={p.key} style={{ borderBottom:"1px solid #1f2a44" }}>
-                <td style={{ padding:"8px 10px" }}>{`${p.firstName || ""} ${p.lastName || ""}`.trim()}</td>
-                <td style={{ padding:"8px 10px", opacity: p.optedOut ? 0.5 : .9 }}>
-                  {p.email ? (
-                    <>
-                      {p.email}
-                      {p.optedOut && <span style={{ marginLeft:6, fontSize:11, color:"#f0b429" }}>(opted out)</span>}
-                    </>
-                  ) : (
-                    <div style={{ display:"flex", gap:6 }}>
-                      <input
-                        style={{ ...inputStyle, padding:"4px 8px", fontSize:12, width:160 }}
-                        type="email"
-                        placeholder="add email"
-                        value={emailDrafts[p.key] ?? ""}
-                        onChange={e => setEmailDrafts(d => ({ ...d, [p.key]: e.target.value }))}
-                        onKeyDown={e => { if (e.key === "Enter") saveContactEmail(p.key, emailDrafts[p.key]); }}
-                      />
+            {missing.map(p => {
+              const isEditing = editingKey === p.key;
+              if (isEditing) {
+                return (
+                  <tr key={p.key} style={{ borderBottom:"1px solid #1f2a44" }}>
+                    <td style={{ padding:"8px 10px" }}>
+                      <input style={{ ...inputStyle, padding:"4px 8px", fontSize:12, width:140 }} placeholder="name"
+                        value={editDraft.name} onChange={e => setEditDraft(d => ({ ...d, name: e.target.value }))} />
+                    </td>
+                    <td style={{ padding:"8px 10px" }}>
+                      <input style={{ ...inputStyle, padding:"4px 8px", fontSize:12, width:160 }} type="email" placeholder="email"
+                        value={editDraft.email} onChange={e => setEditDraft(d => ({ ...d, email: e.target.value }))} />
+                    </td>
+                    <td style={{ padding:"8px 10px" }}>
+                      <input style={{ ...inputStyle, padding:"4px 8px", fontSize:12, width:120 }} placeholder="phone"
+                        value={editDraft.phone} onChange={e => setEditDraft(d => ({ ...d, phone: e.target.value }))} />
+                    </td>
+                    <td style={{ padding:"8px 10px" }}>
+                      <input style={{ ...inputStyle, padding:"4px 8px", fontSize:12, width:120 }} placeholder="venmo"
+                        value={editDraft.venmo} onChange={e => setEditDraft(d => ({ ...d, venmo: e.target.value }))} />
+                    </td>
+                    <td style={{ padding:"8px 10px", display:"flex", gap:6 }}>
+                      <button style={{ ...adminBtn("success"), padding:"4px 8px", fontSize:12 }} onClick={() => saveEdit(p)}>Save</button>
+                      <button style={{ ...adminBtn("neutral"), padding:"4px 8px", fontSize:12 }} onClick={cancelEdit}>Cancel</button>
+                    </td>
+                  </tr>
+                );
+              }
+              return (
+                <tr key={p.key} style={{ borderBottom:"1px solid #1f2a44" }}>
+                  <td style={{ padding:"8px 10px" }}>{`${p.firstName || ""} ${p.lastName || ""}`.trim()}</td>
+                  <td style={{ padding:"8px 10px", opacity: p.optedOut ? 0.5 : .9 }}>
+                    {p.email || "—"}
+                    {p.optedOut && <span style={{ marginLeft:6, fontSize:11, color:"#f0b429" }}>(opted out)</span>}
+                  </td>
+                  <td style={{ padding:"8px 10px", opacity:.9 }}>{p.phone}</td>
+                  <td style={{ padding:"8px 10px", opacity:.9 }}>{p.venmo}</td>
+                  <td style={{ padding:"8px 10px", display:"flex", gap:6 }}>
+                    <button style={{ ...adminBtn("neutral"), padding:"4px 8px", fontSize:12 }} onClick={() => startEdit(p)}>Edit</button>
+                    {p.email && (
                       <button
-                        style={{ ...adminBtn("neutral"), padding:"4px 8px", fontSize:12 }}
-                        onClick={() => saveContactEmail(p.key, emailDrafts[p.key])}
+                        style={{ ...adminBtn(p.optedOut ? "neutral" : "warning"), padding:"4px 8px", fontSize:12 }}
+                        title={p.optedOut ? "Excluded from Email Missing — click to opt back in" : "Exclude this person from the Email Missing draft"}
+                        onClick={() => toggleOptOut(p)}
                       >
-                        Save
+                        {p.optedOut ? "Opted out" : "Opt out"}
                       </button>
-                    </div>
-                  )}
-                </td>
-                <td style={{ padding:"8px 10px", opacity:.9 }}>{p.phone}</td>
-                <td style={{ padding:"8px 10px", opacity:.9 }}>{p.venmo}</td>
-                <td style={{ padding:"8px 10px", display:"flex", gap:6 }}>
-                  {p.email && (
-                    <button
-                      style={{ ...adminBtn(p.optedOut ? "neutral" : "warning"), padding:"4px 8px", fontSize:12 }}
-                      title={p.optedOut ? "Excluded from Email Missing — click to opt back in" : "Exclude this person from the Email Missing draft"}
-                      onClick={() => toggleOptOut(p)}
-                    >
-                      {p.optedOut ? "Opted out" : "Opt out"}
-                    </button>
-                  )}
-                  {p.key.startsWith("unassigned:") && (
-                    <button
-                      style={{ ...adminBtn("neutral"), padding:"4px 8px", fontSize:12 }}
-                      title="Move back to Unassigned Emails"
-                      onClick={() => unpromoteFromRoster(p.key.slice("unassigned:".length))}
-                    >
-                      Undo
-                    </button>
-                  )}
-                </td>
-              </tr>
-            ))}
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
             {loaded && missing.length === 0 && (
               <tr><td colSpan={5} style={{ padding:"16px 10px", opacity:.7 }}>Everyone who's ever played has submitted for {year} / W{week}.</td></tr>
             )}
