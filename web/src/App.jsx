@@ -2701,6 +2701,36 @@ function AdminNotificationsPage({ user, isAdmin, setPage }) {
     }
   }
 
+  // Stale-device cleanup: dry-run every token (nothing delivered to anyone)
+  // and prune whichever ones FCM reports as no longer registered.
+  const [deviceCleanup, setDeviceCleanup] = useState(null);
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, "config", "deviceCleanup"), (s) => setDeviceCleanup(s.data() || null));
+    return () => unsub();
+  }, []);
+  const [cleaningDevices, setCleaningDevices] = useState(false);
+  async function cleanupDevicesNow() {
+    setCleaningDevices(true);
+    try {
+      await addDoc(collection(db, "deviceCleanupRequests"), { createdAt: serverTimestamp() });
+      setMsg("Checking all devices for stale registrations…");
+    } catch (e) {
+      setMsg("Failed to start cleanup: " + (e?.message || String(e)));
+      setCleaningDevices(false);
+    }
+  }
+  // The check runs server-side and reports back via config/deviceCleanup, so
+  // clear the "in progress" state once a newer run shows up.
+  const lastCleanupSeenRef = useRef(null);
+  useEffect(() => {
+    if (!deviceCleanup?.lastRunAt) return;
+    const ms = deviceCleanup.lastRunAt?.toMillis ? deviceCleanup.lastRunAt.toMillis() : 0;
+    if (ms !== lastCleanupSeenRef.current) {
+      lastCleanupSeenRef.current = ms;
+      setCleaningDevices(false);
+    }
+  }, [deviceCleanup]);
+
   const [customNotifTitle, setCustomNotifTitle] = useState("");
   const [customNotifBody, setCustomNotifBody] = useState("");
   const [sendingCustomNotif, setSendingCustomNotif] = useState(false);
@@ -2778,6 +2808,16 @@ function AdminNotificationsPage({ user, isAdmin, setPage }) {
         <p style={{ margin:"0 0 12px", fontSize:13, color:"#9aa4c7" }}>
           Every device that's enabled notifications. Devices are only labeled with a name once that browser submits picks &mdash; otherwise they show as unknown. Blocking a device stops every notification (automated and custom) from reaching it.
         </p>
+        <Row style={{ marginBottom: 12, alignItems: "center", gap: 10 }}>
+          <button style={adminBtn("neutral")} disabled={cleaningDevices} onClick={cleanupDevicesNow}>
+            {cleaningDevices ? "Checking…" : "Clean Up Devices Now"}
+          </button>
+          {deviceCleanup?.lastRunAt && (
+            <span style={{ fontSize: 12, color: "#9aa4c7" }}>
+              Last check: removed {deviceCleanup.removedCount ?? 0} of {deviceCleanup.checkedCount ?? "?"} device(s)
+            </span>
+          )}
+        </Row>
         {pushDevices.length === 0 ? (
           <div style={{ fontSize:13, color:"#9aa4c7" }}>No devices have enabled notifications yet.</div>
         ) : (

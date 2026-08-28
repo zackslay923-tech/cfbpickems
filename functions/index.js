@@ -6,6 +6,26 @@ const logger = require("firebase-functions/logger");
 const admin = require("firebase-admin");
 admin.initializeApp();
 
+// A token FCM reports as "not registered" belongs to a device that's gone
+// for good (app deleted, browser data cleared, uninstalled, etc.) - safe to
+// remove permanently. Any other error (network blip, rate limit, message too
+// large) is left alone since it says nothing about the token's validity.
+async function pruneUnregisteredTokens(tokens, responses) {
+  const dead = [];
+  responses.forEach((r, i) => {
+    if (!r.success && r.error?.code === "messaging/registration-token-not-registered") {
+      dead.push(tokens[i]);
+    }
+  });
+  if (dead.length) {
+    const batch = admin.firestore().batch();
+    dead.forEach(t => batch.delete(admin.firestore().collection("pushTokens").doc(t)));
+    await batch.commit();
+    logger.info(`pruned ${dead.length} stale device(s): ${dead.map(t => t.slice(0, 10)).join(", ")}`);
+  }
+  return dead.length;
+}
+
 // Broadcast a push notification to every registered device that isn't
 // individually blocked by an admin, optionally skipping a specific set of
 // tokens too (e.g. people who've already submitted picks - see the reminder
@@ -28,6 +48,7 @@ async function sendPush({ title, body }, { excludeTokens } = {}) {
       const batch = tokens.slice(i, i + 500);
       const res = await admin.messaging().sendEachForMulticast({ tokens: batch, notification: { title, body } });
       logger.info(`sendPush: sent "${title}" to ${res.successCount}/${batch.length} device(s)`);
+      await pruneUnregisteredTokens(batch, res.responses);
     }
   } catch (e) {
     logger.warn("sendPush failed:", e?.message || e);
@@ -52,6 +73,7 @@ async function sendPushToAdmins({ title, body }) {
       const batch = tokens.slice(i, i + 500);
       const res = await admin.messaging().sendEachForMulticast({ tokens: batch, notification: { title, body } });
       logger.info(`sendPushToAdmins: sent "${title}" to ${res.successCount}/${batch.length} admin device(s)`);
+      await pruneUnregisteredTokens(batch, res.responses);
     }
   } catch (e) {
     logger.warn("sendPushToAdmins failed:", e?.message || e);
@@ -100,12 +122,48 @@ exports.sendOutboxNotification = onDocumentCreated(
         });
         logger.info(`sendOutboxNotification: sent "${data.title}" to single device ${String(data.targetToken).slice(0, 12)}...`);
       } catch (e) {
+        if (e?.code === "messaging/registration-token-not-registered") {
+          await admin.firestore().collection("pushTokens").doc(data.targetToken).delete();
+          logger.info(`pruned 1 stale device (targeted send failed): ${String(data.targetToken).slice(0, 10)}...`);
+        }
         logger.warn("sendOutboxNotification (targeted) failed:", e?.message || e);
       }
     } else {
       await sendPush({ title: data.title, body: data.body || "" });
     }
     try { await event.data.ref.delete(); } catch (e) {}
+  }
+);
+
+// Admin taps "Clean Up Devices Now" -> writes a trigger doc here -> dry-run a
+// push to every registered token (FCM validates it without delivering
+// anything to anyone) and prune whichever ones it reports as no longer
+// registered, without waiting for a real notification to expose them.
+exports.cleanupStaleDevices = onDocumentCreated(
+  { document: "deviceCleanupRequests/{id}", region: "us-east4" },
+  async (event) => {
+    let removed = 0;
+    try {
+      const snap = await admin.firestore().collection("pushTokens").get();
+      const tokens = snap.docs.map(d => d.id);
+      for (let i = 0; i < tokens.length; i += 500) {
+        const batch = tokens.slice(i, i + 500);
+        const res = await admin.messaging().sendEachForMulticast(
+          { tokens: batch, notification: { title: "Device check", body: "" } },
+          true // dryRun - validates tokens without delivering anything
+        );
+        removed += await pruneUnregisteredTokens(batch, res.responses);
+      }
+      await admin.firestore().doc("config/deviceCleanup").set(
+        { lastRunAt: admin.firestore.FieldValue.serverTimestamp(), removedCount: removed, checkedCount: tokens.length },
+        { merge: true }
+      );
+      logger.info(`cleanupStaleDevices: removed ${removed} stale device(s) of ${tokens.length} checked`);
+    } catch (e) {
+      logger.warn("cleanupStaleDevices failed:", e?.message || e);
+    } finally {
+      try { await event.data.ref.delete(); } catch (e) {}
+    }
   }
 );
 

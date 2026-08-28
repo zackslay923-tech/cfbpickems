@@ -136,6 +136,16 @@ service cloud.firestore {
       allow update: if false;
       allow delete: if false;
     }
+
+    // Admin taps "Clean Up Devices Now" -> drops an empty trigger doc here;
+    // a Cloud Function dry-runs every registered token and removes any FCM
+    // reports as no longer valid, then deletes this doc.
+    match /deviceCleanupRequests/{id} {
+      allow read: if false;
+      allow create: if isAdmin();
+      allow update: if false;
+      allow delete: if false;
+    }
   }
 }
 
