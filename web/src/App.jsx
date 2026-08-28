@@ -764,6 +764,33 @@ async function buildFbsNameSet(apiKey, year) {
   return set;
 }
 
+// Team -> AP Top 25 rank (falls back to whatever poll CFBD does have, e.g.
+// Coaches) for a given week. Week 0 games are early enough that CFBD often
+// hasn't posted a week-0-specific poll yet, so if the requested week comes
+// back empty, this also tries week 1 (the preseason poll effectively still
+// applies to those games).
+async function buildRankMap(apiKey, year, week) {
+  const fetchOne = async (w) => {
+    const map = new Map();
+    const url = `https://api.collegefootballdata.com/rankings?year=${encodeURIComponent(year)}&week=${encodeURIComponent(w)}&seasonType=regular`;
+    const res = await fetchJson(url, { headers: { Authorization: "Bearer " + apiKey } });
+    if (!res.ok || !Array.isArray(res.data)) return map;
+    for (const entry of res.data) {
+      const polls = Array.isArray(entry.polls) ? entry.polls : [];
+      const ap = polls.find(p => /ap top ?25/i.test(p.poll || "")) || polls[0];
+      if (!ap || !Array.isArray(ap.ranks)) continue;
+      for (const r of ap.ranks) {
+        const n = norm(r.school);
+        if (n && Number.isFinite(+r.rank) && !map.has(n)) map.set(n, +r.rank);
+      }
+    }
+    return map;
+  };
+  const map = await fetchOne(week);
+  if (map.size || Number(week) !== 0) return map;
+  return fetchOne(1);
+}
+
 function getRankFromCompetitor(c) {
   const r1 = c?.curatedRank?.current;
   const r2 = c?.rank;
@@ -825,6 +852,7 @@ async function importWeek({ year, week }) {
       debug.cfbdGames = weekMatched.length;
       const fbsSet = await buildFbsNameSet(apiKey, year);
       debug.fbsTeamNames = fbsSet.size;
+      const rankMap = await buildRankMap(apiKey, year, week);
       for (const g of weekMatched) {
         const homeN = norm(g.home_team), awayN = norm(g.away_team);
         const isFbsByTeam = fbsSet.has(homeN) || fbsSet.has(awayN);
@@ -834,7 +862,7 @@ async function importWeek({ year, week }) {
         games.push({
           home: g.home_team || "", away: g.away_team || "",
           homeAbbr: null, awayAbbr: null,
-          homeRank: null, awayRank: null,
+          homeRank: rankMap.get(homeN) ?? null, awayRank: rankMap.get(awayN) ?? null,
           startTimeStr: g.start_date || "", included
         });
       }
@@ -3903,6 +3931,35 @@ function AdminPage({ user, isAdmin, setPage }) {
       setMsg("Odds sync failed: " + (e?.message || String(e)));
     }
   };
+  // Backfills homeRank/awayRank on games already imported before this fix
+  // existed - only touches those two fields (unlike "Import week", which
+  // would also reset any manual include/exclude choices).
+  const doSyncRankings = async () => {
+    setMsg("Syncing rankings...");
+    try {
+      if (!apiKey) throw new Error("CFBD API key missing - save it above first.");
+      if (!hasWeekValue(year) || !hasWeekValue(week)) throw new Error("Select a year/week first.");
+
+      const rankMap = await buildRankMap(apiKey, year, week);
+      const ourGames = await listGames({ year, week, includedOnly: false });
+
+      const batch = writeBatch(db);
+      let updated = 0;
+      for (const g of ourGames) {
+        const homeRank = rankMap.get(norm(g.home)) ?? null;
+        const awayRank = rankMap.get(norm(g.away)) ?? null;
+        if (homeRank === (g.homeRank ?? null) && awayRank === (g.awayRank ?? null)) continue;
+        batch.set(doc(db, "games", g.id), { homeRank, awayRank }, { merge: true });
+        updated++;
+      }
+      if (updated > 0) await batch.commit();
+
+      setMsg(`Synced rankings - updated ${updated} of ${ourGames.length} game(s).`);
+      setGames(await listGames({ year, week, includedOnly: false }));
+    } catch (e) {
+      setMsg("Rankings sync failed: " + (e?.message || String(e)));
+    }
+  };
   const toggle = async (g, v) => {
     await setGameIncluded(g.id, v);
     setGames(await listGames({ year, week, includedOnly: false }));
@@ -4352,6 +4409,7 @@ await setDoc(doc(db,"config","app"), { currentYear: year, currentWeek: week, upd
             <button style={adminBtn("primary")} onClick={saveKey}>Save key</button>
             <button style={adminBtn("primary")} onClick={doImport}>Import week</button>
             <button style={adminBtn("primary")} onClick={doSyncOdds} title="Pulls spreads/over-under from CFBD for the selected week - only runs when clicked, never automatically">Sync Odds (CFBD)</button>
+            <button style={adminBtn("primary")} onClick={doSyncRankings} title="Pulls AP Top 25 ranks from CFBD for the selected week's games - only runs when clicked, never automatically">Sync Rankings (CFBD)</button>
           </Row>
         </AdminSection>
 
