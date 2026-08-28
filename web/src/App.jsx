@@ -2642,20 +2642,35 @@ function AdminNotificationsPage({ user, isAdmin, setPage }) {
     }
   }
 
-  // Which devices have a picks submission on file for the current live week -
-  // a picks doc is tagged with the submitting device's push token at submit
-  // time, so this is an exact match, not a name guess.
+  // Which devices have a picks submission on file for the current live week.
+  // Prefer the exact push-token tag on the picks doc, but that's only there
+  // if notifications were already enabled *before* they submitted - most
+  // people submitted first and enabled notifications after (especially
+  // anyone who hit the pushTokens registration bug), so fall back to
+  // matching by name against who actually submitted this week.
   const [submittedTokens, setSubmittedTokens] = useState(new Set());
+  const [submittedNameKeys, setSubmittedNameKeys] = useState(new Set());
+  const deviceNameKey = (name) => {
+    const parts = (name || "").trim().split(/\s+/).filter(Boolean);
+    if (!parts.length) return null;
+    return personKey({ firstName: parts[0], lastName: parts.slice(1).join(" ") });
+  };
   useEffect(() => {
-    if (!hasWeekValue(year) || !hasWeekValue(week)) { setSubmittedTokens(new Set()); return; }
+    if (!hasWeekValue(year) || !hasWeekValue(week)) { setSubmittedTokens(new Set()); setSubmittedNameKeys(new Set()); return; }
     const unsub = onSnapshot(
       query(collection(db, "picks"), where("year", "==", Number(year)), where("week", "==", Number(week))),
       (snap) => {
-        const s = new Set();
-        snap.forEach(d => { const t = d.data()?.pushToken; if (t) s.add(t); });
-        setSubmittedTokens(s);
+        const tokens = new Set();
+        const nameKeys = new Set();
+        snap.forEach(d => {
+          const p = d.data();
+          const t = p?.pushToken; if (t) tokens.add(t);
+          const nk = personKey(p); if (nk) nameKeys.add(nk);
+        });
+        setSubmittedTokens(tokens);
+        setSubmittedNameKeys(nameKeys);
       },
-      () => setSubmittedTokens(new Set())
+      () => { setSubmittedTokens(new Set()); setSubmittedNameKeys(new Set()); }
     );
     return () => unsub();
   }, [year, week]);
@@ -2771,7 +2786,7 @@ function AdminNotificationsPage({ user, isAdmin, setPage }) {
               const blocked = d.blocked === true;
               const editing = editingDeviceToken === d.token;
               const messaging = messagingToken === d.token;
-              const submitted = submittedTokens.has(d.token);
+              const submitted = submittedTokens.has(d.token) || (d.name && submittedNameKeys.has(deviceNameKey(d.name)));
               return (
                 <div key={d.token} style={{ padding:"9px 12px", background:"#0e1730", border:"1px solid #1f2a44", borderRadius:10 }}>
                   <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:8 }}>
