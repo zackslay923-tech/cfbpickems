@@ -102,7 +102,7 @@ service cloud.firestore {
       allow get: if isAdmin();
       allow list: if isAdmin();
       allow create: if request.resource.data.token == token
-        && (request.resource.data.isAdmin != true || isAdmin());
+        && (request.resource.data.get('isAdmin', false) != true || isAdmin());
       allow update: if isAdmin()
         || (request.resource.data.token == token
             && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["name"]));
