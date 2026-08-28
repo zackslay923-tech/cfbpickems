@@ -3840,6 +3840,69 @@ function AdminPage({ user, isAdmin, setPage }) {
       setMsg(e.message || String(e));
     }
   };
+  // Pulls spreads/over-under from CFBD's /lines endpoint - manual only (no
+  // automation/cron calls this), same "click to fetch" shape as "Import
+  // week" right next to it. Stored directly on the games/{id} doc so it
+  // shows up wherever a game's other fields already do.
+  const doSyncOdds = async () => {
+    setMsg("Syncing odds...");
+    try {
+      if (!apiKey) throw new Error("CFBD API key missing - save it above first.");
+      if (!hasWeekValue(year) || !hasWeekValue(week)) throw new Error("Select a year/week first.");
+
+      const normalizeKey = (name) => {
+        if (!name) return "";
+        let s = String(name).toLowerCase();
+        s = s.replace(/\ba\s*&\s*m\b|\ba\s*and\s*m\b/gi, "a&m");
+        s = s.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, "");
+        if (s === "texasam" || s === "texasa&m") s = "texasam";
+        return s;
+      };
+      const gameIdFrom = (home, away) => `${normalizeKey(away)}__${normalizeKey(home)}`;
+
+      const ourGames = await listGames({ year, week, includedOnly: false });
+      const byKey = new Map(ourGames.map(g => [gameIdFrom(g.home, g.away), g]));
+
+      const qs = new URLSearchParams({ year: String(year), week: String(week), seasonType: "regular" });
+      const res = await fetch(`https://api.collegefootballdata.com/lines?${qs}`, {
+        headers: { Authorization: `Bearer ${apiKey}` }
+      });
+      if (!res.ok) throw new Error(`CFBD HTTP ${res.status}`);
+      const arr = await res.json();
+
+      const batch = writeBatch(db);
+      let written = 0, skippedNoMatch = 0, skippedNoLines = 0;
+      for (const g of (Array.isArray(arr) ? arr : [])) {
+        const home = g.homeTeam ?? g.home_team ?? "";
+        const away = g.awayTeam ?? g.away_team ?? "";
+        const ourGame = byKey.get(gameIdFrom(home, away));
+        if (!ourGame) { skippedNoMatch++; continue; }
+
+        const lines = Array.isArray(g.lines) ? g.lines : [];
+        if (!lines.length) { skippedNoLines++; continue; }
+        const line = lines.find(l => String(l.provider || "").toLowerCase() === "consensus") || lines[0];
+
+        batch.set(doc(db, "games", ourGame.id), {
+          spread: Number.isFinite(+line.spread) ? +line.spread : null,
+          formattedSpread: line.formattedSpread || null,
+          overUnder: Number.isFinite(+line.overUnder) ? +line.overUnder : null,
+          oddsProvider: line.provider || null,
+          oddsUpdatedAt: serverTimestamp()
+        }, { merge: true });
+        written++;
+      }
+      await batch.commit();
+
+      setMsg(
+        `Synced odds for ${written} game(s).` +
+        (skippedNoMatch ? ` ${skippedNoMatch} CFBD game(s) had no matching imported game.` : "") +
+        (skippedNoLines ? ` ${skippedNoLines} game(s) have no lines posted yet.` : "")
+      );
+      setGames(await listGames({ year, week, includedOnly: false }));
+    } catch (e) {
+      setMsg("Odds sync failed: " + (e?.message || String(e)));
+    }
+  };
   const toggle = async (g, v) => {
     await setGameIncluded(g.id, v);
     setGames(await listGames({ year, week, includedOnly: false }));
@@ -4288,6 +4351,7 @@ await setDoc(doc(db,"config","app"), { currentYear: year, currentWeek: week, upd
             </Field>
             <button style={adminBtn("primary")} onClick={saveKey}>Save key</button>
             <button style={adminBtn("primary")} onClick={doImport}>Import week</button>
+            <button style={adminBtn("primary")} onClick={doSyncOdds} title="Pulls spreads/over-under from CFBD for the selected week - only runs when clicked, never automatically">Sync Odds (CFBD)</button>
           </Row>
         </AdminSection>
 
@@ -4329,6 +4393,11 @@ await setDoc(doc(db,"config","app"), { currentYear: year, currentWeek: week, upd
         <strong style={{ display:"inline-flex", flexWrap:"wrap", justifyContent:"center", alignItems:"center", width:"100%", textAlign:"center", rowGap:"0", lineHeight: 1.24, fontWeight:700, fontSize: fitFontByLen(((teamLabelNoMascot(g.away,g.awayRank)||"").length + (teamLabelNoMascot(g.home,g.homeRank)||"").length)), gap:6 }}>
           <TeamLogo school={g.away} size={48} /> <div style={{ width:96, textAlign:"center", fontWeight:700, fontSize:13, lineHeight:1.15, whiteSpace:"normal", overflowWrap:"anywhere" }}>{teamLabelNoMascot(g.away, g.awayRank)}</div> @ <TeamLogo school={g.home} size={48} /> <div style={{ width:96, textAlign:"center", fontWeight:700, fontSize:13, lineHeight:1.15, whiteSpace:"normal", overflowWrap:"anywhere" }}>{teamLabelNoMascot(g.home, g.homeRank)}</div>
         </strong>
+        {(g.formattedSpread || g.overUnder != null) && (
+          <div style={{ marginTop:4, fontSize:11, color:"#9aa4c7", textAlign:"center" }}>
+            {g.formattedSpread || ""}{g.formattedSpread && g.overUnder != null ? " · " : ""}{g.overUnder != null ? `O/U ${g.overUnder}` : ""}
+          </div>
+        )}
       </div>
       <div style={{ display:"flex", alignItems:"center", gap:12, marginLeft:"auto" }}>
   <span style={{ whiteSpace:"nowrap", opacity: 0.8 }}>{timeLabelOnly(g,{ timeZone:"America/New_York" })}</span>
