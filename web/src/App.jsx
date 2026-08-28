@@ -285,11 +285,22 @@ function Header({ user, isAdmin, setPage }) {
           <a href="#" onClick={(e)=>{e.preventDefault(); setShowNotifModal(true);}} title="Enable notifications" aria-label="Enable notifications">🔔</a>
         )}
         {isMobile && notifState === "on" && (
-          <a href="#" onClick={(e)=>{e.preventDefault();
+          <a href="#" onClick={async (e)=>{e.preventDefault();
             let t = null; try { t = localStorage.getItem("pushToken"); } catch (err) {}
-            alert(t
-              ? `Notifications are ON for this device.\n\nDevice ID: ${t.slice(0, 24)}…\n\nShow this to Zack so he can match it in Manage Devices and label it as yours.`
-              : "Notifications appear on, but no device ID was found on this browser.");
+            if (t) {
+              alert(`Notifications are ON for this device.\n\nDevice ID: ${t.slice(0, 24)}…\n\nShow this to Zack so he can match it in Manage Devices and label it as yours.`);
+              return;
+            }
+            // No token cached - retry registration right now, out loud this
+            // time, so a real failure (unsupported browser, iOS without
+            // home-screen install, etc.) is visible instead of silently
+            // swallowed like the background self-heal attempt.
+            try {
+              const token = await enablePushNotifications({ isAdmin });
+              alert(`Fixed it! Device ID: ${token.slice(0, 24)}…\n\nShow this to Zack so he can match it in Manage Devices and label it as yours.`);
+            } catch (err) {
+              alert("Still couldn't register this device for notifications.\n\nReason: " + ((err && err.message) ? err.message : String(err)) + "\n\nIf you're on an iPhone, this usually means the app needs to be added to your home screen first (Share > Add to Home Screen), then opened from there.");
+            }
           }} title="Notifications are on — tap to see your device ID" aria-label="Notification status">🔔✅</a>
         )}
         {user && <a href="#" onClick={(e)=>{e.preventDefault(); logout();}}>Sign out</a>}
