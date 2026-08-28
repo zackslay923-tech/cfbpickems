@@ -2619,7 +2619,14 @@ function AdminNotificationsPage({ user, isAdmin, setPage }) {
     const unsub = onSnapshot(collection(db, "pushTokens"), (snap) => {
       const rows = [];
       snap.forEach(d => rows.push({ token: d.id, ...d.data() }));
-      rows.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+      rows.sort((a, b) => {
+        const byName = (a.name || "").localeCompare(b.name || "");
+        if (byName) return byName;
+        // Unnamed devices: newest first, so a recent reinstall is easy to spot.
+        const aMs = a.createdAt?.toMillis ? a.createdAt.toMillis() : 0;
+        const bMs = b.createdAt?.toMillis ? b.createdAt.toMillis() : 0;
+        return bMs - aMs;
+      });
       setPushDevices(rows);
     }, () => setPushDevices([]));
     return () => unsub();
@@ -2866,6 +2873,9 @@ function AdminNotificationsPage({ user, isAdmin, setPage }) {
                         </div>
                       )}
                       <div style={{ fontSize:11, color:"#9aa4c7", fontFamily:"monospace" }}>{d.token.slice(0, 24)}&hellip;</div>
+                      <div style={{ fontSize:11, color:"#9aa4c7" }}>
+                        {d.device ? `${d.device} · ` : ""}Registered: {d.createdAt?.toDate ? d.createdAt.toDate().toLocaleString("en-US", { month:"short", day:"numeric", hour:"numeric", minute:"2-digit" }) : "unknown"}
+                      </div>
                     </div>
                     <div style={{ display:"flex", alignItems:"center", gap:8 }}>
                       <StatusBadge tone={blocked ? "danger" : "success"}>{blocked ? "Blocked" : "Active"}</StatusBadge>

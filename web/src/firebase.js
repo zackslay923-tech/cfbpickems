@@ -32,6 +32,35 @@ export const googleLogin = () => signInWithPopup(auth, provider);
 export const logout = () => signOut(auth);
 export const onAuth = (cb) => onAuthStateChanged(auth, cb);
 
+// Rough, dependency-free "OS · Browser" label from the user agent - not
+// meant to be precise, just enough for an admin to tell devices apart in
+// Manage Devices (e.g. distinguishing two "Unknown device" rows) without
+// storing anything more identifying than that.
+function describeDevice() {
+  try {
+    const ua = navigator.userAgent || "";
+    let os = "Unknown OS";
+    if (/iPhone|iPad|iPod/.test(ua)) os = "iOS";
+    else if (/Android/.test(ua)) os = "Android";
+    else if (/Windows/.test(ua)) os = "Windows";
+    else if (/Macintosh|Mac OS X/.test(ua)) os = "Mac";
+    else if (/Linux/.test(ua)) os = "Linux";
+
+    let browser = "Unknown browser";
+    if (/Edg\//.test(ua)) browser = "Edge";
+    else if (/OPR\//.test(ua)) browser = "Opera";
+    else if (/CriOS\//.test(ua)) browser = "Chrome"; // Chrome on iOS
+    else if (/FxiOS\//.test(ua)) browser = "Firefox"; // Firefox on iOS
+    else if (/Chrome\//.test(ua)) browser = "Chrome";
+    else if (/Firefox\//.test(ua)) browser = "Firefox";
+    else if (/Safari\//.test(ua)) browser = "Safari";
+
+    return `${os} · ${browser}`;
+  } catch (e) {
+    return "Unknown device";
+  }
+}
+
 // Push notifications: request permission, register this device's token, and
 // keep listening for messages that arrive while the tab is open (background
 // messages while the tab is closed are handled by firebase-messaging-sw.js).
@@ -48,7 +77,9 @@ export async function enablePushNotifications({ isAdmin = false } = {}) {
   // Tagging isAdmin here (only when actually signed in as admin) is what lets
   // admin-only alerts (e.g. a stuck game with no recorded winner) go to just
   // this device instead of broadcasting to the whole pool.
-  await setDoc(doc(db, "pushTokens", token), { token, createdAt: serverTimestamp(), ...(isAdmin ? { isAdmin: true } : {}) }, { merge: true });
+  await setDoc(doc(db, "pushTokens", token), {
+    token, createdAt: serverTimestamp(), device: describeDevice(), ...(isAdmin ? { isAdmin: true } : {})
+  }, { merge: true });
   try { localStorage.setItem("pushToken", token); } catch (e) {}
 
   onMessage(messaging, (payload) => {
