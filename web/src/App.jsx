@@ -2638,6 +2638,16 @@ function AdminNotificationsPage({ user, isAdmin, setPage }) {
       setMsg("Failed to update device: " + (e?.message || String(e)));
     }
   }
+  // Manual override for the auto-retag (which only fires when the same
+  // device is both signed in as admin and has notifications on) - lets an
+  // admin tag their own device directly when that didn't happen on its own.
+  async function toggleDeviceAdmin(token, isAdmin) {
+    try {
+      await setDoc(doc(db, "pushTokens", token), { isAdmin }, { merge: true });
+    } catch (e) {
+      setMsg("Failed to update device: " + (e?.message || String(e)));
+    }
+  }
   // Permanent removal - for old reinstall tokens etc. that stay technically
   // valid to FCM (so the dry-run cleanup won't ever flag them) but are known
   // by a human to be dead weight.
@@ -2870,6 +2880,7 @@ function AdminNotificationsPage({ user, isAdmin, setPage }) {
                               {submitted ? "Submitted" : "Not Submitted"}
                             </StatusBadge>
                           )}
+                          {d.isAdmin === true && <StatusBadge tone="primary">Admin</StatusBadge>}
                         </div>
                       )}
                       <div style={{ fontSize:11, color:"#9aa4c7", fontFamily:"monospace" }}>{d.token.slice(0, 24)}&hellip;</div>
@@ -2882,6 +2893,11 @@ function AdminNotificationsPage({ user, isAdmin, setPage }) {
                       {!editing && !messaging && (
                         <button style={adminBtn("neutral")} onClick={() => { setEditingDeviceToken(d.token); setDeviceNameDraft(d.name || ""); }}>
                           Rename
+                        </button>
+                      )}
+                      {!editing && !messaging && (
+                        <button style={adminBtn(d.isAdmin === true ? "neutral" : "primary")} onClick={() => toggleDeviceAdmin(d.token, d.isAdmin !== true)}>
+                          {d.isAdmin === true ? "Unmark Admin" : "Mark as Admin"}
                         </button>
                       )}
                       {!editing && !messaging && (
