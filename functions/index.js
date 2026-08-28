@@ -46,7 +46,7 @@ async function sendPush({ title, body }, { excludeTokens } = {}) {
     // FCM multicast caps at 500 recipients per call
     for (let i = 0; i < tokens.length; i += 500) {
       const batch = tokens.slice(i, i + 500);
-      const res = await admin.messaging().sendEachForMulticast({ tokens: batch, notification: { title, body } });
+      const res = await admin.messaging().sendEachForMulticast({ tokens: batch, data: { title, body: body || "" } });
       logger.info(`sendPush: sent "${title}" to ${res.successCount}/${batch.length} device(s)`);
       await pruneUnregisteredTokens(batch, res.responses);
     }
@@ -71,7 +71,7 @@ async function sendPushToAdmins({ title, body }) {
     }
     for (let i = 0; i < tokens.length; i += 500) {
       const batch = tokens.slice(i, i + 500);
-      const res = await admin.messaging().sendEachForMulticast({ tokens: batch, notification: { title, body } });
+      const res = await admin.messaging().sendEachForMulticast({ tokens: batch, data: { title, body: body || "" } });
       logger.info(`sendPushToAdmins: sent "${title}" to ${res.successCount}/${batch.length} admin device(s)`);
       await pruneUnregisteredTokens(batch, res.responses);
     }
@@ -156,7 +156,7 @@ exports.sendOutboxNotification = onDocumentCreated(
       try {
         await admin.messaging().send({
           token: data.targetToken,
-          notification: { title: data.title, body: data.body || "" }
+          data: { title: data.title, body: data.body || "" }
         });
         logger.info(`sendOutboxNotification: sent "${data.title}" to single device ${String(data.targetToken).slice(0, 12)}...`);
       } catch (e) {

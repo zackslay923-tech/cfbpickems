@@ -82,8 +82,10 @@ export async function enablePushNotifications({ isAdmin = false } = {}) {
   }, { merge: true });
   try { localStorage.setItem("pushToken", token); } catch (e) {}
 
+  // Sent as a data-only message on purpose - see the matching comment in
+  // firebase-messaging-sw.js for why (avoids a duplicate notification).
   onMessage(messaging, (payload) => {
-    const { title, body } = payload.notification || {};
+    const { title, body } = payload.data || {};
     if (title) new Notification(title, { body, icon: "/icons/icon-192.png" });
   });
 

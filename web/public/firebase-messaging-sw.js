@@ -12,8 +12,13 @@ firebase.initializeApp({
 
 const messaging = firebase.messaging();
 
+// Sent as a data-only message (no top-level "notification" payload) on
+// purpose - if a message has a "notification" field, the browser's push
+// service auto-displays it *before* this handler even runs, and then this
+// handler would show a second one on top of that. Data-only means we're the
+// only thing that ever calls showNotification, so exactly one appears.
 messaging.onBackgroundMessage((payload) => {
-  const { title, body } = payload.notification || {};
+  const { title, body } = payload.data || {};
   self.registration.showNotification(title || "CFB Pick'em", {
     body: body || "",
     icon: "/icons/icon-192.png",
