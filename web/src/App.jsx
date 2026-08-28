@@ -252,6 +252,20 @@ function Header({ user, isAdmin, setPage }) {
     if (!token) return;
     setDoc(doc(db, "pushTokens", token), { isAdmin: true }, { merge: true }).catch(() => {});
   }, [isAdmin, notifState]);
+  // notifState "on" only reflects the browser's notification *permission* -
+  // it's possible to have permission granted but never actually finish
+  // registering a token (e.g. the page reloaded mid-flow, or permission was
+  // granted some other way). That leaves someone stuck: the app thinks
+  // they're done and hides the enable button, but no token was ever saved.
+  // Since permission is already granted, silently retry registration - this
+  // won't prompt the user again.
+  useEffect(() => {
+    if (notifState !== "on") return;
+    let existing = null;
+    try { existing = localStorage.getItem("pushToken"); } catch (e) {}
+    if (existing) return;
+    enablePushNotifications({ isAdmin }).catch(() => {});
+  }, [notifState, isAdmin]);
 
   return (
     <>
