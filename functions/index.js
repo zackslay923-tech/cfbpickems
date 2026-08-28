@@ -116,22 +116,28 @@ function deviceNameKey(name) {
 // notifications were already enabled *before* they submitted - most people
 // go the other order (especially anyone who hit the pushTokens registration
 // bug) - so this also matches by name against every registered device, the
-// same fallback the admin "Submitted" badge uses.
+// same fallback the admin "Submitted" badge uses. Admin devices are never
+// included here (even if the admin has personally submitted), so admins
+// keep getting every reminder tier to verify the automation is firing.
 async function getSubmittedTokensForWeek(db, year, week) {
   const [picksSnap, tokensSnap] = await Promise.all([
     db.collection("picks").where("year", "==", year).where("week", "==", week).get(),
     db.collection("pushTokens").get()
   ]);
 
+  const adminTokens = new Set();
+  tokensSnap.forEach(d => { if (d.data()?.isAdmin === true) adminTokens.add(d.id); });
+
   const tokens = new Set();
   const submittedNameKeys = new Set();
   picksSnap.forEach(d => {
     const p = d.data();
-    const t = p?.pushToken; if (t) tokens.add(t);
+    const t = p?.pushToken; if (t && !adminTokens.has(t)) tokens.add(t);
     const nk = personKey(p); if (nk) submittedNameKeys.add(nk);
   });
 
   tokensSnap.forEach(d => {
+    if (adminTokens.has(d.id)) return;
     const nk = deviceNameKey(d.data()?.name);
     if (nk && submittedNameKeys.has(nk)) tokens.add(d.id);
   });
