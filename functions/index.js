@@ -98,12 +98,44 @@ exports.subscribePushToken = onDocumentCreated(
   }
 );
 
-// Push tokens tied to a picks submission for the given week (used to skip
-// reminder notifications for people who've already submitted).
+// Same normalization the web app uses (App.jsx's personKey) - kept in sync
+// by hand since this is a separate Node module with no shared code.
+function personKey(p) {
+  const n = `${(p.firstName || "").trim().toLowerCase()}_${(p.lastName || "").trim().toLowerCase()}`;
+  return n.replace(/^_+|_+$/g, "") || null;
+}
+function deviceNameKey(name) {
+  const parts = (name || "").trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return null;
+  return personKey({ firstName: parts[0], lastName: parts.slice(1).join(" ") });
+}
+
+// Push tokens belonging to someone who's already submitted picks for the
+// given week (used to skip reminder notifications for them). Prefers the
+// exact pushToken tag on the picks doc, but that's only there if
+// notifications were already enabled *before* they submitted - most people
+// go the other order (especially anyone who hit the pushTokens registration
+// bug) - so this also matches by name against every registered device, the
+// same fallback the admin "Submitted" badge uses.
 async function getSubmittedTokensForWeek(db, year, week) {
-  const snap = await db.collection("picks").where("year", "==", year).where("week", "==", week).get();
+  const [picksSnap, tokensSnap] = await Promise.all([
+    db.collection("picks").where("year", "==", year).where("week", "==", week).get(),
+    db.collection("pushTokens").get()
+  ]);
+
   const tokens = new Set();
-  snap.forEach(d => { const t = d.data()?.pushToken; if (t) tokens.add(t); });
+  const submittedNameKeys = new Set();
+  picksSnap.forEach(d => {
+    const p = d.data();
+    const t = p?.pushToken; if (t) tokens.add(t);
+    const nk = personKey(p); if (nk) submittedNameKeys.add(nk);
+  });
+
+  tokensSnap.forEach(d => {
+    const nk = deviceNameKey(d.data()?.name);
+    if (nk && submittedNameKeys.has(nk)) tokens.add(d.id);
+  });
+
   return tokens;
 }
 
