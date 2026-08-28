@@ -2631,6 +2631,17 @@ function AdminNotificationsPage({ user, isAdmin, setPage }) {
       setMsg("Failed to update device: " + (e?.message || String(e)));
     }
   }
+  // Permanent removal - for old reinstall tokens etc. that stay technically
+  // valid to FCM (so the dry-run cleanup won't ever flag them) but are known
+  // by a human to be dead weight.
+  async function deleteDevice(token, label) {
+    if (!window.confirm(`Permanently remove ${label || "this device"}? This can't be undone.`)) return;
+    try {
+      await deleteDoc(doc(db, "pushTokens", token));
+    } catch (e) {
+      setMsg("Failed to remove device: " + (e?.message || String(e)));
+    }
+  }
   const [editingDeviceToken, setEditingDeviceToken] = useState(null);
   const [deviceNameDraft, setDeviceNameDraft] = useState("");
   async function saveDeviceName(token) {
@@ -2871,6 +2882,11 @@ function AdminNotificationsPage({ user, isAdmin, setPage }) {
                       <button style={adminBtn(blocked ? "primary" : "danger")} onClick={() => toggleDeviceBlocked(d.token, !blocked)}>
                         {blocked ? "Unblock" : "Block"}
                       </button>
+                      {!editing && !messaging && (
+                        <button style={adminBtn("danger")} title="Permanently remove this device (e.g. an old reinstall)" onClick={() => deleteDevice(d.token, d.name)}>
+                          Delete
+                        </button>
+                      )}
                     </div>
                   </div>
                   {messaging && (
