@@ -270,6 +270,14 @@ function Header({ user, isAdmin, setPage }) {
         {isMobile && notifState !== "on" && (
           <a href="#" onClick={(e)=>{e.preventDefault(); setShowNotifModal(true);}} title="Enable notifications" aria-label="Enable notifications">🔔</a>
         )}
+        {isMobile && notifState === "on" && (
+          <a href="#" onClick={(e)=>{e.preventDefault();
+            let t = null; try { t = localStorage.getItem("pushToken"); } catch (err) {}
+            alert(t
+              ? `Notifications are ON for this device.\n\nDevice ID: ${t.slice(0, 24)}…\n\nShow this to Zack so he can match it in Manage Devices and label it as yours.`
+              : "Notifications appear on, but no device ID was found on this browser.");
+          }} title="Notifications are on — tap to see your device ID" aria-label="Notification status">🔔✅</a>
+        )}
         {user && <a href="#" onClick={(e)=>{e.preventDefault(); logout();}}>Sign out</a>}
       </nav>
     </div>
