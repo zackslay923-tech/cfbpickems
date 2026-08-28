@@ -297,7 +297,7 @@ function Header({ user, isAdmin, setPage }) {
             // swallowed like the background self-heal attempt.
             try {
               const token = await enablePushNotifications({ isAdmin });
-              alert(`Fixed it! Device ID: ${token.slice(0, 24)}…\n\nShow this to Zack so he can match it in Manage Devices and label it as yours.`);
+              alert(`Notifications are ON for this device.\n\nDevice ID: ${token.slice(0, 24)}…\n\nShow this to Zack so he can match it in Manage Devices and label it as yours.`);
             } catch (err) {
               alert("Still couldn't register this device for notifications.\n\nReason: " + ((err && err.message) ? err.message : String(err)) + "\n\nIf you're on an iPhone, this usually means the app needs to be added to your home screen first (Share > Add to Home Screen), then opened from there.");
             }
