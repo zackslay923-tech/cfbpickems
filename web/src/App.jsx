@@ -2562,9 +2562,9 @@ function AdminNotificationsPage({ user, isAdmin, setPage }) {
     const unsub = onSnapshot(doc(db, "config", "app"), (s) => {
       const d = s.data() || {};
       const def = {
-        reminder2dEnabled: true, reminderMorningEnabled: true, reminder2hEnabled: true,
+        reminder2dEnabled: true, reminder1dEnabled: true, reminderMorningEnabled: true, reminder2hEnabled: true,
         reminderEnabled: true, kickoffEnabled: true, resultsEnabled: true,
-        reminder2dSentWeekKey: null, reminderMorningSentWeekKey: null, reminder2hSentWeekKey: null,
+        reminder2dSentWeekKey: null, reminder1dSentWeekKey: null, reminderMorningSentWeekKey: null, reminder2hSentWeekKey: null,
         reminderSentWeekKey: null, kickoffSentWeekKey: null, resultsSentWeekKey: null
       };
       setNotifCfg({ ...def, ...(d.notifications || {}) });
@@ -2596,6 +2596,16 @@ function AdminNotificationsPage({ user, isAdmin, setPage }) {
       await setDoc(doc(db, "pushTokens", token), { blocked }, { merge: true });
     } catch (e) {
       setMsg("Failed to update device: " + (e?.message || String(e)));
+    }
+  }
+  const [editingDeviceToken, setEditingDeviceToken] = useState(null);
+  const [deviceNameDraft, setDeviceNameDraft] = useState("");
+  async function saveDeviceName(token) {
+    try {
+      await setDoc(doc(db, "pushTokens", token), { name: deviceNameDraft.trim() }, { merge: true });
+      setEditingDeviceToken(null);
+    } catch (e) {
+      setMsg("Failed to rename device: " + (e?.message || String(e)));
     }
   }
 
@@ -2639,6 +2649,7 @@ function AdminNotificationsPage({ user, isAdmin, setPage }) {
           const notif = notifCfg || {};
           const rows = [
             { key: "reminder2dEnabled", sentField: "reminder2dSentWeekKey", label: "2-day reminder", desc: "Sent ~2 days before the week's first game" },
+            { key: "reminder1dEnabled", sentField: "reminder1dSentWeekKey", label: "1-day reminder", desc: "Sent ~1 day (24 hours) before the week's first game" },
             { key: "reminderMorningEnabled", sentField: "reminderMorningSentWeekKey", label: "Game day morning reminder", desc: "Sent at 9:00 AM ET the day of the first game" },
             { key: "reminder2hEnabled", sentField: "reminder2hSentWeekKey", label: "2-hour reminder", desc: "Sent ~2 hours before the week's first game" },
             { key: "reminderEnabled", sentField: "reminderSentWeekKey", label: "1-hour reminder", desc: "Sent ~1 hour before the week's first game" },
@@ -2681,14 +2692,35 @@ function AdminNotificationsPage({ user, isAdmin, setPage }) {
           <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
             {pushDevices.map(d => {
               const blocked = d.blocked === true;
+              const editing = editingDeviceToken === d.token;
               return (
                 <div key={d.token} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:8, padding:"9px 12px", background:"#0e1730", border:"1px solid #1f2a44", borderRadius:10 }}>
                   <div>
-                    <div style={{ fontWeight:600, fontSize:14 }}>{d.name || "Unknown device"}</div>
+                    {editing ? (
+                      <div style={{ display:"flex", gap:6 }}>
+                        <input
+                          style={{ ...inputStyle, padding:"4px 8px", fontSize:13, width:180 }}
+                          placeholder="who's this?"
+                          value={deviceNameDraft}
+                          onChange={e => setDeviceNameDraft(e.target.value)}
+                          onKeyDown={e => { if (e.key === "Enter") saveDeviceName(d.token); }}
+                          autoFocus
+                        />
+                        <button style={{ ...adminBtn("success"), padding:"4px 8px", fontSize:12 }} onClick={() => saveDeviceName(d.token)}>Save</button>
+                        <button style={{ ...adminBtn("neutral"), padding:"4px 8px", fontSize:12 }} onClick={() => setEditingDeviceToken(null)}>Cancel</button>
+                      </div>
+                    ) : (
+                      <div style={{ fontWeight:600, fontSize:14 }}>{d.name || "Unknown device"}</div>
+                    )}
                     <div style={{ fontSize:11, color:"#9aa4c7", fontFamily:"monospace" }}>{d.token.slice(0, 24)}&hellip;</div>
                   </div>
                   <div style={{ display:"flex", alignItems:"center", gap:8 }}>
                     <StatusBadge tone={blocked ? "danger" : "success"}>{blocked ? "Blocked" : "Active"}</StatusBadge>
+                    {!editing && (
+                      <button style={adminBtn("neutral")} onClick={() => { setEditingDeviceToken(d.token); setDeviceNameDraft(d.name || ""); }}>
+                        Rename
+                      </button>
+                    )}
                     <button style={adminBtn(blocked ? "primary" : "danger")} onClick={() => toggleDeviceBlocked(d.token, !blocked)}>
                       {blocked ? "Unblock" : "Block"}
                     </button>

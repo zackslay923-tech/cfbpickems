@@ -424,6 +424,12 @@ async function maybeSendReminders(db) {
     shouldFire: ({ minsUntil }) => minsUntil <= 2880 && minsUntil > 0
   });
   await maybeSendReminderTier(db, {
+    enabledField: "reminder1dEnabled", sentField: "reminder1dSentWeekKey",
+    title: "📅 Games are 1 day away",
+    body: (g) => `${g.away} @ ${g.home} kicks off in about 24 hours - get your picks in when you're ready.`,
+    shouldFire: ({ minsUntil }) => minsUntil <= 1440 && minsUntil > 0
+  });
+  await maybeSendReminderTier(db, {
     enabledField: "reminderMorningEnabled", sentField: "reminderMorningSentWeekKey",
     title: (g, kickoffMs) => `⏰ Picks are due today at ${etTimeLabel(kickoffMs)}`,
     body: (g) => `${g.away} @ ${g.home} kicks off then - get your picks in.`,
