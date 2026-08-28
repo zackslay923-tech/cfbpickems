@@ -131,7 +131,8 @@ service cloud.firestore {
       allow read: if false;
       allow create: if isAdmin()
         && request.resource.data.title is string
-        && request.resource.data.body is string;
+        && request.resource.data.body is string
+        && (!('targetToken' in request.resource.data) || request.resource.data.targetToken is string);
       allow update: if false;
       allow delete: if false;
     }

@@ -2642,6 +2642,50 @@ function AdminNotificationsPage({ user, isAdmin, setPage }) {
     }
   }
 
+  // Which devices have a picks submission on file for the current live week -
+  // a picks doc is tagged with the submitting device's push token at submit
+  // time, so this is an exact match, not a name guess.
+  const [submittedTokens, setSubmittedTokens] = useState(new Set());
+  useEffect(() => {
+    if (!hasWeekValue(year) || !hasWeekValue(week)) { setSubmittedTokens(new Set()); return; }
+    const unsub = onSnapshot(
+      query(collection(db, "picks"), where("year", "==", Number(year)), where("week", "==", Number(week))),
+      (snap) => {
+        const s = new Set();
+        snap.forEach(d => { const t = d.data()?.pushToken; if (t) s.add(t); });
+        setSubmittedTokens(s);
+      },
+      () => setSubmittedTokens(new Set())
+    );
+    return () => unsub();
+  }, [year, week]);
+
+  // Per-device targeted notification (vs. the broadcast "Send a Notification"
+  // below) - same notificationOutbox trigger, but tagged with a targetToken
+  // so the Cloud Function delivers to just that one device.
+  const [messagingToken, setMessagingToken] = useState(null);
+  const [messageTitleDraft, setMessageTitleDraft] = useState("");
+  const [messageBodyDraft, setMessageBodyDraft] = useState("");
+  const [sendingMessage, setSendingMessage] = useState(false);
+  async function sendTargetedMessage(token) {
+    const title = messageTitleDraft.trim();
+    if (!title) { setMsg("Enter a title before sending."); return; }
+    setSendingMessage(true);
+    try {
+      await addDoc(collection(db, "notificationOutbox"), {
+        title, body: messageBodyDraft.trim(), targetToken: token, createdAt: serverTimestamp()
+      });
+      setMsg("Notification sent to that device.");
+      setMessagingToken(null);
+      setMessageTitleDraft("");
+      setMessageBodyDraft("");
+    } catch (e) {
+      setMsg("Failed to send: " + (e?.message || String(e)));
+    } finally {
+      setSendingMessage(false);
+    }
+  }
+
   const [customNotifTitle, setCustomNotifTitle] = useState("");
   const [customNotifBody, setCustomNotifBody] = useState("");
   const [sendingCustomNotif, setSendingCustomNotif] = useState(false);
@@ -2726,38 +2770,77 @@ function AdminNotificationsPage({ user, isAdmin, setPage }) {
             {pushDevices.map(d => {
               const blocked = d.blocked === true;
               const editing = editingDeviceToken === d.token;
+              const messaging = messagingToken === d.token;
+              const submitted = submittedTokens.has(d.token);
               return (
-                <div key={d.token} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:8, padding:"9px 12px", background:"#0e1730", border:"1px solid #1f2a44", borderRadius:10 }}>
-                  <div>
-                    {editing ? (
-                      <div style={{ display:"flex", gap:6 }}>
-                        <input
-                          style={{ ...inputStyle, padding:"4px 8px", fontSize:13, width:180 }}
-                          placeholder="who's this?"
-                          value={deviceNameDraft}
-                          onChange={e => setDeviceNameDraft(e.target.value)}
-                          onKeyDown={e => { if (e.key === "Enter") saveDeviceName(d.token); }}
-                          autoFocus
-                        />
-                        <button style={{ ...adminBtn("success"), padding:"4px 8px", fontSize:12 }} onClick={() => saveDeviceName(d.token)}>Save</button>
-                        <button style={{ ...adminBtn("neutral"), padding:"4px 8px", fontSize:12 }} onClick={() => setEditingDeviceToken(null)}>Cancel</button>
-                      </div>
-                    ) : (
-                      <div style={{ fontWeight:600, fontSize:14 }}>{d.name || "Unknown device"}</div>
-                    )}
-                    <div style={{ fontSize:11, color:"#9aa4c7", fontFamily:"monospace" }}>{d.token.slice(0, 24)}&hellip;</div>
-                  </div>
-                  <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-                    <StatusBadge tone={blocked ? "danger" : "success"}>{blocked ? "Blocked" : "Active"}</StatusBadge>
-                    {!editing && (
-                      <button style={adminBtn("neutral")} onClick={() => { setEditingDeviceToken(d.token); setDeviceNameDraft(d.name || ""); }}>
-                        Rename
+                <div key={d.token} style={{ padding:"9px 12px", background:"#0e1730", border:"1px solid #1f2a44", borderRadius:10 }}>
+                  <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:8 }}>
+                    <div>
+                      {editing ? (
+                        <div style={{ display:"flex", gap:6 }}>
+                          <input
+                            style={{ ...inputStyle, padding:"4px 8px", fontSize:13, width:180 }}
+                            placeholder="who's this?"
+                            value={deviceNameDraft}
+                            onChange={e => setDeviceNameDraft(e.target.value)}
+                            onKeyDown={e => { if (e.key === "Enter") saveDeviceName(d.token); }}
+                            autoFocus
+                          />
+                          <button style={{ ...adminBtn("success"), padding:"4px 8px", fontSize:12 }} onClick={() => saveDeviceName(d.token)}>Save</button>
+                          <button style={{ ...adminBtn("neutral"), padding:"4px 8px", fontSize:12 }} onClick={() => setEditingDeviceToken(null)}>Cancel</button>
+                        </div>
+                      ) : (
+                        <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                          <div style={{ fontWeight:600, fontSize:14 }}>{d.name || "Unknown device"}</div>
+                          {d.name && (
+                            <StatusBadge tone={submitted ? "success" : "warning"}>
+                              {submitted ? "Submitted" : "Not Submitted"}
+                            </StatusBadge>
+                          )}
+                        </div>
+                      )}
+                      <div style={{ fontSize:11, color:"#9aa4c7", fontFamily:"monospace" }}>{d.token.slice(0, 24)}&hellip;</div>
+                    </div>
+                    <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                      <StatusBadge tone={blocked ? "danger" : "success"}>{blocked ? "Blocked" : "Active"}</StatusBadge>
+                      {!editing && !messaging && (
+                        <button style={adminBtn("neutral")} onClick={() => { setEditingDeviceToken(d.token); setDeviceNameDraft(d.name || ""); }}>
+                          Rename
+                        </button>
+                      )}
+                      {!editing && !messaging && (
+                        <button style={adminBtn("primary")} onClick={() => { setMessagingToken(d.token); setMessageTitleDraft(""); setMessageBodyDraft(""); }}>
+                          Message
+                        </button>
+                      )}
+                      <button style={adminBtn(blocked ? "primary" : "danger")} onClick={() => toggleDeviceBlocked(d.token, !blocked)}>
+                        {blocked ? "Unblock" : "Block"}
                       </button>
-                    )}
-                    <button style={adminBtn(blocked ? "primary" : "danger")} onClick={() => toggleDeviceBlocked(d.token, !blocked)}>
-                      {blocked ? "Unblock" : "Block"}
-                    </button>
+                    </div>
                   </div>
+                  {messaging && (
+                    <div style={{ marginTop:10, paddingTop:10, borderTop:"1px solid #1f2a44", display:"flex", flexDirection:"column", gap:8 }}>
+                      <input
+                        style={inputStyle}
+                        placeholder="Title"
+                        value={messageTitleDraft}
+                        onChange={e => setMessageTitleDraft(e.target.value)}
+                        autoFocus
+                      />
+                      <input
+                        style={inputStyle}
+                        placeholder="Message (optional)"
+                        value={messageBodyDraft}
+                        onChange={e => setMessageBodyDraft(e.target.value)}
+                      />
+                      <Row>
+                        <button style={adminBtn("primary")} disabled={sendingMessage} onClick={() => sendTargetedMessage(d.token)}>
+                          {sendingMessage ? "Sending…" : `Send to ${d.name || "this device"}`}
+                        </button>
+                        <button style={adminBtn("neutral")} onClick={() => setMessagingToken(null)}>Cancel</button>
+                      </Row>
+                    </div>
+                  )}
                 </div>
               );
             })}

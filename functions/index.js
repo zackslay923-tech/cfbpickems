@@ -85,14 +85,26 @@ async function getSubmittedTokensForWeek(db, year, week) {
   return tokens;
 }
 
-// Admin drops a {title, body} doc in notificationOutbox -> broadcast it, then
-// clean up the doc.
+// Admin drops a {title, body} doc in notificationOutbox -> broadcast it (or,
+// if targetToken is set, deliver to just that one device), then clean up.
 exports.sendOutboxNotification = onDocumentCreated(
   { document: "notificationOutbox/{id}", region: "us-east4" },
   async (event) => {
     const data = event.data?.data() || {};
     if (!data.title) return;
-    await sendPush({ title: data.title, body: data.body || "" });
+    if (data.targetToken) {
+      try {
+        await admin.messaging().send({
+          token: data.targetToken,
+          notification: { title: data.title, body: data.body || "" }
+        });
+        logger.info(`sendOutboxNotification: sent "${data.title}" to single device ${String(data.targetToken).slice(0, 12)}...`);
+      } catch (e) {
+        logger.warn("sendOutboxNotification (targeted) failed:", e?.message || e);
+      }
+    } else {
+      await sendPush({ title: data.title, body: data.body || "" });
+    }
     try { await event.data.ref.delete(); } catch (e) {}
   }
 );
