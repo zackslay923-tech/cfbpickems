@@ -777,10 +777,31 @@ exports.publishLiveMap = onSchedule(
       const mapObj = normalizeScoreboardItems(json);
       await recordCfbdResult(db, true);
 
-      // Lightweight dedupe using a short hash of the payload
-      const hash = JSON.stringify(mapObj).slice(0, 2048); // cheap hash proxy
       const ref = db.doc("config/liveMap");
       const prev = await ref.get();
+      const prevMap = prev.exists ? (prev.get("map") || {}) : {};
+
+      // Guard against a bad clock reading: CFBD's feed occasionally reports
+      // a stale/glitched clock that's HIGHER than what we last saw for the
+      // same game in the same period - impossible for a real countdown,
+      // since the clock only ever counts down within a period. When that
+      // happens, hold the previous clock/period instead of letting the
+      // displayed time jump backward, until a sane reading comes in.
+      for (const key of Object.keys(mapObj)) {
+        const cur = mapObj[key];
+        const prior = prevMap[key];
+        if (!prior || cur.status !== "in_progress" || prior.period !== cur.period) continue;
+        const curSecs = clockToSeconds(cur.clock);
+        const priorSecs = clockToSeconds(prior.clock);
+        if (curSecs !== null && priorSecs !== null && curSecs > priorSecs) {
+          logger.warn(`Discarding implausible clock for ${key}: ${cur.clock} > previous ${prior.clock} in same period`);
+          cur.clock = prior.clock;
+          cur.period = prior.period;
+        }
+      }
+
+      // Lightweight dedupe using a short hash of the payload
+      const hash = JSON.stringify(mapObj).slice(0, 2048); // cheap hash proxy
       const prevHash = prev.exists ? (prev.get("hash") || "") : "";
 
       // Only rewrite the (larger) map+hash when the data actually changed,
