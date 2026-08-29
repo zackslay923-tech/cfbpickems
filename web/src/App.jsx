@@ -2933,7 +2933,7 @@ function AdminNotificationsPage({ user, isAdmin, setPage }) {
                         <StatusBadge tone={blocked ? "danger" : "success"}>{blocked ? "Blocked" : "Active"}</StatusBadge>
                       </div>
                       {!editing && !messaging && (
-                        <button style={adminBtn("neutral", deviceBtnHalf)} onClick={() => { setEditingDeviceToken(d.token); setDeviceNameDraft(d.name || ""); }}>
+                        <button style={adminBtn("success", deviceBtnHalf)} onClick={() => { setEditingDeviceToken(d.token); setDeviceNameDraft(d.name || ""); }}>
                           Rename
                         </button>
                       )}
