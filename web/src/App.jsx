@@ -2610,6 +2610,7 @@ const kickoffLabel = (g, opts = {}) => {
 const isKickoffTbd = (g) => !kickoffDate(g);
 
 function AdminNotificationsPage({ user, isAdmin, setPage }) {
+  const isMobile = useIsMobile();
   const [msg, setMsg] = useState("");
   const [live, setLive] = useState({ year: null, week: null });
   useEffect(() => {
@@ -2916,7 +2917,7 @@ function AdminNotificationsPage({ user, isAdmin, setPage }) {
                         {d.device ? `${d.device} · ` : ""}Registered: {d.createdAt?.toDate ? d.createdAt.toDate().toLocaleString("en-US", { month:"short", day:"numeric", hour:"numeric", minute:"2-digit" }) : "unknown"}
                       </div>
                     </div>
-                    <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                    <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
                       <StatusBadge tone={blocked ? "danger" : "success"}>{blocked ? "Blocked" : "Active"}</StatusBadge>
                       {!editing && !messaging && (
                         <button style={adminBtn("neutral")} onClick={() => { setEditingDeviceToken(d.token); setDeviceNameDraft(d.name || ""); }}>
@@ -3687,6 +3688,7 @@ function MySeasonPage({ user, isAdmin, setPage }) {
 }
 
 function AdminPage({ user, isAdmin, setPage }) {
+  const isMobile = useIsMobile();
   const [live, setLive] = useState({ year: null, week: null });
   const [year, setYear] = useState(null);
   const [week, setWeek] = useState(null);
@@ -4401,8 +4403,8 @@ await setDoc(doc(db,"config","app"), { currentYear: year, currentWeek: week, upd
         <AdminSection title="Schedule Import" tone="primary">
           <Row>
             <Field label="CFBD API key (stored admin-only in Firestore)">
-              <div style={{ display:"flex", gap:8 }}>
-                <input style={{...inputStyle, width:"24rem"}} type={showApiKey ? "text" : "password"} autoComplete="off" value={apiKey} onChange={e=>setApiKey(e.target.value)} placeholder="Bearer key from collegefootballdata.com"/>
+              <div style={{ display:"flex", gap:8, flexWrap: isMobile ? "wrap" : "nowrap" }}>
+                <input style={{...inputStyle, width: isMobile ? "100%" : "24rem"}} type={showApiKey ? "text" : "password"} autoComplete="off" value={apiKey} onChange={e=>setApiKey(e.target.value)} placeholder="Bearer key from collegefootballdata.com"/>
                 <button type="button" style={adminBtn("neutral", { padding:"9px 12px" })} onClick={()=>setShowApiKey(v=>!v)}>{showApiKey ? "Hide" : "Show"}</button>
               </div>
             </Field>
@@ -4438,7 +4440,8 @@ await setDoc(doc(db,"config","app"), { currentYear: year, currentWeek: week, upd
       onClick={(e)=>toggle(g, !g.included)}
       onKeyDown={(e)=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); toggle(g, !g.included);} }}
       style={{
-        display:"flex", alignItems:"center", gap:12, flexWrap:"nowrap",
+        display:"flex", flexDirection: isMobile ? "column" : "row", alignItems: isMobile ? "stretch" : "center",
+        gap:12, flexWrap: isMobile ? "wrap" : "nowrap",
         border: g.included ? "1px solid #2ecc71" : "1px dashed #1f2a44",
         padding:12, borderRadius:12, margin:"10px auto",
         maxWidth: 1200, width:"100%", cursor:"pointer",
@@ -4447,7 +4450,7 @@ await setDoc(doc(db,"config","app"), { currentYear: year, currentWeek: week, upd
         transition:"box-shadow 120ms ease, background 120ms ease, border-color 120ms ease"
       }}
     >
-      <div style={{ marginBottom: 16, textAlign:"left", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis", minWidth:0 }}>
+      <div style={{ marginBottom: 16, textAlign:"left", whiteSpace: isMobile ? "normal" : "nowrap", overflow: isMobile ? "visible" : "hidden", textOverflow: isMobile ? "clip" : "ellipsis", minWidth:0, width: isMobile ? "100%" : undefined }}>
         <strong style={{ display:"inline-flex", flexWrap:"wrap", justifyContent:"center", alignItems:"center", width:"100%", textAlign:"center", rowGap:"0", lineHeight: 1.24, fontWeight:700, fontSize: fitFontByLen(((teamLabelNoMascot(g.away,g.awayRank)||"").length + (teamLabelNoMascot(g.home,g.homeRank)||"").length)), gap:6 }}>
           <TeamLogo school={g.away} size={48} /> <div style={{ width:96, textAlign:"center", fontWeight:700, fontSize:13, lineHeight:1.15, whiteSpace:"normal", overflowWrap:"anywhere" }}>{teamLabelNoMascot(g.away, g.awayRank)}</div> @ <TeamLogo school={g.home} size={48} /> <div style={{ width:96, textAlign:"center", fontWeight:700, fontSize:13, lineHeight:1.15, whiteSpace:"normal", overflowWrap:"anywhere" }}>{teamLabelNoMascot(g.home, g.homeRank)}</div>
         </strong>
@@ -4457,7 +4460,7 @@ await setDoc(doc(db,"config","app"), { currentYear: year, currentWeek: week, upd
           </div>
         )}
       </div>
-      <div style={{ display:"flex", alignItems:"center", gap:12, marginLeft:"auto" }}>
+      <div style={{ display:"flex", alignItems:"center", gap:12, marginLeft: isMobile ? 0 : "auto", width: isMobile ? "100%" : undefined, justifyContent: isMobile ? "space-between" : "flex-start", flexWrap: isMobile ? "wrap" : "nowrap" }}>
   <span style={{ whiteSpace:"nowrap", opacity: 0.8 }}>{timeLabelOnly(g,{ timeZone:"America/New_York" })}</span>
     <button
     type="button"
