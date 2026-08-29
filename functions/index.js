@@ -219,6 +219,27 @@ function toKey(away, home) {
   return `${norm(away)}__${norm(home)}`;
 }
 
+// Look up a game in the live map by team names. Our own games collection
+// stores short team names ("TCU"), while CFBD's /scoreboard endpoint
+// returns full names with mascots ("TCU Horned Frogs") - an exact toKey()
+// match between the two can never succeed, which silently broke
+// autoLockAtKickoff and autoWriteWinners for every game (confirmed: a
+// completed game's winner never got auto-written because this exact-match
+// lookup always missed). Falls back to finding a live-map key that
+// contains both normalized names as substrings, the same fallback the
+// client already uses for the same reason.
+function findLiveGame(mapObj, away, home) {
+  const exact = mapObj[toKey(away, home)];
+  if (exact) return exact;
+
+  const awayKey = norm(away), homeKey = norm(home);
+  if (!awayKey || !homeKey) return null;
+  for (const key of Object.keys(mapObj)) {
+    if (key.includes(awayKey) && key.includes(homeKey)) return mapObj[key];
+  }
+  return null;
+}
+
 function isFinalStatus(status) {
   const s = String(status || "").toLowerCase();
   return s === "final" || s === "completed" || s === "postgame";
@@ -381,7 +402,7 @@ async function autoWriteWinners(db, mapObj) {
   games.forEach((g, i) => {
     if (existing[i].exists && existing[i].data()?.winner) return; // already recorded
 
-    const liveGame = mapObj[toKey(g.away, g.home)];
+    const liveGame = findLiveGame(mapObj, g.away, g.home);
     if (!liveGame || !isFinalStatus(liveGame.status)) return;
 
     const hp = Number.isFinite(liveGame.homePoints) ? liveGame.homePoints : null;
@@ -445,7 +466,7 @@ async function autoLockAtKickoff(db, mapObj) {
   games.sort((a, b) => new Date(a.startTimeStr) - new Date(b.startTimeStr));
   const firstGame = games[0];
 
-  if (!hasGameStarted(mapObj[toKey(firstGame.away, firstGame.home)])) return;
+  if (!hasGameStarted(findLiveGame(mapObj, firstGame.away, firstGame.home))) return;
 
   const appSnap = await db.doc("config/app").get();
   const app = appSnap.exists ? appSnap.data() : {};
