@@ -319,15 +319,20 @@ function todayET() {
   return fmt.format(new Date());
 }
 
-// Get current ET time as "HH:MM" (24h)
+// Get current ET time as "HH:MM" (24h). hourCycle: "h23" is used instead of
+// hour12: false - on some ICU builds the latter reports midnight as "24:00"
+// instead of "00:00", which silently inflated every minutes-since-midnight
+// check by a full day (this is what caused the game-day-morning reminder,
+// gated on nowTimeET() >= 9:00 AM, to fire right at midnight instead).
 function nowTimeET() {
-  const fmt = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour12: false, hour: "2-digit", minute: "2-digit" });
+  const fmt = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hourCycle: "h23", hour: "2-digit", minute: "2-digit" });
   return fmt.format(new Date());
 }
 
 function toMinutes(hhmm) {
-  const [h, m] = String(hhmm || "0:0").split(":").map(Number);
-  return (h || 0) * 60 + (m || 0);
+  let [h, m] = String(hhmm || "0:0").split(":").map(Number);
+  h = (h || 0) % 24; // defensive: never let a stray "24" leak through as +1 day
+  return h * 60 + (m || 0);
 }
 
 // Supports windows that wrap past midnight (e.g. "12:00" -> "02:00")
