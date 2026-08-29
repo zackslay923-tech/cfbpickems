@@ -1632,6 +1632,7 @@ if (typeof window !== "undefined") window.history.pushState(null, "", "/confirm"
 
 // -------- LEADERBOARD (sticky first two columns, logos in headers + winners row) --------
 function LeaderboardPage({ user, isAdmin, setPage }) {  // DEV: CFBD diagnostics — verify token retrieval/log (no CFBD API calls)
+  const isMobile = useIsMobile();
   useEffect(() => { if (!isAdmin) return; if (import.meta && import.meta.env && import.meta.env.DEV) {
       getCfbdKey()
         .then(k => console.debug("[cfbd:diag] token present:", !!k))
@@ -2177,7 +2178,14 @@ useEffect(() => {
     ))}
   </select>
 </Field>
-          
+        </Row>
+        {isMobile && (
+          <div style={{ fontSize:11, color:"#9aa4c7", margin:"6px 2px 0", textAlign:"center" }}>
+            &harr; Swipe the table to see more games
+          </div>
+        )}
+        <Row style={{ justifyContent:"space-between", alignItems:"flex-end" }}>
+
 
                     <div style={{ order:1, flex:1 }} /><div id="lbTopScroll" style={{  overflowX:"auto", height:10, marginBottom:0, width:"100%"  }} onMouseEnter={(e) => { const b = document.getElementById("lbGrid"); const s = document.getElementById("lbTopSpacer"); if (b && s) { const w = b.scrollWidth; if (s.style.width !== (w + "px")) s.style.width = (w + "px"); } }} onScroll={(e) => {
        const b = document.getElementById('lbGrid');
@@ -2195,8 +2203,11 @@ useEffect(() => {
      }}>
 {isAdmin && (
   <div className="scoreboard-admin-strip" /* SCOREBOARD ADMIN STRIP v1 */
-       style={{ display:"flex", gap:12, alignItems:"center", fontSize:12, margin:"8px 0",
-                padding:"6px 10px", borderRadius:8, background:"rgba(16,20,28,.6)", color:"#fff" }}>
+       style={{ display:"flex", gap:12, alignItems:"center", flexWrap:"wrap", fontSize:12, margin:"8px 0",
+                padding:"6px 10px", borderRadius:8, background:"rgba(16,20,28,.6)", color:"#fff",
+                /* Pinned to the left edge (like the Name/Score columns below) so it stays
+                   visible instead of scrolling away with the game columns on mobile. */
+                position:"sticky", left:0, width:"max-content", maxWidth:"100%" }}>
 <button
   onClick={async (e) => {
     e.preventDefault();
@@ -2358,7 +2369,7 @@ useEffect(() => {
     if (weekday !== "Saturday") return `${weekday} Night Games`;
     const time = fmtTime.format(d);
     if (time === "12:00 PM") return "Noon Games";
-    return `${time} Kickoff`;
+    return isMobile ? time : `${time} Kickoff`;
   };
 
   // Build spans across ALL games; insert a standalone cell wherever GameDay appears
