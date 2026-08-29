@@ -2333,8 +2333,8 @@ useEffect(() => {
           <table style={{ tableLayout:"auto", borderCollapse:"separate", borderSpacing:0, width:"max-content", minWidth:"auto" }}>
             <thead>
               <tr>
-                <th style={{ ...headerCell, ...sticky1(), padding:"1px 4px", fontSize:11, lineHeight:1, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}></th>
-                <th style={{ ...headerCell, ...sticky2(), padding:"1px 4px", fontSize:11, lineHeight:1, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}></th>
+                <th rowSpan={2} style={{ ...headerCell, ...sticky1(), padding:"1px 4px", fontSize:11, lineHeight:1, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis", verticalAlign:"middle" }}>Name</th>
+                <th rowSpan={2} style={{ ...headerCell, ...sticky2(), padding:"1px 4px", fontSize:11, lineHeight:1, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis", verticalAlign:"middle" }}>Pts</th>
                 {(() => {
   const tz = "America/New_York";
   const fmtDay = new Intl.DateTimeFormat("en-US",{ weekday:"long", timeZone: tz });
@@ -2410,8 +2410,6 @@ while (i < seq.length) {
 })()}
               </tr>
               <tr>
-                <th style={{ ...headerCell, ...sticky1() }}></th>
-                <th style={{ ...headerCell, ...sticky2() }}></th>
                 {displayGames.map(g => (
 
                   <th key={g.id} data-game-id={g.id} style={{ ...headerCell, textAlign: "center" }}><div style={{ display:"block", width:"100%", textAlign:"center", lineHeight: 1.24 }}>
