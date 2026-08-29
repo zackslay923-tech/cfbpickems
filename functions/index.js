@@ -230,9 +230,21 @@ function normalizeScoreboardItems(items) {
   if (!Array.isArray(items)) return mapObj;
 
   for (const it of items) {
-    const home = it?.homeTeam || it?.home_team || "";
-    const away = it?.awayTeam || it?.away_team || "";
+    // CFBD's /scoreboard nests team info as objects ({name, points, ...}),
+    // not flat strings like /games uses (home_team/away_team). norm()
+    // silently returns "" for a non-string, so treating homeTeam/awayTeam
+    // as if they were always strings collapsed every single game onto the
+    // same "__" key here, overwriting all but the last one in the response -
+    // meaning live tracking (kickoff detection, auto-winners) never actually
+    // saw real per-game data. Handle both shapes.
+    const homeRaw = it?.homeTeam ?? it?.home_team;
+    const awayRaw = it?.awayTeam ?? it?.away_team;
+    const home = typeof homeRaw === "string" ? homeRaw : (homeRaw?.name || "");
+    const away = typeof awayRaw === "string" ? awayRaw : (awayRaw?.name || "");
     if (!home || !away) continue;
+
+    const homePointsNested = (homeRaw && typeof homeRaw === "object") ? homeRaw.points : undefined;
+    const awayPointsNested = (awayRaw && typeof awayRaw === "object") ? awayRaw.points : undefined;
 
     const key = toKey(away, home);
     mapObj[key] = {
@@ -244,10 +256,12 @@ function normalizeScoreboardItems(items) {
               : (typeof it?.quarter === "number") ? it.quarter
               : null,
       clock: it?.clock ?? it?.timeRemaining ?? null,
-      homePoints: Number.isFinite(it?.homePoints) ? it.homePoints
+      homePoints: Number.isFinite(homePointsNested) ? homePointsNested
+                 : Number.isFinite(it?.homePoints) ? it.homePoints
                  : Number.isFinite(it?.home_points) ? it.home_points
                  : null,
-      awayPoints: Number.isFinite(it?.awayPoints) ? it.awayPoints
+      awayPoints: Number.isFinite(awayPointsNested) ? awayPointsNested
+                 : Number.isFinite(it?.awayPoints) ? it.awayPoints
                  : Number.isFinite(it?.away_points) ? it.away_points
                  : null,
       possession: (it?.possession === "home" || it?.possession === "away") ? it.possession : null,
