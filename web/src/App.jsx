@@ -450,7 +450,8 @@ const ADMIN_TONES = {
   neutral: { bg: "transparent", border: "#2a3655", text: "#cfd8f0", dot: "#8ea0c9" },
   success: { bg: "#1a6b46", border: "#238a5c", text: "#fff", dot: "#3ecf8e" },
   warning: { bg: "#8a5d12", border: "#a8791d", text: "#fff", dot: "#f0b429" },
-  danger:  { bg: "#7a2530", border: "#9c303d", text: "#fff", dot: "#f0596b" }
+  danger:  { bg: "#7a2530", border: "#9c303d", text: "#fff", dot: "#f0596b" },
+  purple:  { bg: "#5b2a8a", border: "#7440ab", text: "#fff", dot: "#b48aef" }
 };
 // Only ever used on admin pages, so it's safe to shrink buttons directly off
 // the current viewport width - no isMobile plumbing needed at 56 call sites,
@@ -2938,7 +2939,7 @@ function AdminNotificationsPage({ user, isAdmin, setPage }) {
                         </button>
                       )}
                       {!editing && !messaging && (
-                        <button style={adminBtn(d.isAdmin === true ? "neutral" : "primary", deviceBtnHalf)} onClick={() => toggleDeviceAdmin(d.token, d.isAdmin !== true)}>
+                        <button style={adminBtn(d.isAdmin === true ? "neutral" : "purple", deviceBtnHalf)} onClick={() => toggleDeviceAdmin(d.token, d.isAdmin !== true)}>
                           {d.isAdmin === true ? "Unmark Admin" : "Mark as Admin"}
                         </button>
                       )}
