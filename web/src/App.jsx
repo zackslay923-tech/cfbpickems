@@ -2335,10 +2335,10 @@ useEffect(() => {
               <tr>
                 <th rowSpan={showScorebug ? 3 : 2} colSpan={2} style={{ ...headerCell, ...sticky1(), width: NAME_COL_W + POINTS_COL_W, minWidth: NAME_COL_W + POINTS_COL_W, padding:"1px 4px", fontSize:11, lineHeight:1, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis", verticalAlign:"middle" }}>
                   {(!potHidden || isAdmin) && (<>
-                    <div style={{ fontSize:"0.8rem", fontWeight:600 }}>
+                    <div style={{ fontSize:"0.95rem", fontWeight:600 }}>
                       This Week&apos;s Pot{potHidden ? " (hidden)" : ""}:
                     </div>
-                    <div style={{ fontSize:"1.15rem", fontWeight:800, lineHeight:1.3 }}>
+                    <div style={{ fontSize:"1.4rem", fontWeight:800, lineHeight:1.3 }}>
                       ${pot.toLocaleString()} 💰
                     </div>
                   </>)}
