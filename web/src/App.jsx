@@ -1510,6 +1510,20 @@ if (typeof window !== "undefined") window.history.pushState(null, "", "/confirm"
   }} />
   <span>{picksLocked ? "Submissions CLOSED" : "Submissions OPEN"}</span>
 </div>
+{picksLocked && (
+  <button
+    type="button"
+    onClick={() => { window.history.pushState(null, "", "/leader"); setPage("leader"); }}
+    style={{
+      display: "block", width: "100%", marginTop: 8, marginBottom: 10,
+      padding: "12px 16px", borderRadius: 10, border: "none",
+      background: "#2a4fb8", color: "#fff", fontWeight: 700, fontSize: 14,
+      cursor: "pointer"
+    }}
+  >
+    Click Leaderboard to see Live Scores
+  </button>
+)}
 <form onSubmit={onSubmitPicks} style={{ marginTop: 12 }}>
           <Row style={{ marginBottom: 14 }}>
   <Field label="First name"><input style={inputStyle} name="firstName" value={form.firstName} onChange={e=>setForm({...form, firstName:e.target.value})} onBlur={autofillFromHistory} required/></Field>
