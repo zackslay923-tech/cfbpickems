@@ -2333,8 +2333,16 @@ useEffect(() => {
           <table style={{ tableLayout:"auto", borderCollapse:"separate", borderSpacing:0, width:"max-content", minWidth:"auto" }}>
             <thead>
               <tr>
-                <th rowSpan={2} style={{ ...headerCell, ...sticky1(), padding:"1px 4px", fontSize:11, lineHeight:1, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis", verticalAlign:"middle" }}>Name</th>
-                <th rowSpan={2} style={{ ...headerCell, ...sticky2(), padding:"1px 4px", fontSize:11, lineHeight:1, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis", verticalAlign:"middle" }}>Pts</th>
+                <th rowSpan={2} colSpan={2} style={{ ...headerCell, ...sticky1(), width: NAME_COL_W + POINTS_COL_W, minWidth: NAME_COL_W + POINTS_COL_W, padding:"1px 4px", fontSize:11, lineHeight:1, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis", verticalAlign:"middle" }}>
+                  {(!potHidden || isAdmin) && (<>
+                    <div style={{ fontSize:"0.8rem", fontWeight:600 }}>
+                      This Week&apos;s Pot{potHidden ? " (hidden)" : ""}:
+                    </div>
+                    <div style={{ fontSize:"1.15rem", fontWeight:800, lineHeight:1.3 }}>
+                      ${pot.toLocaleString()} 💰
+                    </div>
+                  </>)}
+                </th>
                 {(() => {
   const tz = "America/New_York";
   const fmtDay = new Intl.DateTimeFormat("en-US",{ weekday:"long", timeZone: tz });
@@ -2436,15 +2444,7 @@ while (i < seq.length) {
               </tr>
 {showScorebug && (
   <tr className="scorebug-row"> {/* SCOREBUG ROW v1 (disabled by flag) */}
-    <td style={{ ...cell, ...sticky1() }}>
-  {(!potHidden || isAdmin) && (<>
-    <div style={{ fontSize:"0.95rem", fontWeight:600 }}>
-      This Week&apos;s Pot{potHidden ? " (hidden)" : ""}:
-    </div>
-    <div style={{ fontSize:"1.5rem", fontWeight:800, lineHeight:1 }}>
-      ${pot.toLocaleString()} 💰</div>
-  </>)}
-</td>
+    <td style={{ ...cell, ...sticky1() }} />
     <td style={{ ...cell, ...sticky2({ textAlign: "center", fontWeight: 600 }) }} />
     {displayGames.map(g => (
       <td key={"sb-" + g.id} style={{ ...cell, textAlign: "center" }}>
