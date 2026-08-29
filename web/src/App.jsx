@@ -2444,8 +2444,7 @@ while (i < seq.length) {
               </tr>
 {showScorebug && (
   <tr className="scorebug-row"> {/* SCOREBUG ROW v1 (disabled by flag) */}
-    <td style={{ ...cell, ...sticky1() }} />
-    <td style={{ ...cell, ...sticky2({ textAlign: "center", fontWeight: 600 }) }} />
+    <td colSpan={2} style={{ ...cell, ...sticky1(), width: NAME_COL_W + POINTS_COL_W, minWidth: NAME_COL_W + POINTS_COL_W }} />
     {displayGames.map(g => (
       <td key={"sb-" + g.id} style={{ ...cell, textAlign: "center" }}>
         <Scorebug
