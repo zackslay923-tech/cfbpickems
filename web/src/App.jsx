@@ -1719,7 +1719,7 @@ token: cfbdTok,
     .toLowerCase()
     .normalize("NFD").replace(/\p{Diacritic}/gu, "")
     .replace(/[^a-z0-9]/g, "");
-  const { map: sbMap, lastUpdatedEt: sbUpdated, isPaused: sbPaused, refresh: sbRefresh } = useScoreboard(sbOpts);
+  const { map: sbMap, isPaused: sbPaused, refresh: sbRefresh } = useScoreboard(sbOpts);
 
   const [publicSbMap, setPublicSbMap] = useState(new Map());
   // Last time config/liveMap was written (by the CFBD cron or an admin's
@@ -2212,90 +2212,8 @@ useEffect(() => {
                 /* Pinned to the left edge (like the Name/Score columns below) so it stays
                    visible instead of scrolling away with the game columns on mobile. */
                 position:"sticky", left:0, width:"max-content", maxWidth:"100%" }}>
-<button
-  onClick={async (e) => {
-    e.preventDefault();
-    try {
-      const { setDoc, doc, serverTimestamp, getDoc, writeBatch } = await import("firebase/firestore");
-      const appSnap = await getDoc(doc(db,"config","app"));
-      const appData = appSnap.exists() ? appSnap.data() : {};
-      let y = appData?.currentYear;
-      let w = appData?.currentWeek;
-      const tok = cfbdTok;
-      // --- prompt override so the button respects the week you choose ---
-      try {
-        const defStr = (y && w) ? `${y}-W${w}` : "";
-        const resp = prompt("Write Winners (CFBD) for which Year-Week? (use YYYY-W#)", defStr);
-        if (!resp) return;
-        const m = resp.match(/^(\d{4})\s*-\s*W\s*(\d{1,2})$/i);
-        if (!m) { alert("Invalid format. Use YYYY-W# (e.g., 2025-W2)."); return; }
-        y = Number(m[1]);
-        w = Number(m[2]);
-      } catch {}
-
-      if (!tok) { alert("CFBD token missing (config/cfbd)."); return; }
-      if (!hasWeekValue(y) || !hasWeekValue(w)) { alert("currentYear/currentWeek missing (config/app)."); return; }
-
-      const normalizeKey = (name) => {
-        if (!name) return "";
-        let s = String(name).toLowerCase();
-        s = s.replace(/\ba\s*&\s*m\b|\ba\s*and\s*m\b/gi, "a&m");
-        s = s.normalize("NFKD").replace(/[\u0300-\u036f]/g,"").replace(/[^a-z0-9]/g,"");
-        if (s === "texasam" || s === "texasa&m") s = "texasam";
-        return s;
-      };
-      const gameIdFrom = (home, away) => `${normalizeKey(away)}__${normalizeKey(home)}`;
-
-      // Write directly to results/{gameId} (the same schema "Set Winner" and the
-      // server-side auto-writer use) instead of a separate weekly-bulk doc, so
-      // there's a single results schema going forward.
-      const ourGames = await listGames({ year: y, week: w, includedOnly: false });
-      const byKey = new Map(ourGames.map(g => [gameIdFrom(g.home, g.away), g]));
-
-      const qs = new URLSearchParams({ year: String(y), week: String(w), seasonType: "regular", division: "fbs" });
-      const url = `https://api.collegefootballdata.com/games?${qs}`;
-      const res = await fetch(url, { headers: { Authorization: `Bearer ${tok}` } });
-      if (!res.ok) throw new Error(`CFBD HTTP ${res.status}`);
-      const arr = await res.json();
-
-      const batch = writeBatch(db);
-      let written = 0, skippedNoMatch = 0, skippedIncomplete = 0;
-      for (const g of (Array.isArray(arr) ? arr : [])) {
-        const home = g.home_team ?? g.homeTeam ?? g.home ?? "";
-        const away = g.away_team ?? g.awayTeam ?? g.away ?? "";
-        const hp = Number.isFinite(+g.home_points) ? +g.home_points : (Number.isFinite(+g.homePoints) ? +g.homePoints : null);
-        const ap = Number.isFinite(+g.away_points) ? +g.away_points : (Number.isFinite(+g.awayPoints) ? +g.awayPoints : null);
-        if (hp == null || ap == null || hp === ap) { skippedIncomplete++; continue; }
-
-        const ourGame = byKey.get(gameIdFrom(home, away));
-        if (!ourGame) { skippedNoMatch++; continue; }
-
-        const winner = hp > ap ? ourGame.home : ourGame.away;
-        batch.set(doc(db, "results", ourGame.id), {
-          winner, totalPoints: hp + ap,
-          updatedAt: serverTimestamp(),
-          source: "cfbd-manual"
-        }, { merge: true });
-        written++;
-      }
-      await batch.commit();
-
-      alert(`Winners written for ${written} game(s) in week ${w}, ${y}.` +
-        (skippedNoMatch ? ` (${skippedNoMatch} CFBD game(s) had no matching imported game.)` : "") +
-        (skippedIncomplete ? ` (${skippedIncomplete} not yet final or tied.)` : ""));
-    } catch (err) {
-      console.error("[Write Winners (CFBD)] failed", err);
-      alert("Write failed: " + (err?.message || err));
-    }
-  }}
-  style={{ padding:"4px 8px", borderRadius:6, border:"1px solid rgba(255,255,255,.2)", background:"transparent", color:"#fff", cursor:"pointer", marginLeft:6 }}
->
-  Write Winners (CFBD)
-</button>
     <span style={{opacity:.8}}>Scoreboard:</span>
     <strong>{(() => { const m = String(sbSource||"none").toLowerCase(); return m === "fixture" ? "Demo" : m === "cfbd" ? "Live" : "Off"; })()}</strong>
-    <span style={{opacity:.8}}>Last updated:</span>
-    <span>{sbUpdated || "—"}</span>
     <span style={{opacity:.8}}>Status:</span>
     <span>{(sbSource === "none" ? "Paused" : (sbPaused ? "Paused" : "Running"))}</span>
     <span style={{opacity:.8, marginLeft:12}}>Live Scores:</span>
