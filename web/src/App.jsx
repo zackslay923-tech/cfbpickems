@@ -2948,7 +2948,7 @@ function AdminNotificationsPage({ user, isAdmin, setPage }) {
                           Message
                         </button>
                       )}
-                      <button style={adminBtn(blocked ? "primary" : "danger", deviceBtnHalf)} onClick={() => toggleDeviceBlocked(d.token, !blocked)}>
+                      <button style={adminBtn(blocked ? "primary" : "warning", deviceBtnHalf)} onClick={() => toggleDeviceBlocked(d.token, !blocked)}>
                         {blocked ? "Unblock" : "Block"}
                       </button>
                       {!editing && !messaging && (
