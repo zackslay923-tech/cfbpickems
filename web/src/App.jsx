@@ -138,7 +138,7 @@ function Card({ children, style }) {
     borderRadius: 16, padding: 16, boxShadow: "0 10px 24px rgba(0,0,0,.25)"
   , ...style}}>{children}</div>;
 }
-function Container({ children, maxWidth = 720 }) { return <div style={{ maxWidth: maxWidth, margin: "0 auto", padding: 24 }}>{children}</div>; }
+function Container({ children, maxWidth = 720, padding = 24 }) { return <div style={{ maxWidth: maxWidth, margin: "0 auto", padding }}>{children}</div>; }
 function Header({ user, isAdmin, setPage }) {
   const isMobile = useIsMobile();
   const onIOS = isIOSDevice();
@@ -452,22 +452,28 @@ const ADMIN_TONES = {
   warning: { bg: "#8a5d12", border: "#a8791d", text: "#fff", dot: "#f0b429" },
   danger:  { bg: "#7a2530", border: "#9c303d", text: "#fff", dot: "#f0596b" }
 };
+// Only ever used on admin pages, so it's safe to shrink buttons directly off
+// the current viewport width - no isMobile plumbing needed at 56 call sites,
+// and it stays correct on resize since every admin page already re-renders
+// on the breakpoint via its own useIsMobile() call.
 function adminBtn(variant = "neutral", extra = {}) {
   const t = ADMIN_TONES[variant] || ADMIN_TONES.neutral;
+  const compact = typeof window !== "undefined" && window.innerWidth < 768;
   return {
     background: t.bg, border: `1px solid ${t.border}`, color: t.text,
-    padding: "9px 14px", borderRadius: 10, fontSize: 14, fontWeight: 600,
+    padding: compact ? "6px 10px" : "9px 14px", borderRadius: 10, fontSize: compact ? 12.5 : 14, fontWeight: 600,
     cursor: "pointer", ...extra
   };
 }
 function AdminSection({ title, tone = "neutral", right, children }) {
+  const isMobile = useIsMobile();
   const dot = (ADMIN_TONES[tone] || ADMIN_TONES.neutral).dot;
   return (
-    <div style={{ background:"#0e1730", border:"1px solid #1f2a44", borderRadius:14, padding:"16px 18px", marginTop:16 }}>
-      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:12, flexWrap:"wrap", gap:8 }}>
+    <div style={{ background:"#0e1730", border:"1px solid #1f2a44", borderRadius:14, padding: isMobile ? "10px 12px" : "16px 18px", marginTop: isMobile ? 10 : 16 }}>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom: isMobile ? 8 : 12, flexWrap:"wrap", gap: isMobile ? 6 : 8 }}>
         <div style={{ display:"flex", alignItems:"center", gap:8 }}>
           <span style={{ width:8, height:8, borderRadius:"50%", background:dot, display:"inline-block" }} />
-          <h3 style={{ margin:0, fontSize:15, letterSpacing:.3, color:"#eef2ff" }}>{title}</h3>
+          <h3 style={{ margin:0, fontSize: isMobile ? 13.5 : 15, letterSpacing:.3, color:"#eef2ff" }}>{title}</h3>
         </div>
         {right}
       </div>
@@ -2808,9 +2814,9 @@ function AdminNotificationsPage({ user, isAdmin, setPage }) {
     }
   }
 
-  return (<Container maxWidth={1200}>
+  return (<Container maxWidth={1200} padding={isMobile ? 12 : 24}>
     <Header user={user} isAdmin={isAdmin} setPage={setPage} />
-    <Card style={{ maxWidth: 1200 }}>
+    <Card style={{ maxWidth: 1200, padding: isMobile ? 12 : 16 }}>
       <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:10 }}>
         <h2 style={{ margin:0 }}>Notifications</h2>
         <button style={adminBtn("neutral")} onClick={() => { window.history.pushState(null, "", "/admin"); setPage("admin"); }}>&larr; Back to Admin</button>
@@ -3009,6 +3015,7 @@ function AdminNotificationsPage({ user, isAdmin, setPage }) {
 const ENTRY_FEE = 5;
 
 function AdminPaymentsPage({ user, isAdmin, setPage }) {
+  const isMobile = useIsMobile();
   const [live, setLive] = useState({ year: null, week: null });
   useEffect(() => {
     const unsub = onSnapshot(doc(db, "config", "live"), (s) => setLive(s.data() || {}));
@@ -3057,9 +3064,9 @@ function AdminPaymentsPage({ user, isAdmin, setPage }) {
     }
   }
 
-  return (<Container maxWidth={900}>
+  return (<Container maxWidth={900} padding={isMobile ? 12 : 24}>
     <Header user={user} isAdmin={isAdmin} setPage={setPage} />
-    <Card style={{ maxWidth: 900 }}>
+    <Card style={{ maxWidth: 900, padding: isMobile ? 12 : 16 }}>
       <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:10 }}>
         <h2 style={{ margin:0 }}>Payment Tracking</h2>
         <button style={adminBtn("neutral")} onClick={() => { window.history.pushState(null, "", "/admin"); setPage("admin"); }}>&larr; Back to Admin</button>
@@ -3145,6 +3152,7 @@ function makeDSU() {
 }
 
 function AdminMissingPicksPage({ user, isAdmin, setPage }) {
+  const isMobile = useIsMobile();
   const [live, setLive] = useState({ year: null, week: null });
   useEffect(() => {
     const unsub = onSnapshot(doc(db, "config", "live"), (s) => setLive(s.data() || {}));
@@ -3369,9 +3377,9 @@ function AdminMissingPicksPage({ user, isAdmin, setPage }) {
     window.open(url, "_blank", "noopener,noreferrer");
   };
 
-  return (<Container maxWidth={900}>
+  return (<Container maxWidth={900} padding={isMobile ? 12 : 24}>
     <Header user={user} isAdmin={isAdmin} setPage={setPage} />
-    <Card style={{ maxWidth: 900 }}>
+    <Card style={{ maxWidth: 900, padding: isMobile ? 12 : 16 }}>
       <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:10 }}>
         <h2 style={{ margin:0 }}>Who Hasn't Submitted</h2>
         <button style={adminBtn("neutral")} onClick={() => { window.history.pushState(null, "", "/admin"); setPage("admin"); }}>&larr; Back to Admin</button>
@@ -4214,9 +4222,9 @@ Type "home" or "away".`,
   };
 
   if (year == null || week == null) { return (<Container maxWidth={720}><Header user={user} isAdmin={isAdmin} setPage={setPage} /><Card><p>Loading live week&hellip;</p></Card></Container>); }
-  return (<Container maxWidth={720}>
+  return (<Container maxWidth={720} padding={isMobile ? 12 : 24}>
       <Header user={user} isAdmin={isAdmin} setPage={setPage} />
-      <Card style={{ maxWidth: 1200 }}>
+      <Card style={{ maxWidth: 1200, padding: isMobile ? 12 : 16 }}>
         <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:10 }}>
           <h2 style={{ margin:0 }}>Admin</h2>
           <Row style={{ gap:8 }}>
@@ -4642,7 +4650,7 @@ const normVenmo = (s) => String(s||"").trim().toLowerCase().replace(/^@+/, "");c
 
   return (
     <Container maxWidth={720}>
-      <Card style={{ maxWidth: 900 }}>
+      <Card style={{ maxWidth: 900, padding: isMobile ? 12 : 16 }}>
         <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:10 }}>
           <h2 style={{ margin:0 }}>Confirm Your Picks — Week {pending.week}</h2>
           <div style={{ display:"flex", alignItems:"center", gap:8, background:"#0e1730", border:"1px solid #1f2a44", borderRadius:999, padding:"6px 14px" }}>
@@ -4766,7 +4774,7 @@ function ReceiptPage({ setPage }) {
 
   return (
     <Container maxWidth={720}>
-      <Card style={{ maxWidth: 900 }}>
+      <Card style={{ maxWidth: 900, padding: isMobile ? 12 : 16 }}>
         <div style={{ display:"flex", alignItems:"center", gap:10 }}>
           <span style={{ fontSize:28 }}>✅</span>
           <h2 style={{ margin:0 }}>Picks Submitted — Week {receipt.week}</h2>
