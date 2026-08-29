@@ -2333,7 +2333,7 @@ useEffect(() => {
           <table style={{ tableLayout:"auto", borderCollapse:"separate", borderSpacing:0, width:"max-content", minWidth:"auto" }}>
             <thead>
               <tr>
-                <th rowSpan={2} colSpan={2} style={{ ...headerCell, ...sticky1(), width: NAME_COL_W + POINTS_COL_W, minWidth: NAME_COL_W + POINTS_COL_W, padding:"1px 4px", fontSize:11, lineHeight:1, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis", verticalAlign:"middle" }}>
+                <th rowSpan={showScorebug ? 3 : 2} colSpan={2} style={{ ...headerCell, ...sticky1(), width: NAME_COL_W + POINTS_COL_W, minWidth: NAME_COL_W + POINTS_COL_W, padding:"1px 4px", fontSize:11, lineHeight:1, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis", verticalAlign:"middle" }}>
                   {(!potHidden || isAdmin) && (<>
                     <div style={{ fontSize:"0.8rem", fontWeight:600 }}>
                       This Week&apos;s Pot{potHidden ? " (hidden)" : ""}:
@@ -2444,7 +2444,6 @@ while (i < seq.length) {
               </tr>
 {showScorebug && (
   <tr className="scorebug-row"> {/* SCOREBUG ROW v1 (disabled by flag) */}
-    <td colSpan={2} style={{ ...cell, ...sticky1(), width: NAME_COL_W + POINTS_COL_W, minWidth: NAME_COL_W + POINTS_COL_W }} />
     {displayGames.map(g => (
       <td key={"sb-" + g.id} style={{ ...cell, textAlign: "center" }}>
         <Scorebug
