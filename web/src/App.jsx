@@ -2337,20 +2337,15 @@ useEffect(() => {
           <table style={{ tableLayout:"auto", borderCollapse:"separate", borderSpacing:0, width:"max-content", minWidth:"auto" }}>
             <thead>
               <tr>
-                <th rowSpan={showScorebug ? 3 : 2} colSpan={2} style={{ ...headerCell, ...sticky1(), width: NAME_COL_W + POINTS_COL_W, minWidth: NAME_COL_W + POINTS_COL_W, padding:"1px 4px", fontSize:11, lineHeight:1, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis", verticalAlign:"middle" }}>
-                  <div style={{ fontSize:"0.65rem", fontWeight:600, color:"#9aa4c7", marginBottom:4 }}>
-                    Last updated: {(sbSource === "cfbd" && liveUpdatedAt)
+                <th rowSpan={2} colSpan={2} style={{ ...headerCell, ...sticky1(), width: NAME_COL_W + POINTS_COL_W, minWidth: NAME_COL_W + POINTS_COL_W, padding:"10px 10px", fontSize:11, lineHeight:1, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis", verticalAlign:"middle" }}>
+                  <div style={{ fontSize:"0.95rem", fontWeight:600, color:"#9aa4c7" }}>
+                    Last updated:
+                  </div>
+                  <div style={{ fontSize:"1.3rem", fontWeight:800, color:"#cfd8f0" }}>
+                    {(sbSource === "cfbd" && liveUpdatedAt)
                       ? new Intl.DateTimeFormat("en-US", { hour:"numeric", minute:"2-digit", hour12:true, timeZone:"America/New_York" }).format(new Date(liveUpdatedAt))
                       : "—"}
                   </div>
-                  {(!potHidden || isAdmin) && (<>
-                    <div style={{ fontSize:"0.95rem", fontWeight:600 }}>
-                      This Week&apos;s Pot{potHidden ? " (hidden)" : ""}:
-                    </div>
-                    <div style={{ fontSize:"1.4rem", fontWeight:800, lineHeight:1.3 }}>
-                      ${pot.toLocaleString()} 💰
-                    </div>
-                  </>)}
                 </th>
                 {(() => {
   const tz = "America/New_York";
@@ -2453,6 +2448,16 @@ while (i < seq.length) {
               </tr>
 {showScorebug && (
   <tr className="scorebug-row"> {/* SCOREBUG ROW v1 (disabled by flag) */}
+    <td colSpan={2} style={{ ...cell, ...sticky1(), width: NAME_COL_W + POINTS_COL_W, minWidth: NAME_COL_W + POINTS_COL_W, padding:"10px 10px" }}>
+      {(!potHidden || isAdmin) && (<>
+        <div style={{ fontSize:"1.1rem", fontWeight:600 }}>
+          This Week&apos;s Pot{potHidden ? " (hidden)" : ""}:
+        </div>
+        <div style={{ fontSize:"1.9rem", fontWeight:800, lineHeight:1.3 }}>
+          ${pot.toLocaleString()} 💰
+        </div>
+      </>)}
+    </td>
     {displayGames.map(g => (
       <td key={"sb-" + g.id} style={{ ...cell, textAlign: "center" }}>
         <Scorebug
