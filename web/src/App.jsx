@@ -1746,7 +1746,13 @@ useEffect(() => {
 // schedule instead of racing whichever admin happens to have this page open.
   const scoreMap = sbMap;
 
-  // Public liveMap (read-only): used when user is NOT admin
+  // Public liveMap (read-only): used when user is NOT admin. Reads the same
+  // config/liveMap.map the server cron writes every ~1 minute - this used to
+  // read a separate "items" field that only an admin's own open tab ever
+  // populated, so non-admins only saw live scores when an admin happened to
+  // be viewing the page. Reading the server's map directly removes that
+  // dependency, and its keys already match the away__home format the
+  // Scorebug lookup below expects, so no conversion is needed.
   const [publicLiveMap, setPublicLiveMap] = React.useState(null);
 
   React.useEffect(() => {
@@ -1755,10 +1761,10 @@ useEffect(() => {
       const ref = doc(db, "config", "liveMap");
       const unsub = onSnapshot(ref, (snap) => {
         const data = snap.data?.() ?? snap.data();
-        const items = Array.isArray(data?.items) ? data.items : [];
-        const m = new Map(items.map(it => [it.key ?? `${it.awayTeam}_at_${it.homeTeam}`, it]));
+        const obj = (data && data.map) ? data.map : {};
+        const m = new Map(Object.entries(obj));
         setPublicLiveMap(m);
-        if (import.meta?.env?.DEV) console.debug("[liveMap] received items:", items.length); try { window._liveMap = m; window._uiScoreMap = m; } catch {}
+        if (import.meta?.env?.DEV) console.debug("[liveMap] received items:", m.size); try { window._liveMap = m; window._uiScoreMap = m; } catch {}
         // Expose for quick console checks
         try { window._liveMap = m; } catch {}
       });
@@ -1792,29 +1798,10 @@ useEffect(() => {
   } catch {}
 }, [isAdmin, sbSource, sbMap, publicLiveMap, publicSbMap, uiScoreMap]);
 
-  // Publish minimal, public-friendly live map for the Leaderboard
-  useEffect(() => { try {
-      const items = [];
-      for (const [key, v] of (sbMap ? Array.from(sbMap.entries()) : [])) {
-        items.push({ key, awayTeam: v?.awayTeam ?? v?.away ?? null,
-          homeTeam: v?.homeTeam ?? v?.home ?? null,
-          status: v?.status ?? null,
-          period: Number.isFinite(+v?.period) ? +v.period : null,
-          clock: typeof v?.clock === "string" ? v.clock : null,
-          awayPoints: Number.isFinite(+v?.awayPoints) ? +v.awayPoints : null,
-          homePoints: Number.isFinite(+v?.homePoints) ? +v.homePoints : null,
-          possession: (v?.possession === "home" || v?.possession === "away") ? v.possession : null,
-          startTime: v?.startTime ?? null,
-        });
-      }
-      if (items.length > 0) {
-        setDoc(doc(db, "config", "liveMap"), { items, updatedAt: Date.now() }, { merge: true });
-        if (import.meta?.env?.DEV) console.debug("[liveMap] published items:", items.length);
-      }
-    } catch (e) {
-      if (import.meta?.env?.DEV) console.warn("[liveMap] publish failed", e);
-    }
-  }, [isAdmin, sbMap]);
+  // Non-admins now read config/liveMap.map directly (see the publicLiveMap
+  // effect above), which the server cron keeps fresh on its own - so there's
+  // no need for an admin's browser to separately republish its own poll
+  // results here anymore.
   // Instant fetch when ready (one-shot): as soon as source is "cfbd" and token exists
   const __sbInstantOnce = useRef(false);
   useEffect(() => {
