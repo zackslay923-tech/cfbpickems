@@ -481,13 +481,14 @@ function AdminSection({ title, tone = "neutral", right, children }) {
     </div>
   );
 }
-function StatusBadge({ tone = "neutral", children }) {
+function StatusBadge({ tone = "neutral", children, style }) {
   const t = ADMIN_TONES[tone] || ADMIN_TONES.neutral;
   return (
     <span style={{
       display:"inline-flex", alignItems:"center", fontSize:12, fontWeight:600,
       padding:"3px 10px", borderRadius:999, whiteSpace:"nowrap",
-      background: `${t.dot}22`, color: t.dot, border: `1px solid ${t.dot}55`
+      background: `${t.dot}22`, color: t.dot, border: `1px solid ${t.dot}55`,
+      ...style
     }}>
       {children}
     </span>
@@ -2617,6 +2618,10 @@ const isKickoffTbd = (g) => !kickoffDate(g);
 
 function AdminNotificationsPage({ user, isAdmin, setPage }) {
   const isMobile = useIsMobile();
+  // Per-device action buttons: instead of an unpredictable ragged wrap, lay
+  // them out as a deliberate 2-per-row grid on mobile (still a flex-wrap
+  // container, just with each button's basis pinned to half width).
+  const deviceBtnHalf = isMobile ? { flexBasis: "calc(50% - 4px)" } : undefined;
   const [msg, setMsg] = useState("");
   const [live, setLive] = useState({ year: null, week: null });
   useEffect(() => {
@@ -2924,27 +2929,29 @@ function AdminNotificationsPage({ user, isAdmin, setPage }) {
                       </div>
                     </div>
                     <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
-                      <StatusBadge tone={blocked ? "danger" : "success"}>{blocked ? "Blocked" : "Active"}</StatusBadge>
+                      <div style={isMobile ? { flexBasis: "100%" } : undefined}>
+                        <StatusBadge tone={blocked ? "danger" : "success"}>{blocked ? "Blocked" : "Active"}</StatusBadge>
+                      </div>
                       {!editing && !messaging && (
-                        <button style={adminBtn("neutral")} onClick={() => { setEditingDeviceToken(d.token); setDeviceNameDraft(d.name || ""); }}>
+                        <button style={adminBtn("neutral", deviceBtnHalf)} onClick={() => { setEditingDeviceToken(d.token); setDeviceNameDraft(d.name || ""); }}>
                           Rename
                         </button>
                       )}
                       {!editing && !messaging && (
-                        <button style={adminBtn(d.isAdmin === true ? "neutral" : "primary")} onClick={() => toggleDeviceAdmin(d.token, d.isAdmin !== true)}>
+                        <button style={adminBtn(d.isAdmin === true ? "neutral" : "primary", deviceBtnHalf)} onClick={() => toggleDeviceAdmin(d.token, d.isAdmin !== true)}>
                           {d.isAdmin === true ? "Unmark Admin" : "Mark as Admin"}
                         </button>
                       )}
                       {!editing && !messaging && (
-                        <button style={adminBtn("primary")} onClick={() => { setMessagingToken(d.token); setMessageTitleDraft(""); setMessageBodyDraft(""); }}>
+                        <button style={adminBtn("primary", deviceBtnHalf)} onClick={() => { setMessagingToken(d.token); setMessageTitleDraft(""); setMessageBodyDraft(""); }}>
                           Message
                         </button>
                       )}
-                      <button style={adminBtn(blocked ? "primary" : "danger")} onClick={() => toggleDeviceBlocked(d.token, !blocked)}>
+                      <button style={adminBtn(blocked ? "primary" : "danger", deviceBtnHalf)} onClick={() => toggleDeviceBlocked(d.token, !blocked)}>
                         {blocked ? "Unblock" : "Block"}
                       </button>
                       {!editing && !messaging && (
-                        <button style={adminBtn("danger")} title="Permanently remove this device (e.g. an old reinstall)" onClick={() => deleteDevice(d.token, d.name)}>
+                        <button style={adminBtn("danger", deviceBtnHalf)} title="Permanently remove this device (e.g. an old reinstall)" onClick={() => deleteDevice(d.token, d.name)}>
                           Delete
                         </button>
                       )}
@@ -2965,7 +2972,7 @@ function AdminNotificationsPage({ user, isAdmin, setPage }) {
                         value={messageBodyDraft}
                         onChange={e => setMessageBodyDraft(e.target.value)}
                       />
-                      <Row>
+                      <Row style={isMobile ? { flexDirection: "column", alignItems: "stretch" } : undefined}>
                         <button style={adminBtn("primary")} disabled={sendingMessage} onClick={() => sendTargetedMessage(d.token)}>
                           {sendingMessage ? "Sending…" : `Send to ${d.name || "this device"}`}
                         </button>
@@ -3697,6 +3704,13 @@ function MySeasonPage({ user, isAdmin, setPage }) {
 
 function AdminPage({ user, isAdmin, setPage }) {
   const isMobile = useIsMobile();
+  // On mobile, action-button groups stack full-width (one per row) instead of
+  // wrapping mid-row - align-items:stretch fills each button to the row's
+  // width since neither Row nor adminBtn() set an explicit width.
+  const stackRow = isMobile ? { flexDirection: "column", alignItems: "stretch" } : undefined;
+  // Paired with stackRow: a badge sitting next to a stacked full-width button
+  // shouldn't stretch into a full-width bar too, so pin it to its own size.
+  const badgeAlign = isMobile ? { alignSelf: "flex-start", marginTop: 2 } : undefined;
   const [live, setLive] = useState({ year: null, week: null });
   const [year, setYear] = useState(null);
   const [week, setWeek] = useState(null);
@@ -4225,9 +4239,9 @@ Type "home" or "away".`,
   return (<Container maxWidth={720} padding={isMobile ? 12 : 24}>
       <Header user={user} isAdmin={isAdmin} setPage={setPage} />
       <Card style={{ maxWidth: 1200, padding: isMobile ? 12 : 16 }}>
-        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:10 }}>
+        <div style={{ display:"flex", alignItems: isMobile ? "stretch" : "center", justifyContent:"space-between", flexDirection: isMobile ? "column" : "row", flexWrap:"wrap", gap:10 }}>
           <h2 style={{ margin:0 }}>Admin</h2>
-          <Row style={{ gap:8 }}>
+          <Row style={{ gap:8, ...stackRow }}>
             <button style={adminBtn("neutral")} onClick={() => { window.history.pushState(null, "", "/admin/picks"); setPage("adminpicks"); }}>Open Picks Management</button>
             <button style={adminBtn("neutral")} onClick={() => { window.history.pushState(null, "", "/admin/payments"); setPage("adminpayments"); }}>Payment Tracking</button>
             <button style={adminBtn("neutral")} onClick={() => { window.history.pushState(null, "", "/admin/missing"); setPage("adminmissing"); }}>Who Hasn't Submitted</button>
@@ -4242,6 +4256,8 @@ Type "home" or "away".`,
             <Field label="Year"><input style={{...inputStyle, width:"6rem"}} type="number" value={(year ?? '')} onChange={e=>setYear(Number(e.target.value))}/></Field>
             <Field label="Week"><input style={{...inputStyle, width:"4rem"}} type="number" value={(week ?? '')} onChange={e=>setWeek(Number(e.target.value))}/></Field>
             <button style={adminBtn("neutral")} onClick={async()=>setGames(await listGames({ year, week, includedOnly: false }))}>Load</button>
+          </Row>
+          <Row style={{ marginTop: 10, ...stackRow }}>
             <button style={adminBtn("primary")} onClick={async()=>{ try { await setDoc(doc(db,"config","live"), { year, week }, { merge:true });
 await setDoc(doc(db,"config","app"), { currentYear: year, currentWeek: week, updatedAt: serverTimestamp() }, { merge:true }); setMsg(`Live week set to ${year} / W${week} (config/live + config/app)`); } catch(e) { console.error(e); setMsg("Failed to set live week"); } }}>Set Live Week</button>
             <button style={adminBtn("success")} onClick={async()=>{ try { await addDoc(collection(db,"notificationOutbox"), { title: `🏈 Week ${week} is open`, body: "Picks are open — submit yours on the Picks page.", createdAt: serverTimestamp() }); setMsg(`Push notification sent to everyone for Week ${week}.`); } catch(e) { console.error(e); setMsg("Failed to send notification"); } }}>Notify Players: Picks Open</button>
@@ -4283,7 +4299,7 @@ await setDoc(doc(db,"config","app"), { currentYear: year, currentWeek: week, upd
             </StatusBadge>
           </div>
         }>
-          <Row style={{ marginBottom: 10 }}>
+          <Row style={{ marginBottom: 10, ...stackRow }}>
             <button style={adminBtn("warning")} onClick={async ()=>{ try {
               await setDoc(doc(db, "config", "app"), { picksLocked: true, updatedAt: serverTimestamp() }, { merge: true });
               setMsg("Submissions locked.");
@@ -4321,27 +4337,27 @@ await setDoc(doc(db,"config","app"), { currentYear: year, currentWeek: week, upd
         </AdminSection>
 
         <AdminSection title="Leaderboard" tone="warning">
-          <Row style={{ marginBottom: 10 }}>
+          <Row style={{ marginBottom: 10, ...stackRow }}>
             <button style={adminBtn(appCfg.leaderboardLocked ? "success" : "warning")} onClick={toggleLeaderboardLock}>
               {appCfg.leaderboardLocked ? "Unlock Leaderboard" : "Lock Leaderboard (current week)"}
             </button>
-            <StatusBadge tone={appCfg.leaderboardLocked ? "danger" : "success"}>
+            <StatusBadge tone={appCfg.leaderboardLocked ? "danger" : "success"} style={badgeAlign}>
               {appCfg.leaderboardLocked ? "Locked (current week)" : "Unlocked"}
             </StatusBadge>
           </Row>
-          <Row>
+          <Row style={stackRow}>
             <button style={adminBtn("neutral")} onClick={toggleLeaderboardPicks}>
               {appCfg.leaderboardPicksPublic ? "Switch to Admin-Only Picks" : "Switch to Public Picks"}
             </button>
-            <StatusBadge tone={appCfg.leaderboardPicksPublic ? "primary" : "neutral"}>
+            <StatusBadge tone={appCfg.leaderboardPicksPublic ? "primary" : "neutral"} style={badgeAlign}>
               {appCfg.leaderboardPicksPublic ? "Public (everyone can see picks)" : "Admin-Only"}
             </StatusBadge>
           </Row>
-          <Row style={{ marginTop: 10 }}>
+          <Row style={{ marginTop: 10, ...stackRow }}>
             <button style={adminBtn(appCfg.potHidden ? "success" : "warning")} onClick={togglePotHidden}>
               {appCfg.potHidden ? "Show Pot" : "Hide Pot"}
             </button>
-            <StatusBadge tone={appCfg.potHidden ? "danger" : "success"}>
+            <StatusBadge tone={appCfg.potHidden ? "danger" : "success"} style={badgeAlign}>
               {appCfg.potHidden ? "Hidden from everyone but admins" : "Visible to everyone"}
             </StatusBadge>
           </Row>
@@ -4356,11 +4372,11 @@ await setDoc(doc(db,"config","app"), { currentYear: year, currentWeek: week, upd
             <StatusBadge tone={localFixture ? "primary" : "neutral"}>Local Override: {localFixture ? "On" : "Off"}</StatusBadge>
           </div>
         }>
-          <Row style={{ marginBottom: 10 }}>
+          <Row style={{ marginBottom: 10, ...stackRow }}>
             <button style={adminBtn("success")} onClick={createDummyWeek}>Create Dummy Week (2099 / W1)</button>
             <button style={adminBtn("danger")} onClick={clearDummyWeek}>Clear Dummy Week</button>
           </Row>
-          <Row style={{ marginBottom: 10 }}>
+          <Row style={{ marginBottom: 10, ...stackRow }}>
             <button style={adminBtn("neutral")} onClick={async()=>{
               try {
                 await setDoc(doc(db, "config", "app"), {
@@ -4398,7 +4414,7 @@ await setDoc(doc(db,"config","app"), { currentYear: year, currentWeek: week, upd
               Use CFBD Live
             </button>
           </Row>
-          <Row>
+          <Row style={stackRow}>
             <button style={adminBtn("neutral")} onClick={(e)=>{ e.preventDefault(); try { makeLiveDemoFromGames(games||[]); } catch(err){ console.error(err); } }}>
               Make Live Demo
             </button>
@@ -4416,6 +4432,8 @@ await setDoc(doc(db,"config","app"), { currentYear: year, currentWeek: week, upd
                 <button type="button" style={adminBtn("neutral", { padding:"9px 12px" })} onClick={()=>setShowApiKey(v=>!v)}>{showApiKey ? "Hide" : "Show"}</button>
               </div>
             </Field>
+          </Row>
+          <Row style={{ marginTop: 10, ...stackRow }}>
             <button style={adminBtn("primary")} onClick={saveKey}>Save key</button>
             <button style={adminBtn("primary")} onClick={doImport}>Import week</button>
             <button style={adminBtn("primary")} onClick={doSyncOdds} title="Pulls spreads/over-under from CFBD for the selected week - only runs when clicked, never automatically">Sync Odds (CFBD)</button>
