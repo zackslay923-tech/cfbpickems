@@ -1722,6 +1722,9 @@ token: cfbdTok,
   const { map: sbMap, lastUpdatedEt: sbUpdated, isPaused: sbPaused, refresh: sbRefresh } = useScoreboard(sbOpts);
 
   const [publicSbMap, setPublicSbMap] = useState(new Map());
+  // Last time config/liveMap was written (by the CFBD cron or an admin's
+  // relay) - epoch ms, so everyone (not just admins) can show "last updated".
+  const [liveUpdatedAt, setLiveUpdatedAt] = useState(null);
 // Everyone subscribes to a published scoreboard map for public/live viewing
 useEffect(() => {
   try {
@@ -1731,6 +1734,7 @@ useEffect(() => {
         const obj = (d && d.map) ? d.map : {};
         // Convert plain object -> Map
         setPublicSbMap(new Map(Object.entries(obj || {})));
+        setLiveUpdatedAt(Number.isFinite(+d.updatedAt) ? +d.updatedAt : null);
       } catch {}
     });
     return () => { try { unsub(); } catch {} };
@@ -2334,6 +2338,11 @@ useEffect(() => {
             <thead>
               <tr>
                 <th rowSpan={showScorebug ? 3 : 2} colSpan={2} style={{ ...headerCell, ...sticky1(), width: NAME_COL_W + POINTS_COL_W, minWidth: NAME_COL_W + POINTS_COL_W, padding:"1px 4px", fontSize:11, lineHeight:1, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis", verticalAlign:"middle" }}>
+                  {sbSource === "cfbd" && liveUpdatedAt && (
+                    <div style={{ fontSize:"0.65rem", fontWeight:600, color:"#9aa4c7", marginBottom:4 }}>
+                      Last updated {new Intl.DateTimeFormat("en-US", { hour:"numeric", minute:"2-digit", hour12:true, timeZone:"America/New_York" }).format(new Date(liveUpdatedAt))}
+                    </div>
+                  )}
                   {(!potHidden || isAdmin) && (<>
                     <div style={{ fontSize:"0.95rem", fontWeight:600 }}>
                       This Week&apos;s Pot{potHidden ? " (hidden)" : ""}:
