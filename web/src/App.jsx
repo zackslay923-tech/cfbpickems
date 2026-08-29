@@ -1741,23 +1741,9 @@ useEffect(() => {
   } catch {}
 }, []);
 
-// Admin relay: when admin is live on CFBD, publish a trimmed map for the public
-useEffect(() => {
-  try {
-    if (isAdmin && sbSource === "cfbd" && sbMap && typeof sbMap.size === "number" && sbMap.size > 0) {
-      const obj = Object.fromEntries(Array.from(sbMap.entries()));
-      const json = JSON.stringify(obj);
-      const now = Date.now();
-      const last = lastPublishRef.current || { t: 0, h: "" };
-      const changed = json !== last.h;
-      const due = (now - last.t) >= 20000; // 20s min interval
-      if (changed || due) {
-        setDoc(doc(db, "config", "liveMap"), { map: obj, updatedAt: now }, { merge: true });
-        lastPublishRef.current = { t: now, h: json };
-      }
-    }
-  } catch {}
-}, [isAdmin, sbSource, sbMap]);
+// Publishing config/liveMap is handled entirely server-side now (the
+// publishLiveMap cron), so "Last updated" ticks on one clean, predictable
+// schedule instead of racing whichever admin happens to have this page open.
   const scoreMap = sbMap;
 
   // Public liveMap (read-only): used when user is NOT admin

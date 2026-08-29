@@ -769,7 +769,10 @@ exports.publishLiveMap = onSchedule(
       const prev = await ref.get();
       const prevHash = prev.exists ? (prev.get("hash") || "") : "";
 
-      // Only write if changed
+      // Only rewrite the (larger) map+hash when the data actually changed,
+      // but always bump updatedAt so it reflects "last successful poll" -
+      // a clean once-a-minute ticker - rather than "last time a score
+      // changed", which could sit stale for several minutes during a lull.
       if (hash !== prevHash) {
         await ref.set(
           {
@@ -782,7 +785,8 @@ exports.publishLiveMap = onSchedule(
         );
         logger.info("liveMap updated (changed)");
       } else {
-        logger.info("liveMap unchanged; skipped write");
+        await ref.set({ updatedAt: Date.now() }, { merge: true });
+        logger.info("liveMap unchanged; refreshed updatedAt only");
       }
 
       // Auto-write winners for any newly-final games (default on; disable via
