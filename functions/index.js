@@ -785,18 +785,33 @@ exports.publishLiveMap = onSchedule(
       // a stale/glitched clock that's HIGHER than what we last saw for the
       // same game in the same period - impossible for a real countdown,
       // since the clock only ever counts down within a period. When that
-      // happens, hold the previous clock/period instead of letting the
-      // displayed time jump backward, until a sane reading comes in.
+      // happens, hold the previous clock/period for exactly one cycle
+      // instead of letting the displayed time jump backward.
+      //
+      // Only one cycle: if we held last time (prior._clockHeld) and the new
+      // reading STILL looks like an increase relative to that same held
+      // value, trust the new reading anyway and clear the hold. Comparing
+      // forever against one frozen anchor is exactly what caused a real
+      // incident - CFBD legitimately counted a game down (2:00 -> 1:55 ->
+      // 1:38, all genuine, all lower than the previous real reading) while
+      // every one of those got rejected because each was still numerically
+      // higher than a single stale value from minutes earlier, freezing the
+      // displayed clock for the rest of the game. One held cycle catches a
+      // true one-off glitch (which self-corrects on CFBD's very next poll);
+      // never un-sticking after that is a worse bug than the one this
+      // exists to prevent.
       for (const key of Object.keys(mapObj)) {
         const cur = mapObj[key];
         const prior = prevMap[key];
         if (!prior || cur.status !== "in_progress" || prior.period !== cur.period) continue;
+        if (prior._clockHeld) continue; // already held once - accept this reading unconditionally
         const curSecs = clockToSeconds(cur.clock);
         const priorSecs = clockToSeconds(prior.clock);
         if (curSecs !== null && priorSecs !== null && curSecs > priorSecs) {
-          logger.warn(`Discarding implausible clock for ${key}: ${cur.clock} > previous ${prior.clock} in same period`);
+          logger.warn(`Holding implausible clock for one cycle on ${key}: ${cur.clock} > previous ${prior.clock} in same period`);
           cur.clock = prior.clock;
           cur.period = prior.period;
+          cur._clockHeld = true;
         }
       }
 
