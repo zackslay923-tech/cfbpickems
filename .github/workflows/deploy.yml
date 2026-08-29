@@ -1,0 +1,32 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Build web
+        working-directory: web
+        run: npm run build
+
+      - name: Install functions dependencies
+        working-directory: functions
+        run: npm ci
+
+      - name: Deploy to Firebase (hosting + functions + firestore rules)
+        run: npx firebase-tools@14.19.1 deploy --only hosting,functions,firestore --token "$FIREBASE_TOKEN" --non-interactive --project pickems-2k25
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
