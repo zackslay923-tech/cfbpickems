@@ -1808,7 +1808,7 @@ useEffect(() => {
         });
       }
       if (items.length > 0) {
-        setDoc(doc(db, "config", "liveMap"), { items, updatedAt: serverTimestamp() }, { merge: true });
+        setDoc(doc(db, "config", "liveMap"), { items, updatedAt: Date.now() }, { merge: true });
         if (import.meta?.env?.DEV) console.debug("[liveMap] published items:", items.length);
       }
     } catch (e) {
