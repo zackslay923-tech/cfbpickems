@@ -1011,8 +1011,8 @@ function PicksPage({ user, isAdmin, setPage }) {
     } catch { return "anon-" + Math.random().toString(36).slice(2); }
   });
   const [tfChoice, setTfChoice] = useState(() => { try { return localStorage.getItem("poll_tf_games") || ""; } catch { return ""; } });
-  const [gamesPerWeekChoices, setGamesPerWeekChoices] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("poll_games_per_week") || "[]"); } catch { return []; }
+  const [gamesPerWeekChoice, setGamesPerWeekChoice] = useState(() => {
+    try { return localStorage.getItem("poll_games_per_week_v2") || ""; } catch { return ""; }
   });
   const [pollMsg, setPollMsg] = useState("");
   const [appEnrollChoice, setAppEnrollChoice] = useState(() => { try { return localStorage.getItem("poll_app_enroll") || ""; } catch { return ""; } });
@@ -1039,12 +1039,11 @@ function PicksPage({ user, isAdmin, setPage }) {
     }
   };
 
-  const toggleGamesPerWeek = async (opt) => {
-    const next = gamesPerWeekChoices.includes(opt) ? gamesPerWeekChoices.filter(x => x !== opt) : [...gamesPerWeekChoices, opt];
-    setGamesPerWeekChoices(next);
-    try { localStorage.setItem("poll_games_per_week", JSON.stringify(next)); } catch {}
+  const voteGamesPerWeek = async (choice) => {
+    setGamesPerWeekChoice(choice);
+    try { localStorage.setItem("poll_games_per_week_v2", choice); } catch {}
     try {
-      await setDoc(doc(db, "pollVotes", `games_per_week__${pollVoterId}`), { pollId: "games_per_week", choices: next, updatedAt: serverTimestamp() }, { merge: true });
+      await setDoc(doc(db, "pollVotes", `games_per_week__${pollVoterId}`), { pollId: "games_per_week", choice, updatedAt: serverTimestamp() }, { merge: true });
       setPollMsg("Thanks, your vote is in!");
     } catch (e) {
       setPollMsg("Vote failed: " + (e?.message || String(e)));
@@ -1331,7 +1330,7 @@ const [code, setCode] = useState("");
     }
 
     if (!tfChoice) errs.tfPoll = "Please answer the Thursday/Friday games question";
-    if (!gamesPerWeekChoices || gamesPerWeekChoices.length === 0) errs.gamesPerWeekPoll = "Please answer the games-per-week question";
+    if (!gamesPerWeekChoice) errs.gamesPerWeekPoll = "Please answer the games-per-week question";
     if (!appEnrollChoice) errs.appEnrollPoll = "Please answer the app enrollment question";
 
     const ok = Object.keys(errs).length === 0;
@@ -1366,7 +1365,7 @@ const [code, setCode] = useState("");
     return { ok, errors: errs, message, missingGames, focus };
   };
 
-  const isValid = useMemo(function(){ return validatePicks({ silent: true }).ok; }, [form, picks, games, tfChoice, gamesPerWeekChoices, appEnrollChoice]);
+  const isValid = useMemo(function(){ return validatePicks({ silent: true }).ok; }, [form, picks, games, tfChoice, gamesPerWeekChoice, appEnrollChoice]);
 
     // Keep validation errors updated after a submit attempt
   useEffect(() => {
@@ -1700,16 +1699,16 @@ if (typeof window !== "undefined") window.history.pushState(null, "", "/confirm"
 
             <div style={{ marginBottom:20 }}>
               <div style={{ fontWeight:600, marginBottom:2 }}>How many games do you want to pick from each week? <span style={{ color:"#f0596b" }}>*</span></div>
-              <div style={{ fontSize:12, opacity:.7, marginBottom:8 }}>The usual amount is around 35-40. Check all that apply.</div>
+              <div style={{ fontSize:12, opacity:.7, marginBottom:8 }}>This week has 40 games.</div>
               <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
-                {["15-25", "25-35", "35-45", "45-55", "55+"].map(opt => (
+                {["Significantly fewer (around 20 games)", "Fewer (around 30 games)", "Keep the same", "More (around 50 games)", "Significantly more (around 60 games)"].map(opt => (
                   <label key={opt} style={{ display:"flex", flexDirection:"row", alignItems:"center", gap:8, cursor:"pointer", fontSize:14 }}>
-                    <input type="checkbox" checked={gamesPerWeekChoices.includes(opt)} onChange={() => toggleGamesPerWeek(opt)} />
+                    <input type="radio" name="poll_games_per_week" checked={gamesPerWeekChoice === opt} onChange={() => voteGamesPerWeek(opt)} />
                     {opt}
                   </label>
                 ))}
               </div>
-              {touchedSubmit && gamesPerWeekChoices.length === 0 && <div style={{ color:"#f0596b", fontSize:12, marginTop:6 }}>Please check at least one.</div>}
+              {touchedSubmit && !gamesPerWeekChoice && <div style={{ color:"#f0596b", fontSize:12, marginTop:6 }}>Please pick an answer.</div>}
             </div>
 
             <div>
@@ -4351,9 +4350,9 @@ Type "home" or "away".`,
           </div>
           <div>
             <div style={{ fontWeight:600, marginBottom:6 }}>
-              How many games do you want to pick from each week? <span style={{ opacity:.6, fontWeight:400 }}>({pollVoterCount("games_per_week")} respondents)</span>
+              How many games do you want to pick from each week? <span style={{ opacity:.6, fontWeight:400 }}>({pollVoterCount("games_per_week")} votes)</span>
             </div>
-            {Object.entries(tallyPoll("games_per_week", "choices")).sort((a,b) => b[1]-a[1]).map(([opt, count]) => (
+            {Object.entries(tallyPoll("games_per_week", "choice")).sort((a,b) => b[1]-a[1]).map(([opt, count]) => (
               <div key={opt} style={{ fontSize:13, padding:"2px 0" }}>{opt}: <strong>{count}</strong></div>
             ))}
             {pollVoterCount("games_per_week") === 0 && <div style={{ fontSize:13, opacity:.6 }}>No votes yet.</div>}
