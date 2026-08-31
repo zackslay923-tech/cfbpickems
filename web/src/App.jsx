@@ -1698,8 +1698,7 @@ if (typeof window !== "undefined") window.history.pushState(null, "", "/confirm"
             </div>
 
             <div style={{ marginBottom:20 }}>
-              <div style={{ fontWeight:600, marginBottom:2 }}>How many games do you want to pick from each week? <span style={{ color:"#f0596b" }}>*</span></div>
-              <div style={{ fontSize:12, opacity:.7, marginBottom:8 }}>This week has 40 games.</div>
+              <div style={{ fontWeight:600, marginBottom:8 }}>How many games do you want to pick from each week? (For reference this week has 40 games) <span style={{ color:"#f0596b" }}>*</span></div>
               <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
                 {["Significantly fewer (around 20 games)", "Fewer (around 30 games)", "Keep the same", "More (around 50 games)", "Significantly more (around 60 games)"].map(opt => (
                   <label key={opt} style={{ display:"flex", flexDirection:"row", alignItems:"center", gap:8, cursor:"pointer", fontSize:14 }}>
