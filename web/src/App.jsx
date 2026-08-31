@@ -1223,10 +1223,19 @@ useEffect(() => {
     // Put College GameDay at the end of the list
   const gameday = (Array.isArray(games) ? games.find(x => x && x.gameday) : null);
   const displayGames = gameday ? [...games.filter(x => x && x.id !== gameday.id), gameday] : games;
-  const pickGroups = useMemo(
-    () => groupGamesByDate(displayGames || [], { timeZone: "America/New_York" }),
-    [displayGames]
-  );
+  const pickGroups = useMemo(() => {
+    const groups = groupGamesByDate(displayGames || [], { timeZone: "America/New_York" });
+    if (!gameday) return groups;
+    // Pull the GameDay game out of its chronological date group and append it
+    // as its own trailing group, so it's always the last game shown even when
+    // a later game (e.g. Monday night) exists on the slate.
+    const gdGroup = groups.find(grp => grp.items.some(g => g.id === gameday.id));
+    if (!gdGroup) return groups;
+    const withoutGameday = groups
+      .map(grp => ({ ...grp, items: grp.items.filter(g => g.id !== gameday.id) }))
+      .filter(grp => grp.items.length > 0);
+    return [...withoutGameday, { key: gdGroup.key + "__gameday", header: gdGroup.header, items: [gameday] }];
+  }, [displayGames, gameday]);
   // Earliest included kickoff (for deadline label on Picks)
   const earliestGame = useMemo(() => {
     const arr = (displayGames || [])
