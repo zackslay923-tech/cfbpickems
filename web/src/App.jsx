@@ -1804,7 +1804,7 @@ if (typeof window !== "undefined") window.history.pushState(null, "", "/confirm"
 
             <div style={{ marginTop:20 }}>
               <div style={{ fontWeight:600, marginBottom:2 }}>Any other thoughts?</div>
-              <div style={{ fontSize:12, opacity:.7, marginBottom:8 }}>Expand on your answers above, give feedback on the app, pitch a new idea &mdash; whatever's on your mind. Totally optional.</div>
+              <div style={{ fontSize:12, opacity:.7, marginBottom:8 }}>Expand on your answers above, give feedback on the app, pitch a new idea, etc. Totally optional.</div>
               <textarea
                 value={featureFeedback}
                 onChange={(e) => setFeatureFeedback(e.target.value)}
