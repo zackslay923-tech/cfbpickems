@@ -1234,7 +1234,7 @@ useEffect(() => {
     const withoutGameday = groups
       .map(grp => ({ ...grp, items: grp.items.filter(g => g.id !== gameday.id) }))
       .filter(grp => grp.items.length > 0);
-    return [...withoutGameday, { key: gdGroup.key + "__gameday", header: gdGroup.header, items: [gameday] }];
+    return [...withoutGameday, { key: gdGroup.key + "__gameday", header: "College GameDay", items: [gameday] }];
   }, [displayGames, gameday]);
   // Earliest included kickoff (for deadline label on Picks)
   const earliestGame = useMemo(() => {
