@@ -1809,7 +1809,7 @@ if (typeof window !== "undefined") window.history.pushState(null, "", "/confirm"
                 value={featureFeedback}
                 onChange={(e) => setFeatureFeedback(e.target.value)}
                 onBlur={saveFeedback}
-                placeholder="e.g. more detail on a poll answer, something you'd change about the app, a new feature idea..."
+                placeholder="Answer here"
                 style={{ ...inputStyle, width:"100%", minHeight:70, fontFamily:"inherit", resize:"vertical" }}
               />
             </div>
