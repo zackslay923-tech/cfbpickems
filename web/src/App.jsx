@@ -1715,10 +1715,10 @@ if (typeof window !== "undefined") window.history.pushState(null, "", "/confirm"
           </div>
 
           <div style={{ marginTop:24, paddingTop:20, borderTop:"1px solid #1f2a44" }}>
-            <h3 style={{ margin:"0 0 16px" }}>Three quick questions before you submit</h3>
+            <h3 style={{ margin:"0 0 16px" }}>Quick Survey for this Season</h3>
 
             <div style={{ marginBottom:20 }}>
-              <div style={{ fontWeight:600, marginBottom:2 }}>When should the first game of the week be? <span style={{ color:"#f0596b" }}>*</span></div>
+              <div style={{ fontWeight:600, marginBottom:2 }}>This season, when should the first game of the week be? <span style={{ color:"#f0596b" }}>*</span></div>
               <div style={{ fontSize:12, opacity:.7, marginBottom:8 }}>Earlier games mean an earlier weekly deadline.</div>
               <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
                 {["Thursday", "Friday", "Saturday", "No preference"].map(opt => (
@@ -1732,7 +1732,7 @@ if (typeof window !== "undefined") window.history.pushState(null, "", "/confirm"
             </div>
 
             <div style={{ marginBottom:20 }}>
-              <div style={{ fontWeight:600, marginBottom:8 }}>How many games do you want to pick from each week? (For reference this week has 40 games) <span style={{ color:"#f0596b" }}>*</span></div>
+              <div style={{ fontWeight:600, marginBottom:8 }}>This season, how many games do you want to pick from each week? (For reference this week has 40 games) <span style={{ color:"#f0596b" }}>*</span></div>
               <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
                 {["Significantly fewer (around 20 games)", "Fewer (around 30 games)", "Keep the same", "More (around 50 games)", "Significantly more (around 60 games)"].map(opt => (
                   <label key={opt} style={{ display:"flex", flexDirection:"row", alignItems:"center", gap:8, cursor:"pointer", fontSize:14 }}>
@@ -4417,7 +4417,7 @@ Type "home" or "away".`,
         <AdminSection title="Weekly Poll Results" tone="neutral" right={<StatusBadge tone="neutral">Not shown to voters yet</StatusBadge>}>
           <div style={{ marginBottom:16 }}>
             <div style={{ fontWeight:600, marginBottom:6 }}>
-              When should the first game of the week be? <span style={{ opacity:.6, fontWeight:400 }}>({pollVoterCount("tf_games")} votes)</span>
+              This season, when should the first game of the week be? <span style={{ opacity:.6, fontWeight:400 }}>({pollVoterCount("tf_games")} votes)</span>
             </div>
             {Object.entries(tallyPoll("tf_games", "choice")).sort((a,b) => b[1]-a[1]).map(([opt, count]) => (
               <div key={opt} style={{ fontSize:13, padding:"2px 0" }}>{opt}: <strong>{count}</strong></div>
@@ -4426,7 +4426,7 @@ Type "home" or "away".`,
           </div>
           <div>
             <div style={{ fontWeight:600, marginBottom:6 }}>
-              How many games do you want to pick from each week? <span style={{ opacity:.6, fontWeight:400 }}>({pollVoterCount("games_per_week")} votes)</span>
+              This season, how many games do you want to pick from each week? <span style={{ opacity:.6, fontWeight:400 }}>({pollVoterCount("games_per_week")} votes)</span>
             </div>
             {Object.entries(tallyPoll("games_per_week", "choice")).sort((a,b) => b[1]-a[1]).map(([opt, count]) => (
               <div key={opt} style={{ fontSize:13, padding:"2px 0" }}>{opt}: <strong>{count}</strong></div>
