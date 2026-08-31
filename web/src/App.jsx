@@ -1803,8 +1803,8 @@ if (typeof window !== "undefined") window.history.pushState(null, "", "/confirm"
             {pollMsg && <div style={{ marginTop:10, fontSize:12, color:"#9aa4c7" }}>{pollMsg}</div>}
 
             <div style={{ marginTop:20 }}>
-              <div style={{ fontWeight:600, marginBottom:2 }}>Any other thoughts?</div>
-              <div style={{ fontSize:12, opacity:.7, marginBottom:8 }}>Expand on your answers above, give feedback on the app, pitch a new idea, etc. Totally optional.</div>
+              <div style={{ fontWeight:600, marginBottom:2 }}>Provide additional thoughts below (Optional)</div>
+              <div style={{ fontSize:12, opacity:.7, marginBottom:8 }}>Expand on your answers above, give feedback on the app, pitch a new idea, etc.</div>
               <textarea
                 value={featureFeedback}
                 onChange={(e) => setFeatureFeedback(e.target.value)}
