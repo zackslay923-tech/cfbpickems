@@ -1746,7 +1746,7 @@ if (typeof window !== "undefined") window.history.pushState(null, "", "/confirm"
             <div>
               <div style={{ fontWeight:600, marginBottom:8 }}>Did you download the CFB Pick 'Ems app to your phone and enroll in notifications? <span style={{ color:"#f0596b" }}>*</span></div>
               <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
-                {["Yes", "No", "No, but I would like instructions on how to"].map(opt => (
+                {["Yes", "No, but I would like instructions on how to"].map(opt => (
                   <label key={opt} style={{ display:"flex", flexDirection:"row", alignItems:"center", gap:8, cursor:"pointer", fontSize:14 }}>
                     <input type="radio" name="poll_app_enroll" checked={appEnrollChoice === opt} onChange={() => voteAppEnroll(opt)} />
                     {opt}
