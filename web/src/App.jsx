@@ -1531,6 +1531,7 @@ if (typeof window !== "undefined") window.history.pushState(null, "", "/confirm"
     <div style={{ margin:"12px auto 0", maxWidth:560, padding:"10px 14px", borderRadius:10, background:"rgba(240,180,41,0.1)", border:"1px solid rgba(240,180,41,0.35)", color:"#f0b429", fontSize:13, lineHeight:1.5, textAlign:"left" }}>
       <div><strong>A note on this week's games:</strong> Week 1 features mostly cupcake games, so instead of trying to include every Top 25 team, closer, more competitive matchups were prioritized (with some cupcakes mixed in).</div>
       <div style={{ marginTop:8 }}>Additionally, there are some poll questions at the end of the picks that will help me get a read on what's preferred for the season going forward. Feel free to provide additional feedback as well.</div>
+      <div style={{ marginTop:8 }}>Lastly, make sure you add the app to your home screen and enroll in notifications &mdash; once you submit your picks, the reminder notifications will stop for that week.</div>
     </div>
     <div style={{ marginTop:10, display:"grid", rowGap: 0, justifyItems:"center", width:"100%", marginBottom: 0 }}>
   <div style={{ display:"inline-flex", alignItems:"center", gap:6 }}>
