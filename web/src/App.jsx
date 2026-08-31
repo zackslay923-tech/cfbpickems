@@ -1360,7 +1360,7 @@ const [code, setCode] = useState("");
       errs.picks = missingGames.length + " game" + (missingGames.length>1?"s":"") + " not selected";
     }
 
-    if (!tfChoice) errs.tfPoll = "Please answer the Thursday/Friday games question";
+    if (!tfChoice) errs.tfPoll = "Please answer the game-night question";
     if (!gamesPerWeekChoice) errs.gamesPerWeekPoll = "Please answer the games-per-week question";
     if (!appEnrollChoice) errs.appEnrollPoll = "Please answer the app enrollment question";
 
@@ -1372,7 +1372,7 @@ const [code, setCode] = useState("");
     if (errs.venmo) parts.push("venmo");
     if (errs.venmoConfirmed) parts.push("venmo confirmation");
     if (missingGames.length) parts.push(missingGames.length + " game picks");
-    if (errs.tfPoll) parts.push("Thursday/Friday poll answer");
+    if (errs.tfPoll) parts.push("game-night poll answer");
     if (errs.gamesPerWeekPoll) parts.push("games-per-week poll answer");
     if (errs.appEnrollPoll) parts.push("app enrollment poll answer");
     const message = ok ? "" : (parts.join(", ") + " required.");
