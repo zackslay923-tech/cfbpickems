@@ -3514,6 +3514,14 @@ function AdminMissingPicksPage({ user, isAdmin, setPage }) {
     window.open(url, "_blank", "noopener,noreferrer");
   };
 
+  const openIntroEmailDraft = () => {
+    if (missingEmails.length === 0) { alert("No email addresses on file for anyone missing."); return; }
+    const subject = `CFB Pick 'Ems: Week 1 is officially open!`;
+    const body = `COLLEGE FOOTBALL is BACK!\n\nWeek 1 is finally here, and the CFB Pick 'Ems is officially open.\n\nNew link — update your bookmarks:\nhttps://cfbpickems.web.app\n\nGet your picks in before Saturday, August 29 at 12:00 PM.\n\nThe app has some brand new features to make it easier!:\n\n• Autosave — your picks save automatically as you go, so no more losing everything because you closed the tab\n• Autofill — returning players should see their information autofilled after entering their first and last name\n• Add to Home Screen — drop the site on your phone's home screen and it opens like a real app. No more digging for the link every week.\n• Notifications — turn on push notifications right in the app for picks opening, deadlines, and results.\n\nSpeaking of notifications — if you'd rather get reminders as app notifications instead of email this year, just let me know and I'll switch you over.\n\nIf you want to be opted out just reply "STOP".\n\nAlright, let's have a great season. Good luck!\n\n- Zack`;
+    const url = `https://mail.google.com/mail/?view=cm&fs=1&tf=1&bcc=${encodeURIComponent(missingEmails.join(","))}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    window.open(url, "_blank", "noopener,noreferrer");
+  };
+
   return (<Container maxWidth={900} padding={isMobile ? 12 : 24}>
     <Header user={user} isAdmin={isAdmin} setPage={setPage} />
     <Card style={{ maxWidth: 900, padding: isMobile ? 12 : 16 }}>
@@ -3541,6 +3549,11 @@ function AdminMissingPicksPage({ user, isAdmin, setPage }) {
           {missing.length > 0 && (
             <button style={adminBtn("primary")} onClick={openGmailDraft} title="Opens a Gmail compose window, BCC'd to everyone missing an email on file — nothing sends automatically">
               ✉️ Email Missing ({missingEmails.length})
+            </button>
+          )}
+          {missing.length > 0 && (
+            <button style={adminBtn("neutral")} onClick={openIntroEmailDraft} title="Opens a Gmail compose window with the season-opening intro email, BCC'd to everyone missing an email on file — nothing sends automatically">
+              ✉️ Email Intro
             </button>
           )}
         </div>
