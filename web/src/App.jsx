@@ -1015,12 +1015,24 @@ function PicksPage({ user, isAdmin, setPage }) {
     try { return JSON.parse(localStorage.getItem("poll_games_per_week") || "[]"); } catch { return []; }
   });
   const [pollMsg, setPollMsg] = useState("");
+  const [appEnrollChoice, setAppEnrollChoice] = useState(() => { try { return localStorage.getItem("poll_app_enroll") || ""; } catch { return ""; } });
 
   const voteTf = async (choice) => {
     setTfChoice(choice);
     try { localStorage.setItem("poll_tf_games", choice); } catch {}
     try {
       await setDoc(doc(db, "pollVotes", `tf_games__${pollVoterId}`), { pollId: "tf_games", choice, updatedAt: serverTimestamp() }, { merge: true });
+      setPollMsg("Thanks, your vote is in!");
+    } catch (e) {
+      setPollMsg("Vote failed: " + (e?.message || String(e)));
+    }
+  };
+
+  const voteAppEnroll = async (choice) => {
+    setAppEnrollChoice(choice);
+    try { localStorage.setItem("poll_app_enroll", choice); } catch {}
+    try {
+      await setDoc(doc(db, "pollVotes", `app_enroll__${pollVoterId}`), { pollId: "app_enroll", choice, updatedAt: serverTimestamp() }, { merge: true });
       setPollMsg("Thanks, your vote is in!");
     } catch (e) {
       setPollMsg("Vote failed: " + (e?.message || String(e)));
@@ -1320,6 +1332,7 @@ const [code, setCode] = useState("");
 
     if (!tfChoice) errs.tfPoll = "Please answer the Thursday/Friday games question";
     if (!gamesPerWeekChoices || gamesPerWeekChoices.length === 0) errs.gamesPerWeekPoll = "Please answer the games-per-week question";
+    if (!appEnrollChoice) errs.appEnrollPoll = "Please answer the app enrollment question";
 
     const ok = Object.keys(errs).length === 0;
     const parts = [];
@@ -1331,6 +1344,7 @@ const [code, setCode] = useState("");
     if (missingGames.length) parts.push(missingGames.length + " game picks");
     if (errs.tfPoll) parts.push("Thursday/Friday poll answer");
     if (errs.gamesPerWeekPoll) parts.push("games-per-week poll answer");
+    if (errs.appEnrollPoll) parts.push("app enrollment poll answer");
     const message = ok ? "" : (parts.join(", ") + " required.");
 
     if (!opts.silent && typeof setErrors === "function") setErrors(errs);
@@ -1352,7 +1366,7 @@ const [code, setCode] = useState("");
     return { ok, errors: errs, message, missingGames, focus };
   };
 
-  const isValid = useMemo(function(){ return validatePicks({ silent: true }).ok; }, [form, picks, games, tfChoice, gamesPerWeekChoices]);
+  const isValid = useMemo(function(){ return validatePicks({ silent: true }).ok; }, [form, picks, games, tfChoice, gamesPerWeekChoices, appEnrollChoice]);
 
     // Keep validation errors updated after a submit attempt
   useEffect(() => {
@@ -1669,7 +1683,7 @@ if (typeof window !== "undefined") window.history.pushState(null, "", "/confirm"
           </div>
 
           <div style={{ marginTop:24, paddingTop:20, borderTop:"1px solid #1f2a44" }}>
-            <h3 style={{ margin:"0 0 16px" }}>Two quick questions before you submit</h3>
+            <h3 style={{ margin:"0 0 16px" }}>Three quick questions before you submit</h3>
 
             <div style={{ marginBottom:20 }}>
               <div style={{ fontWeight:600, marginBottom:8 }}>Should we include Thursday/Friday games night this year? <span style={{ color:"#f0596b" }}>*</span></div>
@@ -1684,7 +1698,7 @@ if (typeof window !== "undefined") window.history.pushState(null, "", "/confirm"
               {touchedSubmit && !tfChoice && <div style={{ color:"#f0596b", fontSize:12, marginTop:6 }}>Please pick an answer.</div>}
             </div>
 
-            <div>
+            <div style={{ marginBottom:20 }}>
               <div style={{ fontWeight:600, marginBottom:2 }}>How many games do you want to pick from each week? <span style={{ color:"#f0596b" }}>*</span></div>
               <div style={{ fontSize:12, opacity:.7, marginBottom:8 }}>The usual amount is around 35-40. Check all that apply.</div>
               <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
@@ -1696,6 +1710,19 @@ if (typeof window !== "undefined") window.history.pushState(null, "", "/confirm"
                 ))}
               </div>
               {touchedSubmit && gamesPerWeekChoices.length === 0 && <div style={{ color:"#f0596b", fontSize:12, marginTop:6 }}>Please check at least one.</div>}
+            </div>
+
+            <div>
+              <div style={{ fontWeight:600, marginBottom:8 }}>Did you download the CFB Pick 'Ems app to your phone and enroll in notifications? <span style={{ color:"#f0596b" }}>*</span></div>
+              <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                {["Yes", "No", "No, but I would like instructions on how to"].map(opt => (
+                  <label key={opt} style={{ display:"flex", flexDirection:"row", alignItems:"center", gap:8, cursor:"pointer", fontSize:14 }}>
+                    <input type="radio" name="poll_app_enroll" checked={appEnrollChoice === opt} onChange={() => voteAppEnroll(opt)} />
+                    {opt}
+                  </label>
+                ))}
+              </div>
+              {touchedSubmit && !appEnrollChoice && <div style={{ color:"#f0596b", fontSize:12, marginTop:6 }}>Please pick an answer.</div>}
             </div>
 
             {pollMsg && <div style={{ marginTop:10, fontSize:12, color:"#9aa4c7" }}>{pollMsg}</div>}
@@ -4330,6 +4357,15 @@ Type "home" or "away".`,
               <div key={opt} style={{ fontSize:13, padding:"2px 0" }}>{opt}: <strong>{count}</strong></div>
             ))}
             {pollVoterCount("games_per_week") === 0 && <div style={{ fontSize:13, opacity:.6 }}>No votes yet.</div>}
+          </div>
+          <div style={{ marginTop:16 }}>
+            <div style={{ fontWeight:600, marginBottom:6 }}>
+              Did you download the app and enroll in notifications? <span style={{ opacity:.6, fontWeight:400 }}>({pollVoterCount("app_enroll")} votes)</span>
+            </div>
+            {Object.entries(tallyPoll("app_enroll", "choice")).sort((a,b) => b[1]-a[1]).map(([opt, count]) => (
+              <div key={opt} style={{ fontSize:13, padding:"2px 0" }}>{opt}: <strong>{count}</strong></div>
+            ))}
+            {pollVoterCount("app_enroll") === 0 && <div style={{ fontSize:13, opacity:.6 }}>No votes yet.</div>}
           </div>
           <div style={{ marginTop:16 }}>
             <div style={{ fontWeight:600, marginBottom:6 }}>
