@@ -1695,10 +1695,10 @@ if (typeof window !== "undefined") window.history.pushState(null, "", "/confirm"
             <h3 style={{ margin:"0 0 16px" }}>Three quick questions before you submit</h3>
 
             <div style={{ marginBottom:20 }}>
-              <div style={{ fontWeight:600, marginBottom:2 }}>What's your preference for game nights this year? <span style={{ color:"#f0596b" }}>*</span></div>
-              <div style={{ fontSize:12, opacity:.7, marginBottom:8 }}>For reference: picks always lock at kickoff of the first game on the slate, so adding Thursday and/or Friday games would move that weekly deadline earlier.</div>
+              <div style={{ fontWeight:600, marginBottom:2 }}>When should the first game of the week be? <span style={{ color:"#f0596b" }}>*</span></div>
+              <div style={{ fontSize:12, opacity:.7, marginBottom:8 }}>For reference: picks lock at kickoff of the first game on the slate, so an earlier first game means an earlier weekly deadline.</div>
               <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
-                {["Thursday and Friday games (plus Saturday)", "Friday games only (plus Saturday)", "No Thursday/Friday games (Saturday only)", "No preference"].map(opt => (
+                {["Thursday", "Friday", "Saturday", "No preference"].map(opt => (
                   <label key={opt} style={{ display:"flex", flexDirection:"row", alignItems:"center", gap:8, cursor:"pointer", fontSize:14 }}>
                     <input type="radio" name="poll_tf_games" checked={tfChoice === opt} onChange={() => voteTf(opt)} />
                     {opt}
@@ -4351,7 +4351,7 @@ Type "home" or "away".`,
         <AdminSection title="Weekly Poll Results" tone="neutral" right={<StatusBadge tone="neutral">Not shown to voters yet</StatusBadge>}>
           <div style={{ marginBottom:16 }}>
             <div style={{ fontWeight:600, marginBottom:6 }}>
-              What's your preference for game nights this year? <span style={{ opacity:.6, fontWeight:400 }}>({pollVoterCount("tf_games")} votes)</span>
+              When should the first game of the week be? <span style={{ opacity:.6, fontWeight:400 }}>({pollVoterCount("tf_games")} votes)</span>
             </div>
             {Object.entries(tallyPoll("tf_games", "choice")).sort((a,b) => b[1]-a[1]).map(([opt, count]) => (
               <div key={opt} style={{ fontSize:13, padding:"2px 0" }}>{opt}: <strong>{count}</strong></div>
