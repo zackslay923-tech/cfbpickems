@@ -1718,7 +1718,7 @@ if (typeof window !== "undefined") window.history.pushState(null, "", "/confirm"
 
             <div style={{ marginBottom:20 }}>
               <div style={{ fontWeight:600, marginBottom:2 }}>When should the first game of the week be? <span style={{ color:"#f0596b" }}>*</span></div>
-              <div style={{ fontSize:12, opacity:.7, marginBottom:8 }}>For reference: picks lock at kickoff of the first game on the slate, so an earlier first game means an earlier weekly deadline.</div>
+              <div style={{ fontSize:12, opacity:.7, marginBottom:8 }}>Earlier games mean an earlier weekly deadline.</div>
               <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
                 {["Thursday", "Friday", "Saturday", "No preference"].map(opt => (
                   <label key={opt} style={{ display:"flex", flexDirection:"row", alignItems:"center", gap:8, cursor:"pointer", fontSize:14 }}>
