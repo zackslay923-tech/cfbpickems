@@ -1744,7 +1744,7 @@ if (typeof window !== "undefined") window.history.pushState(null, "", "/confirm"
             </div>
 
             <div>
-              <div style={{ fontWeight:600, marginBottom:8 }}>Did you download the CFB Pick 'Ems app to your phone and enroll in notifications? <span style={{ color:"#f0596b" }}>*</span></div>
+              <div style={{ fontWeight:600, marginBottom:8 }}>Did you add the Pick 'Ems to your home screen on your phone and enroll in notifications? <span style={{ color:"#f0596b" }}>*</span></div>
               <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
                 {["Yes", "No, but I would like instructions on how to"].map(opt => (
                   <label key={opt} style={{ display:"flex", flexDirection:"row", alignItems:"center", gap:8, cursor:"pointer", fontSize:14 }}>
@@ -4434,7 +4434,7 @@ Type "home" or "away".`,
           </div>
           <div style={{ marginTop:16 }}>
             <div style={{ fontWeight:600, marginBottom:6 }}>
-              Did you download the app and enroll in notifications? <span style={{ opacity:.6, fontWeight:400 }}>({pollVoterCount("app_enroll")} votes)</span>
+              Did you add the Pick 'Ems to your home screen and enroll in notifications? <span style={{ opacity:.6, fontWeight:400 }}>({pollVoterCount("app_enroll")} votes)</span>
             </div>
             {Object.entries(tallyPoll("app_enroll", "choice")).sort((a,b) => b[1]-a[1]).map(([opt, count]) => (
               <div key={opt} style={{ fontSize:13, padding:"2px 0" }}>{opt}: <strong>{count}</strong></div>
