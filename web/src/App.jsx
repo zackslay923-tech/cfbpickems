@@ -1530,7 +1530,7 @@ if (typeof window !== "undefined") window.history.pushState(null, "", "/confirm"
     </div>
     <div style={{ margin:"12px auto 0", maxWidth:560, padding:"10px 14px", borderRadius:10, background:"rgba(240,180,41,0.1)", border:"1px solid rgba(240,180,41,0.35)", color:"#f0b429", fontSize:13, lineHeight:1.5, textAlign:"left" }}>
       <div><strong>A note on this week's games:</strong> Week 1 is mostly cupcakes, so we prioritized closer matchups over full Top 25 coverage.</div>
-      <div style={{ marginTop:8 }}>One more thing &mdash; add the app to your home screen and enable notifications before you submit; that's what stops this week's reminders.</div>
+      <div style={{ marginTop:8 }}>One more thing &mdash; add the app to your home screen and enable notifications.</div>
     </div>
     <div style={{ marginTop:10, display:"grid", rowGap: 0, justifyItems:"center", width:"100%", marginBottom: 0 }}>
   <div style={{ display:"inline-flex", alignItems:"center", gap:6 }}>
