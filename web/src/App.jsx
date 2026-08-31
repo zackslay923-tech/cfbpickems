@@ -1039,6 +1039,28 @@ function PicksPage({ user, isAdmin, setPage }) {
     }
   };
 
+  // Inline install/notification help shown when someone asks for instructions
+  // on the app-enrollment poll question, reusing the same steps as the
+  // header's install/notification prompts.
+  const onIOS = isIOSDevice();
+  const onAndroid = isAndroidDevice();
+  const showIOSSteps = onIOS || !onAndroid;
+  const showAndroidSteps = onAndroid || !onIOS;
+  const androidInstallAvailable = useInstallPromptAvailable();
+  const [enrollNotifState, setEnrollNotifState] = useState(
+    (typeof Notification !== "undefined" && Notification.permission === "granted") ? "on" : "idle"
+  );
+  const handleEnrollEnableNotifications = async () => {
+    setEnrollNotifState("working");
+    try {
+      await enablePushNotifications({ isAdmin });
+      setEnrollNotifState("on");
+    } catch (e) {
+      setEnrollNotifState("idle");
+      setPollMsg((e && e.message) ? e.message : "Couldn't enable notifications.");
+    }
+  };
+
   const voteGamesPerWeek = async (choice) => {
     setGamesPerWeekChoice(choice);
     try { localStorage.setItem("poll_games_per_week_v2", choice); } catch {}
@@ -1732,6 +1754,49 @@ if (typeof window !== "undefined") window.history.pushState(null, "", "/confirm"
                 ))}
               </div>
               {touchedSubmit && !appEnrollChoice && <div style={{ color:"#f0596b", fontSize:12, marginTop:6 }}>Please pick an answer.</div>}
+              {appEnrollChoice === "No, but I would like instructions on how to" && (
+                <div style={{ marginTop:12, padding:"12px 14px", borderRadius:10, background:"#0e1730", border:"1px solid #1f2a44" }}>
+                  {showIOSSteps && (
+                    <div style={{ marginBottom: showAndroidSteps ? 14 : 0 }}>
+                      <div style={{ fontSize:13, fontWeight:700, color:"#eef2ff", marginBottom:6 }}>On iPhone (must be on Safari)</div>
+                      <ol style={{ margin:0, paddingLeft:20, fontSize:13, color:"#cfd8f0", lineHeight:1.6 }}>
+                        <li>Tap the <b>Share</b> icon (square with an arrow up, or <b>&#8226;&#8226;&#8226;</b> on newer iOS)</li>
+                        <li>Tap <b>View More</b> if you don't see &ldquo;Add to Home Screen&rdquo; right away</li>
+                        <li>Tap <b>Add to Home Screen</b>, then <b>Add</b></li>
+                        <li>Open the app from your home screen, then tap <b>Enable Notifications</b> below</li>
+                      </ol>
+                    </div>
+                  )}
+                  {showAndroidSteps && (
+                    <div>
+                      <div style={{ fontSize:13, fontWeight:700, color:"#eef2ff", marginBottom:6 }}>On Android (Chrome)</div>
+                      {androidInstallAvailable ? (
+                        <button
+                          type="button"
+                          onClick={async ()=>{ await triggerAndroidInstallPrompt(); }}
+                          style={{ background:"#1a6b46", color:"#fff", border:0, padding:"8px 14px", borderRadius:10, fontWeight:600, cursor:"pointer", marginBottom:6 }}
+                        >
+                          Click Here to Install
+                        </button>
+                      ) : (
+                        <ol style={{ margin:0, paddingLeft:20, fontSize:13, color:"#cfd8f0", lineHeight:1.6 }}>
+                          <li>Tap the menu icon (&#8942;) in the top right</li>
+                          <li>Tap <b>Add to Home screen</b> (or <b>Install app</b>)</li>
+                          <li>Tap <b>Add</b> / <b>Install</b> to confirm, then tap <b>Enable Notifications</b> below</li>
+                        </ol>
+                      )}
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={handleEnrollEnableNotifications}
+                    disabled={enrollNotifState === "working" || enrollNotifState === "on"}
+                    style={{ marginTop:10, background: enrollNotifState === "on" ? "#1a6b46" : "#6aa2ff", color: enrollNotifState === "on" ? "#fff" : "#07152b", border:0, padding:"9px 14px", borderRadius:10, fontWeight:600, cursor:"pointer" }}
+                  >
+                    {enrollNotifState === "working" ? "Enabling…" : enrollNotifState === "on" ? "Notifications enabled" : "Enable Notifications"}
+                  </button>
+                </div>
+              )}
             </div>
 
             {pollMsg && <div style={{ marginTop:10, fontSize:12, color:"#9aa4c7" }}>{pollMsg}</div>}
