@@ -1039,6 +1039,19 @@ function PicksPage({ user, isAdmin, setPage }) {
     }
   };
 
+  // Optional free-text suggestion, saved on blur (doesn't gate submit)
+  const [featureFeedback, setFeatureFeedback] = useState(() => { try { return localStorage.getItem("poll_feedback_text") || ""; } catch { return ""; } });
+  const saveFeedback = async () => {
+    const text = featureFeedback.trim();
+    try { localStorage.setItem("poll_feedback_text", featureFeedback); } catch {}
+    if (!text) return;
+    try {
+      await setDoc(doc(db, "feedback", pollVoterId), { text, updatedAt: serverTimestamp() }, { merge: true });
+    } catch (e) {
+      setPollMsg("Couldn't save your note: " + (e?.message || String(e)));
+    }
+  };
+
   const initFromLiveRef = useRef(false);
   useEffect(() => {
     if (!initFromLiveRef.current && live?.year && live?.week) {
@@ -1305,6 +1318,9 @@ const [code, setCode] = useState("");
       errs.picks = missingGames.length + " game" + (missingGames.length>1?"s":"") + " not selected";
     }
 
+    if (!tfChoice) errs.tfPoll = "Please answer the Thursday/Friday games question";
+    if (!gamesPerWeekChoices || gamesPerWeekChoices.length === 0) errs.gamesPerWeekPoll = "Please answer the games-per-week question";
+
     const ok = Object.keys(errs).length === 0;
     const parts = [];
     if (errs.firstName) parts.push("first name");
@@ -1313,6 +1329,8 @@ const [code, setCode] = useState("");
     if (errs.venmo) parts.push("venmo");
     if (errs.venmoConfirmed) parts.push("venmo confirmation");
     if (missingGames.length) parts.push(missingGames.length + " game picks");
+    if (errs.tfPoll) parts.push("Thursday/Friday poll answer");
+    if (errs.gamesPerWeekPoll) parts.push("games-per-week poll answer");
     const message = ok ? "" : (parts.join(", ") + " required.");
 
     if (!opts.silent && typeof setErrors === "function") setErrors(errs);
@@ -1334,7 +1352,7 @@ const [code, setCode] = useState("");
     return { ok, errors: errs, message, missingGames, focus };
   };
 
-  const isValid = useMemo(function(){ return validatePicks({ silent: true }).ok; }, [form, picks, games]);
+  const isValid = useMemo(function(){ return validatePicks({ silent: true }).ok; }, [form, picks, games, tfChoice, gamesPerWeekChoices]);
 
     // Keep validation errors updated after a submit attempt
   useEffect(() => {
@@ -1650,45 +1668,57 @@ if (typeof window !== "undefined") window.history.pushState(null, "", "/confirm"
             ))}
           </div>
 
+          <div style={{ marginTop:24, paddingTop:20, borderTop:"1px solid #1f2a44" }}>
+            <h3 style={{ margin:"0 0 16px" }}>Two quick questions before you submit</h3>
+
+            <div style={{ marginBottom:20 }}>
+              <div style={{ fontWeight:600, marginBottom:8 }}>Should we include Thursday/Friday games night this year? <span style={{ color:"#f0596b" }}>*</span></div>
+              <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                {["Yes", "No", "Only when there are good games"].map(opt => (
+                  <label key={opt} style={{ display:"flex", flexDirection:"row", alignItems:"center", gap:8, cursor:"pointer", fontSize:14 }}>
+                    <input type="radio" name="poll_tf_games" checked={tfChoice === opt} onChange={() => voteTf(opt)} />
+                    {opt}
+                  </label>
+                ))}
+              </div>
+              {touchedSubmit && !tfChoice && <div style={{ color:"#f0596b", fontSize:12, marginTop:6 }}>Please pick an answer.</div>}
+            </div>
+
+            <div>
+              <div style={{ fontWeight:600, marginBottom:2 }}>How many games do you want to pick from each week? <span style={{ color:"#f0596b" }}>*</span></div>
+              <div style={{ fontSize:12, opacity:.7, marginBottom:8 }}>The usual amount is around 35-40. Check all that apply.</div>
+              <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                {["15-25", "25-35", "35-45", "45-55", "55+"].map(opt => (
+                  <label key={opt} style={{ display:"flex", flexDirection:"row", alignItems:"center", gap:8, cursor:"pointer", fontSize:14 }}>
+                    <input type="checkbox" checked={gamesPerWeekChoices.includes(opt)} onChange={() => toggleGamesPerWeek(opt)} />
+                    {opt}
+                  </label>
+                ))}
+              </div>
+              {touchedSubmit && gamesPerWeekChoices.length === 0 && <div style={{ color:"#f0596b", fontSize:12, marginTop:6 }}>Please check at least one.</div>}
+            </div>
+
+            {pollMsg && <div style={{ marginTop:10, fontSize:12, color:"#9aa4c7" }}>{pollMsg}</div>}
+
+            <div style={{ marginTop:20 }}>
+              <div style={{ fontWeight:600, marginBottom:2 }}>Anything else? Feature ideas, suggestions, complaints&hellip;</div>
+              <div style={{ fontSize:12, opacity:.7, marginBottom:8 }}>Totally optional.</div>
+              <textarea
+                value={featureFeedback}
+                onChange={(e) => setFeatureFeedback(e.target.value)}
+                onBlur={saveFeedback}
+                placeholder="e.g. an idea for next season..."
+                style={{ ...inputStyle, width:"100%", minHeight:70, fontFamily:"inherit", resize:"vertical" }}
+              />
+            </div>
+          </div>
+
           <Row style={{ justifyContent: "flex-end", marginTop: 12 }}><div style={{ marginRight:"auto", display:"flex", alignItems:"center", gap:12 }}><input type="checkbox" aria-label="venmo" checked={form.venmoConfirmed} onChange={e=>setForm({...form, venmoConfirmed:e.target.checked})} /><span style={{ fontSize:12 }}>By checking this box, I confirm I have sent $5 to @ZackSlay on Venmo</span></div>
             <div style={{color:"#c0392b",fontSize:12,margin:"8px 0"}} role="alert">{touchedSubmit && !isValid && (errors.picks || "Please complete all required fields and picks.")}</div>
 <button type="submit" disabled={!isValid || picksLocked}>Submit / Update Picks</button>
           <div style={{ color:'#9aa4c7', margintop:-4, fontSize:13 }}>{msg}</div>
           </Row>
         </form>
-
-        <div style={{ marginTop:24, paddingTop:20, borderTop:"1px solid #1f2a44" }}>
-          <h3 style={{ margin:"0 0 4px" }}>Quick polls</h3>
-          <p style={{ margin:"0 0 16px", fontSize:13, opacity:.75 }}>Help shape next season &mdash; totally optional.</p>
-
-          <div style={{ marginBottom:20 }}>
-            <div style={{ fontWeight:600, marginBottom:8 }}>Should we include Thursday/Friday games night this year?</div>
-            <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
-              {["Yes", "No", "Only when there are good games"].map(opt => (
-                <label key={opt} style={{ display:"flex", flexDirection:"row", alignItems:"center", gap:8, cursor:"pointer", fontSize:14 }}>
-                  <input type="radio" name="poll_tf_games" checked={tfChoice === opt} onChange={() => voteTf(opt)} />
-                  {opt}
-                </label>
-              ))}
-            </div>
-          </div>
-
-          <div>
-            <div style={{ fontWeight:600, marginBottom:2 }}>How many games do you want to pick from each week?</div>
-            <div style={{ fontSize:12, opacity:.7, marginBottom:8 }}>The usual amount is around 35-40. Check all that apply.</div>
-            <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
-              {["15-25", "25-35", "35-45", "45-55", "55+"].map(opt => (
-                <label key={opt} style={{ display:"flex", flexDirection:"row", alignItems:"center", gap:8, cursor:"pointer", fontSize:14 }}>
-                  <input type="checkbox" checked={gamesPerWeekChoices.includes(opt)} onChange={() => toggleGamesPerWeek(opt)} />
-                  {opt}
-                </label>
-              ))}
-            </div>
-          </div>
-
-          {pollMsg && <div style={{ marginTop:10, fontSize:12, color:"#9aa4c7" }}>{pollMsg}</div>}
-        </div>
-
 
       {showRules && (
   <div style={{position:"fixed", inset:0, background:"rgba(0,0,0,.6)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:9999}}>
@@ -3734,6 +3764,17 @@ function AdminPage({ user, isAdmin, setPage }) {
     return counts;
   };
   const pollVoterCount = (pollId) => pollVotes.filter(v => v.pollId === pollId).length;
+
+  // Optional free-text suggestions from the same section on the Picks page
+  const [feedbackNotes, setFeedbackNotes] = useState([]);
+  useEffect(() => {
+    if (!isAdmin) return;
+    const unsub = onSnapshot(collection(db, "feedback"), (snap) => {
+      setFeedbackNotes(snap.docs.map(d => d.data()).filter(f => f.text));
+    });
+    return () => unsub();
+  }, [isAdmin]);
+
   const [games, setGames] = useState([]);
   const [pickCount, setPickCount] = useState(0);
   const [msg, setMsg] = useState("");
@@ -4289,6 +4330,15 @@ Type "home" or "away".`,
               <div key={opt} style={{ fontSize:13, padding:"2px 0" }}>{opt}: <strong>{count}</strong></div>
             ))}
             {pollVoterCount("games_per_week") === 0 && <div style={{ fontSize:13, opacity:.6 }}>No votes yet.</div>}
+          </div>
+          <div style={{ marginTop:16 }}>
+            <div style={{ fontWeight:600, marginBottom:6 }}>
+              Suggestions / feedback <span style={{ opacity:.6, fontWeight:400 }}>({feedbackNotes.length})</span>
+            </div>
+            {feedbackNotes.map((f, i) => (
+              <div key={i} style={{ fontSize:13, padding:"6px 10px", marginBottom:6, background:"#0e1730", border:"1px solid #1f2a44", borderRadius:8 }}>{f.text}</div>
+            ))}
+            {feedbackNotes.length === 0 && <div style={{ fontSize:13, opacity:.6 }}>None yet.</div>}
           </div>
         </AdminSection>
 

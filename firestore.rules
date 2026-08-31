@@ -150,6 +150,17 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // Optional free-text suggestions from the Picks page (not required to
+    // submit picks). One doc per voter id, same idea as pollVotes; admin-only
+    // reads for now.
+    match /feedback/{voteId} {
+      allow get: if isAdmin();
+      allow list: if isAdmin();
+      allow create: if request.resource.data.text is string && request.resource.data.text.size() > 0;
+      allow update: if request.resource.data.text is string && request.resource.data.text.size() > 0;
+      allow delete: if false;
+    }
+
     // Admin taps "Clean Up Devices Now" -> drops an empty trigger doc here;
     // a Cloud Function dry-runs every registered token and removes any FCM
     // reports as no longer valid, then deletes this doc.
