@@ -1528,7 +1528,7 @@ if (typeof window !== "undefined") window.history.pushState(null, "", "/confirm"
 <div style={{ opacity:.85 }}>
       Deadline to submit: {earliestGame ? kickoffLabel(earliestGame, { timeZone: "America/New_York" }) : "TBD"}
     </div>
-    <div style={{ margin:"12px auto 0", maxWidth:560, padding:"10px 14px", borderRadius:10, background:"rgba(240,180,41,0.1)", border:"1px solid rgba(240,180,41,0.35)", color:"#f0b429", fontSize:13, lineHeight:1.5, textAlign:"left" }}>
+    <div style={{ margin:"12px auto 0", maxWidth:560, padding:"10px 14px", borderRadius:10, background:"rgba(240,180,41,0.1)", border:"1px solid rgba(240,180,41,0.35)", color:"#f0b429", fontSize:16, lineHeight:1.5, textAlign:"left" }}>
       <div><strong>A note on this week's games:</strong> Week 1 is mostly cupcakes, so we prioritized closer matchups over full Top 25 coverage.</div>
     </div>
     <div style={{ marginTop:10, display:"grid", rowGap: 0, justifyItems:"center", width:"100%", marginBottom: 0 }}>
