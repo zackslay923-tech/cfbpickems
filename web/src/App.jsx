@@ -1001,6 +1001,44 @@ function PicksPage({ user, isAdmin, setPage }) {
   // One-time copy of live {year,week} to local state (prevents flicker)
 
   const [live, setLive] = useState({ year: null, week: null });
+
+  // --- Weekly polls (one-off, this week only; results are admin-only for now) ---
+  const [pollVoterId] = useState(() => {
+    try {
+      let id = localStorage.getItem("pollVoterId");
+      if (!id) { id = Math.random().toString(36).slice(2) + Date.now().toString(36); localStorage.setItem("pollVoterId", id); }
+      return id;
+    } catch { return "anon-" + Math.random().toString(36).slice(2); }
+  });
+  const [tfChoice, setTfChoice] = useState(() => { try { return localStorage.getItem("poll_tf_games") || ""; } catch { return ""; } });
+  const [gamesPerWeekChoices, setGamesPerWeekChoices] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("poll_games_per_week") || "[]"); } catch { return []; }
+  });
+  const [pollMsg, setPollMsg] = useState("");
+
+  const voteTf = async (choice) => {
+    setTfChoice(choice);
+    try { localStorage.setItem("poll_tf_games", choice); } catch {}
+    try {
+      await setDoc(doc(db, "pollVotes", `tf_games__${pollVoterId}`), { pollId: "tf_games", choice, updatedAt: serverTimestamp() }, { merge: true });
+      setPollMsg("Thanks, your vote is in!");
+    } catch (e) {
+      setPollMsg("Vote failed: " + (e?.message || String(e)));
+    }
+  };
+
+  const toggleGamesPerWeek = async (opt) => {
+    const next = gamesPerWeekChoices.includes(opt) ? gamesPerWeekChoices.filter(x => x !== opt) : [...gamesPerWeekChoices, opt];
+    setGamesPerWeekChoices(next);
+    try { localStorage.setItem("poll_games_per_week", JSON.stringify(next)); } catch {}
+    try {
+      await setDoc(doc(db, "pollVotes", `games_per_week__${pollVoterId}`), { pollId: "games_per_week", choices: next, updatedAt: serverTimestamp() }, { merge: true });
+      setPollMsg("Thanks, your vote is in!");
+    } catch (e) {
+      setPollMsg("Vote failed: " + (e?.message || String(e)));
+    }
+  };
+
   const initFromLiveRef = useRef(false);
   useEffect(() => {
     if (!initFromLiveRef.current && live?.year && live?.week) {
@@ -1428,6 +1466,9 @@ if (typeof window !== "undefined") window.history.pushState(null, "", "/confirm"
 <div style={{ opacity:.85 }}>
       Deadline to submit: {earliestGame ? kickoffLabel(earliestGame, { timeZone: "America/New_York" }) : "TBD"}
     </div>
+    <div style={{ margin:"12px auto 0", maxWidth:560, padding:"10px 14px", borderRadius:10, background:"rgba(240,180,41,0.1)", border:"1px solid rgba(240,180,41,0.35)", color:"#f0b429", fontSize:13, lineHeight:1.5, textAlign:"left" }}>
+      <strong>A note on this week's games:</strong> it's a mostly cupcake week, so instead of trying to include every Top 25 team, we prioritized closer, more competitive matchups &mdash; with a few cupcakes mixed in.
+    </div>
     <div style={{ marginTop:10, display:"grid", rowGap: 0, justifyItems:"center", width:"100%", marginBottom: 0 }}>
   <div style={{ display:"inline-flex", alignItems:"center", gap:6 }}>
     <span style={{ opacity:.85, fontStyle:"italic", fontSize:13 }}>Already submitted for this week?</span>
@@ -1616,7 +1657,39 @@ if (typeof window !== "undefined") window.history.pushState(null, "", "/confirm"
           </Row>
         </form>
 
-        
+        <div style={{ marginTop:24, paddingTop:20, borderTop:"1px solid #1f2a44" }}>
+          <h3 style={{ margin:"0 0 4px" }}>Quick polls</h3>
+          <p style={{ margin:"0 0 16px", fontSize:13, opacity:.75 }}>Help shape next season &mdash; totally optional.</p>
+
+          <div style={{ marginBottom:20 }}>
+            <div style={{ fontWeight:600, marginBottom:8 }}>Should we include Thursday/Friday games night this year?</div>
+            <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+              {["Yes", "No", "Only when there are good games"].map(opt => (
+                <label key={opt} style={{ display:"flex", flexDirection:"row", alignItems:"center", gap:8, cursor:"pointer", fontSize:14 }}>
+                  <input type="radio" name="poll_tf_games" checked={tfChoice === opt} onChange={() => voteTf(opt)} />
+                  {opt}
+                </label>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <div style={{ fontWeight:600, marginBottom:2 }}>How many games do you want to pick from each week?</div>
+            <div style={{ fontSize:12, opacity:.7, marginBottom:8 }}>The usual amount is around 35-40. Check all that apply.</div>
+            <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+              {["15-25", "25-35", "35-45", "45-55", "55+"].map(opt => (
+                <label key={opt} style={{ display:"flex", flexDirection:"row", alignItems:"center", gap:8, cursor:"pointer", fontSize:14 }}>
+                  <input type="checkbox" checked={gamesPerWeekChoices.includes(opt)} onChange={() => toggleGamesPerWeek(opt)} />
+                  {opt}
+                </label>
+              ))}
+            </div>
+          </div>
+
+          {pollMsg && <div style={{ marginTop:10, fontSize:12, color:"#9aa4c7" }}>{pollMsg}</div>}
+        </div>
+
+
       {showRules && (
   <div style={{position:"fixed", inset:0, background:"rgba(0,0,0,.6)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:9999}}>
     <div style={{ background:"#121a2b", border:"1px solid #1f2a44", borderRadius:16, padding:16, maxWidth:720, width:"90%", boxShadow:"0 10px 24px rgba(0,0,0,.35)" }}>
@@ -3641,6 +3714,26 @@ function AdminPage({ user, isAdmin, setPage }) {
   const [live, setLive] = useState({ year: null, week: null });
   const [year, setYear] = useState(null);
   const [week, setWeek] = useState(null);
+
+  // Weekly poll results (admin-only for now - see PicksPage for the voting UI)
+  const [pollVotes, setPollVotes] = useState([]);
+  useEffect(() => {
+    if (!isAdmin) return;
+    const unsub = onSnapshot(collection(db, "pollVotes"), (snap) => {
+      setPollVotes(snap.docs.map(d => d.data()));
+    });
+    return () => unsub();
+  }, [isAdmin]);
+  const tallyPoll = (pollId, field) => {
+    const counts = {};
+    for (const v of pollVotes) {
+      if (v.pollId !== pollId) continue;
+      const vals = field === "choices" ? (Array.isArray(v.choices) ? v.choices : []) : [v.choice].filter(Boolean);
+      for (const val of vals) counts[val] = (counts[val] || 0) + 1;
+    }
+    return counts;
+  };
+  const pollVoterCount = (pollId) => pollVotes.filter(v => v.pollId === pollId).length;
   const [games, setGames] = useState([]);
   const [pickCount, setPickCount] = useState(0);
   const [msg, setMsg] = useState("");
@@ -4177,6 +4270,27 @@ Type "home" or "away".`,
         {msg && (
           <div style={{ marginTop:12, padding:"8px 12px", borderRadius:10, background:"rgba(106,162,255,.1)", border:"1px solid rgba(106,162,255,.3)", color:"#cfe0ff", fontSize:13 }}>{msg}</div>
         )}
+
+        <AdminSection title="Weekly Poll Results" tone="neutral" right={<StatusBadge tone="neutral">Not shown to voters yet</StatusBadge>}>
+          <div style={{ marginBottom:16 }}>
+            <div style={{ fontWeight:600, marginBottom:6 }}>
+              Should we include Thursday/Friday games night this year? <span style={{ opacity:.6, fontWeight:400 }}>({pollVoterCount("tf_games")} votes)</span>
+            </div>
+            {Object.entries(tallyPoll("tf_games", "choice")).sort((a,b) => b[1]-a[1]).map(([opt, count]) => (
+              <div key={opt} style={{ fontSize:13, padding:"2px 0" }}>{opt}: <strong>{count}</strong></div>
+            ))}
+            {pollVoterCount("tf_games") === 0 && <div style={{ fontSize:13, opacity:.6 }}>No votes yet.</div>}
+          </div>
+          <div>
+            <div style={{ fontWeight:600, marginBottom:6 }}>
+              How many games do you want to pick from each week? <span style={{ opacity:.6, fontWeight:400 }}>({pollVoterCount("games_per_week")} respondents)</span>
+            </div>
+            {Object.entries(tallyPoll("games_per_week", "choices")).sort((a,b) => b[1]-a[1]).map(([opt, count]) => (
+              <div key={opt} style={{ fontSize:13, padding:"2px 0" }}>{opt}: <strong>{count}</strong></div>
+            ))}
+            {pollVoterCount("games_per_week") === 0 && <div style={{ fontSize:13, opacity:.6 }}>No votes yet.</div>}
+          </div>
+        </AdminSection>
 
         <AdminSection title="Live Week" tone="primary" right={<StatusBadge tone="primary">Live: {live?.year ?? "-"} / W{live?.week ?? "-"}</StatusBadge>}>
           <Row>

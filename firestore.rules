@@ -137,6 +137,19 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // Weekly polls: anyone can vote or change their own vote (doc id embeds
+    // their local voter id, one doc per poll per voter); tallies are
+    // admin-only for now, not shown to voters.
+    match /pollVotes/{voteId} {
+      allow get: if isAdmin();
+      allow list: if isAdmin();
+      allow create: if request.resource.data.pollId is string
+        && (request.resource.data.get('choice', '') is string)
+        && (request.resource.data.get('choices', []) is list);
+      allow update: if request.resource.data.pollId == resource.data.pollId;
+      allow delete: if false;
+    }
+
     // Admin taps "Clean Up Devices Now" -> drops an empty trigger doc here;
     // a Cloud Function dry-runs every registered token and removes any FCM
     // reports as no longer valid, then deletes this doc.
