@@ -1674,7 +1674,7 @@ if (typeof window !== "undefined") window.history.pushState(null, "", "/confirm"
             <div style={{ marginBottom:20 }}>
               <div style={{ fontWeight:600, marginBottom:8 }}>Should we include Thursday/Friday games night this year? <span style={{ color:"#f0596b" }}>*</span></div>
               <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
-                {["Yes", "No", "Only when there are good games"].map(opt => (
+                {["Yes", "No"].map(opt => (
                   <label key={opt} style={{ display:"flex", flexDirection:"row", alignItems:"center", gap:8, cursor:"pointer", fontSize:14 }}>
                     <input type="radio" name="poll_tf_games" checked={tfChoice === opt} onChange={() => voteTf(opt)} />
                     {opt}
