@@ -3306,6 +3306,31 @@ function AdminMissingPicksPage({ user, isAdmin, setPage }) {
     }
   }, [live]);
 
+  // This week's earliest kickoff, so email drafts can quote the real
+  // submission deadline instead of a hardcoded date.
+  const [weekGames, setWeekGames] = useState([]);
+  useEffect(() => {
+    if (!hasWeekValue(year) || !hasWeekValue(week)) { setWeekGames([]); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const gs = await listGames({ year, week, includedOnly: true });
+        if (!cancelled) setWeekGames(gs || []);
+      } catch (e) {
+        if (!cancelled) setWeekGames([]);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [year, week]);
+  const earliestGame = useMemo(() => {
+    const arr = (weekGames || [])
+      .map(g => ({ g, d: kickoffDate(g) }))
+      .filter(x => x.d instanceof Date && !isNaN(x.d));
+    arr.sort((a,b) => a.d - b.d);
+    return arr[0]?.g || null;
+  }, [weekGames]);
+  const deadlineLabel = earliestGame ? kickoffLabel(earliestGame, { timeZone: "America/New_York" }) : "TBD";
+
   // Everyone who has ever submitted picks, any year/week, grouped into
   // people (not raw docs) via the name/Venmo union-find above - the
   // "roster" to check this week's submissions against, since the app has
@@ -3516,8 +3541,9 @@ function AdminMissingPicksPage({ user, isAdmin, setPage }) {
 
   const openIntroEmailDraft = () => {
     if (missingEmails.length === 0) { alert("No email addresses on file for anyone missing."); return; }
+    if (deadlineLabel === "TBD") { alert("Couldn't determine this week's deadline yet (games haven't loaded). Try again in a moment."); return; }
     const subject = `CFB Pick 'Ems: Week 1 is officially open!`;
-    const body = `COLLEGE FOOTBALL is BACK!\n\nWeek 1 is finally here, and the CFB Pick 'Ems is officially open.\n\nNew link — update your bookmarks:\nhttps://cfbpickems.web.app\n\nGet your picks in before Saturday, August 29 at 12:00 PM.\n\nThe app has some brand new features to make it easier!:\n\n• Autosave — your picks save automatically as you go, so no more losing everything because you closed the tab\n• Autofill — returning players should see their information autofilled after entering their first and last name\n• Add to Home Screen — drop the site on your phone's home screen and it opens like a real app. No more digging for the link every week.\n• Notifications — turn on push notifications right in the app for picks opening, deadlines, and results.\n\nSpeaking of notifications — if you'd rather get reminders as app notifications instead of email this year, just let me know and I'll switch you over.\n\nIf you want to be opted out just reply "STOP".\n\nAlright, let's have a great season. Good luck!\n\n- Zack`;
+    const body = `COLLEGE FOOTBALL is BACK!\n\nWeek 1 is finally here, and the CFB Pick 'Ems is officially open.\n\nNew link — update your bookmarks:\nhttps://cfbpickems.web.app\n\nGet your picks in before ${deadlineLabel}.\n\nThe app has some brand new features to make it easier!:\n\n• Autosave — your picks save automatically as you go, so no more losing everything because you closed the tab\n• Autofill — returning players should see their information autofilled after entering their first and last name\n• Add to Home Screen — drop the site on your phone's home screen and it opens like a real app. No more digging for the link every week.\n• Notifications — turn on push notifications right in the app for picks opening, deadlines, and results.\n\nSpeaking of notifications — if you'd rather get reminders as app notifications instead of email this year, just let me know and I'll switch you over.\n\nIf you want to be opted out just reply "STOP".\n\nAlright, let's have a great season. Good luck!\n\n- Zack`;
     const url = `https://mail.google.com/mail/?view=cm&fs=1&tf=1&bcc=${encodeURIComponent(missingEmails.join(","))}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
     window.open(url, "_blank", "noopener,noreferrer");
   };
