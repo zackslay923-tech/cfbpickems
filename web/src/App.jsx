@@ -1498,7 +1498,8 @@ if (typeof window !== "undefined") window.history.pushState(null, "", "/confirm"
       Deadline to submit: {earliestGame ? kickoffLabel(earliestGame, { timeZone: "America/New_York" }) : "TBD"}
     </div>
     <div style={{ margin:"12px auto 0", maxWidth:560, padding:"10px 14px", borderRadius:10, background:"rgba(240,180,41,0.1)", border:"1px solid rgba(240,180,41,0.35)", color:"#f0b429", fontSize:13, lineHeight:1.5, textAlign:"left" }}>
-      <strong>A note on this week's games:</strong> it's a mostly cupcake week, so instead of trying to include every Top 25 team, we prioritized closer, more competitive matchups &mdash; with a few cupcakes mixed in.
+      <div><strong>A note on this week's games:</strong> Week 1 features mostly cupcake games, so instead of trying to include every Top 25 team, closer, more competitive matchups were prioritized (with some cupcakes mixed in).</div>
+      <div style={{ marginTop:8 }}>Additionally, there are some poll questions at the end of the picks that will help me get a read on what's preferred for the season going forward. Feel free to provide additional feedback as well.</div>
     </div>
     <div style={{ marginTop:10, display:"grid", rowGap: 0, justifyItems:"center", width:"100%", marginBottom: 0 }}>
   <div style={{ display:"inline-flex", alignItems:"center", gap:6 }}>
