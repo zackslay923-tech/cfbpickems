@@ -1803,13 +1803,13 @@ if (typeof window !== "undefined") window.history.pushState(null, "", "/confirm"
             {pollMsg && <div style={{ marginTop:10, fontSize:12, color:"#9aa4c7" }}>{pollMsg}</div>}
 
             <div style={{ marginTop:20 }}>
-              <div style={{ fontWeight:600, marginBottom:2 }}>Anything else? Feature ideas, suggestions, complaints&hellip;</div>
-              <div style={{ fontSize:12, opacity:.7, marginBottom:8 }}>Totally optional.</div>
+              <div style={{ fontWeight:600, marginBottom:2 }}>Any other thoughts?</div>
+              <div style={{ fontSize:12, opacity:.7, marginBottom:8 }}>Expand on your answers above, give feedback on the app, pitch a new idea &mdash; whatever's on your mind. Totally optional.</div>
               <textarea
                 value={featureFeedback}
                 onChange={(e) => setFeatureFeedback(e.target.value)}
                 onBlur={saveFeedback}
-                placeholder="e.g. an idea for next season..."
+                placeholder="e.g. more detail on a poll answer, something you'd change about the app, a new feature idea..."
                 style={{ ...inputStyle, width:"100%", minHeight:70, fontFamily:"inherit", resize:"vertical" }}
               />
             </div>
