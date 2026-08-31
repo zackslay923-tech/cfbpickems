@@ -1021,7 +1021,7 @@ function PicksPage({ user, isAdmin, setPage }) {
     setTfChoice(choice);
     try { localStorage.setItem("poll_tf_games", choice); } catch {}
     try {
-      await setDoc(doc(db, "pollVotes", `tf_games__${pollVoterId}`), { pollId: "tf_games", choice, updatedAt: serverTimestamp() }, { merge: true });
+      await setDoc(doc(db, "pollVotes", `tf_games__${pollVoterId}`), { pollId: "tf_games", choice, firstName: form.firstName || "", lastName: form.lastName || "", updatedAt: serverTimestamp() }, { merge: true });
       setPollMsg("Thanks, your vote is in!");
     } catch (e) {
       setPollMsg("Vote failed: " + (e?.message || String(e)));
@@ -1032,7 +1032,7 @@ function PicksPage({ user, isAdmin, setPage }) {
     setAppEnrollChoice(choice);
     try { localStorage.setItem("poll_app_enroll", choice); } catch {}
     try {
-      await setDoc(doc(db, "pollVotes", `app_enroll__${pollVoterId}`), { pollId: "app_enroll", choice, updatedAt: serverTimestamp() }, { merge: true });
+      await setDoc(doc(db, "pollVotes", `app_enroll__${pollVoterId}`), { pollId: "app_enroll", choice, firstName: form.firstName || "", lastName: form.lastName || "", updatedAt: serverTimestamp() }, { merge: true });
       setPollMsg("Thanks, your vote is in!");
     } catch (e) {
       setPollMsg("Vote failed: " + (e?.message || String(e)));
@@ -1065,7 +1065,7 @@ function PicksPage({ user, isAdmin, setPage }) {
     setGamesPerWeekChoice(choice);
     try { localStorage.setItem("poll_games_per_week_v2", choice); } catch {}
     try {
-      await setDoc(doc(db, "pollVotes", `games_per_week__${pollVoterId}`), { pollId: "games_per_week", choice, updatedAt: serverTimestamp() }, { merge: true });
+      await setDoc(doc(db, "pollVotes", `games_per_week__${pollVoterId}`), { pollId: "games_per_week", choice, firstName: form.firstName || "", lastName: form.lastName || "", updatedAt: serverTimestamp() }, { merge: true });
       setPollMsg("Thanks, your vote is in!");
     } catch (e) {
       setPollMsg("Vote failed: " + (e?.message || String(e)));
@@ -1079,7 +1079,7 @@ function PicksPage({ user, isAdmin, setPage }) {
     try { localStorage.setItem("poll_feedback_text", featureFeedback); } catch {}
     if (!text) return;
     try {
-      await setDoc(doc(db, "feedback", pollVoterId), { text, updatedAt: serverTimestamp() }, { merge: true });
+      await setDoc(doc(db, "feedback", pollVoterId), { text, firstName: form.firstName || "", lastName: form.lastName || "", updatedAt: serverTimestamp() }, { merge: true });
     } catch (e) {
       setPollMsg("Couldn't save your note: " + (e?.message || String(e)));
     }
@@ -3903,6 +3903,13 @@ function AdminPage({ user, isAdmin, setPage }) {
     return counts;
   };
   const pollVoterCount = (pollId) => pollVotes.filter(v => v.pollId === pollId).length;
+  const pollVotersFor = (pollId) => pollVotes
+    .filter(v => v.pollId === pollId)
+    .map(v => ({
+      name: `${v.firstName || ""} ${v.lastName || ""}`.trim() || "(no name on file)",
+      choice: v.choice || (Array.isArray(v.choices) ? v.choices.join(", ") : ""),
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
 
   // Optional free-text suggestions from the same section on the Picks page
   const [feedbackNotes, setFeedbackNotes] = useState([]);
@@ -4460,6 +4467,14 @@ Type "home" or "away".`,
               <div key={opt} style={{ fontSize:13, padding:"2px 0" }}>{opt}: <strong>{count}</strong></div>
             ))}
             {pollVoterCount("tf_games") === 0 && <div style={{ fontSize:13, opacity:.6 }}>No votes yet.</div>}
+            {pollVoterCount("tf_games") > 0 && (
+              <details style={{ marginTop:6 }}>
+                <summary style={{ fontSize:12, opacity:.7, cursor:"pointer" }}>See who voted for what</summary>
+                {pollVotersFor("tf_games").map((v, i) => (
+                  <div key={i} style={{ fontSize:13, padding:"2px 0 2px 10px" }}>{v.name}: {v.choice}</div>
+                ))}
+              </details>
+            )}
           </div>
           <div>
             <div style={{ fontWeight:600, marginBottom:6 }}>
@@ -4469,6 +4484,14 @@ Type "home" or "away".`,
               <div key={opt} style={{ fontSize:13, padding:"2px 0" }}>{opt}: <strong>{count}</strong></div>
             ))}
             {pollVoterCount("games_per_week") === 0 && <div style={{ fontSize:13, opacity:.6 }}>No votes yet.</div>}
+            {pollVoterCount("games_per_week") > 0 && (
+              <details style={{ marginTop:6 }}>
+                <summary style={{ fontSize:12, opacity:.7, cursor:"pointer" }}>See who voted for what</summary>
+                {pollVotersFor("games_per_week").map((v, i) => (
+                  <div key={i} style={{ fontSize:13, padding:"2px 0 2px 10px" }}>{v.name}: {v.choice}</div>
+                ))}
+              </details>
+            )}
           </div>
           <div style={{ marginTop:16 }}>
             <div style={{ fontWeight:600, marginBottom:6 }}>
@@ -4478,13 +4501,24 @@ Type "home" or "away".`,
               <div key={opt} style={{ fontSize:13, padding:"2px 0" }}>{opt}: <strong>{count}</strong></div>
             ))}
             {pollVoterCount("app_enroll") === 0 && <div style={{ fontSize:13, opacity:.6 }}>No votes yet.</div>}
+            {pollVoterCount("app_enroll") > 0 && (
+              <details style={{ marginTop:6 }}>
+                <summary style={{ fontSize:12, opacity:.7, cursor:"pointer" }}>See who voted for what</summary>
+                {pollVotersFor("app_enroll").map((v, i) => (
+                  <div key={i} style={{ fontSize:13, padding:"2px 0 2px 10px" }}>{v.name}: {v.choice}</div>
+                ))}
+              </details>
+            )}
           </div>
           <div style={{ marginTop:16 }}>
             <div style={{ fontWeight:600, marginBottom:6 }}>
               Suggestions / feedback <span style={{ opacity:.6, fontWeight:400 }}>({feedbackNotes.length})</span>
             </div>
             {feedbackNotes.map((f, i) => (
-              <div key={i} style={{ fontSize:13, padding:"6px 10px", marginBottom:6, background:"#0e1730", border:"1px solid #1f2a44", borderRadius:8 }}>{f.text}</div>
+              <div key={i} style={{ fontSize:13, padding:"6px 10px", marginBottom:6, background:"#0e1730", border:"1px solid #1f2a44", borderRadius:8 }}>
+                <div style={{ fontWeight:600, marginBottom:2 }}>{`${f.firstName || ""} ${f.lastName || ""}`.trim() || "(no name on file)"}</div>
+                {f.text}
+              </div>
             ))}
             {feedbackNotes.length === 0 && <div style={{ fontSize:13, opacity:.6 }}>None yet.</div>}
           </div>
@@ -4882,7 +4916,23 @@ const normVenmo = (s) => String(s||"").trim().toLowerCase().replace(/^@+/, "");c
     return;
   }
   throw e2;
-}localStorage.setItem("receipt", JSON.stringify({ year, week, code, form, picks, tiebreaker: payload.tiebreaker || null }));
+}
+// Best-effort: attach this person's name to their poll votes and feedback
+// note now that we know exactly what they submitted, so the admin poll
+// view can show who said what. Never blocks the actual submission.
+try {
+  const voterId = localStorage.getItem("pollVoterId");
+  if (voterId) {
+    const nameFields = { firstName: form.firstName || "", lastName: form.lastName || "" };
+    await Promise.all([
+      setDoc(doc(db, "pollVotes", `tf_games__${voterId}`), nameFields, { merge: true }).catch(()=>{}),
+      setDoc(doc(db, "pollVotes", `games_per_week__${voterId}`), nameFields, { merge: true }).catch(()=>{}),
+      setDoc(doc(db, "pollVotes", `app_enroll__${voterId}`), nameFields, { merge: true }).catch(()=>{}),
+      setDoc(doc(db, "feedback", voterId), nameFields, { merge: true }).catch(()=>{}),
+    ]);
+  }
+} catch (e3) {}
+localStorage.setItem("receipt", JSON.stringify({ year, week, code, form, picks, tiebreaker: payload.tiebreaker || null }));
       setMsg("");
       setPage("receipt");
       window.history.pushState(null, "", "/receipt");
