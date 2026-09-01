@@ -1017,26 +1017,18 @@ function PicksPage({ user, isAdmin, setPage }) {
   const [pollMsg, setPollMsg] = useState("");
   const [appEnrollChoice, setAppEnrollChoice] = useState(() => { try { return localStorage.getItem("poll_app_enroll") || ""; } catch { return ""; } });
 
-  const voteTf = async (choice) => {
+  // Poll answers are only kept locally (state + localStorage) as someone
+  // fills out the form - they're not uploaded to Firestore until the actual
+  // picks submission goes through (see ConfirmPage), so a vote is always
+  // tied to the name on that submission and never uploaded without one.
+  const voteTf = (choice) => {
     setTfChoice(choice);
     try { localStorage.setItem("poll_tf_games", choice); } catch {}
-    try {
-      await setDoc(doc(db, "pollVotes", `tf_games__${pollVoterId}`), { pollId: "tf_games", choice, firstName: form.firstName || "", lastName: form.lastName || "", updatedAt: serverTimestamp() }, { merge: true });
-      setPollMsg("Thanks, your vote is in!");
-    } catch (e) {
-      setPollMsg("Vote failed: " + (e?.message || String(e)));
-    }
   };
 
-  const voteAppEnroll = async (choice) => {
+  const voteAppEnroll = (choice) => {
     setAppEnrollChoice(choice);
     try { localStorage.setItem("poll_app_enroll", choice); } catch {}
-    try {
-      await setDoc(doc(db, "pollVotes", `app_enroll__${pollVoterId}`), { pollId: "app_enroll", choice, firstName: form.firstName || "", lastName: form.lastName || "", updatedAt: serverTimestamp() }, { merge: true });
-      setPollMsg("Thanks, your vote is in!");
-    } catch (e) {
-      setPollMsg("Vote failed: " + (e?.message || String(e)));
-    }
   };
 
   // Inline install/notification help shown when someone asks for instructions
@@ -1061,28 +1053,15 @@ function PicksPage({ user, isAdmin, setPage }) {
     }
   };
 
-  const voteGamesPerWeek = async (choice) => {
+  const voteGamesPerWeek = (choice) => {
     setGamesPerWeekChoice(choice);
     try { localStorage.setItem("poll_games_per_week_v2", choice); } catch {}
-    try {
-      await setDoc(doc(db, "pollVotes", `games_per_week__${pollVoterId}`), { pollId: "games_per_week", choice, firstName: form.firstName || "", lastName: form.lastName || "", updatedAt: serverTimestamp() }, { merge: true });
-      setPollMsg("Thanks, your vote is in!");
-    } catch (e) {
-      setPollMsg("Vote failed: " + (e?.message || String(e)));
-    }
   };
 
-  // Optional free-text suggestion, saved on blur (doesn't gate submit)
+  // Optional free-text suggestion - also kept local-only until submit.
   const [featureFeedback, setFeatureFeedback] = useState(() => { try { return localStorage.getItem("poll_feedback_text") || ""; } catch { return ""; } });
-  const saveFeedback = async () => {
-    const text = featureFeedback.trim();
+  const saveFeedback = () => {
     try { localStorage.setItem("poll_feedback_text", featureFeedback); } catch {}
-    if (!text) return;
-    try {
-      await setDoc(doc(db, "feedback", pollVoterId), { text, firstName: form.firstName || "", lastName: form.lastName || "", updatedAt: serverTimestamp() }, { merge: true });
-    } catch (e) {
-      setPollMsg("Couldn't save your note: " + (e?.message || String(e)));
-    }
   };
 
   const initFromLiveRef = useRef(false);
@@ -1423,7 +1402,9 @@ const onSubmitPicks = function(e){ e.preventDefault(); if (picksLocked) { if (ty
     form: { ...form, lastNameLower: (form.lastName || "").toLowerCase().trim() },
     picks,
     code: nextCode,
-    editing: !!editing
+    editing: !!editing,
+    polls: { tf_games: tfChoice, games_per_week: gamesPerWeekChoice, app_enroll: appEnrollChoice },
+    feedback: featureFeedback
   };
   try { if (typeof tiebreaker !== "undefined") { p.tiebreaker = tiebreaker; } localStorage.setItem("pending", JSON.stringify(p)); } catch (_){}
   try { if (draftKey) localStorage.removeItem(draftKey); } catch (_){}
@@ -4830,7 +4811,7 @@ const normVenmo = (s) => String(s||"").trim().toLowerCase().replace(/^@+/, "");c
     if (!pending) return;
     setMsg("Saving...");
     try {
-      const { year, week, form, picks, code, tiebreaker } = pending;
+      const { year, week, form, picks, code, tiebreaker, polls, feedback } = pending;
       // ---- Front-end validations (required fields & all picks) ----
       const phoneDigits = String((form && form.phone) || "").replace(/[^0-9]/g, "");
       const venmoTrim   = String((form && form.venmo) || "").trim();
@@ -4917,19 +4898,25 @@ const normVenmo = (s) => String(s||"").trim().toLowerCase().replace(/^@+/, "");c
   }
   throw e2;
 }
-// Best-effort: attach this person's name to their poll votes and feedback
-// note now that we know exactly what they submitted, so the admin poll
-// view can show who said what. Never blocks the actual submission.
+// Poll answers and the feedback note are only uploaded now, at the
+// moment picks actually go through, tied to the name on this
+// submission - not live as someone clicks through the survey. Best
+// effort: never blocks the actual pick submission if this fails.
 try {
   const voterId = localStorage.getItem("pollVoterId");
-  if (voterId) {
-    const nameFields = { firstName: form.firstName || "", lastName: form.lastName || "" };
-    await Promise.all([
-      setDoc(doc(db, "pollVotes", `tf_games__${voterId}`), nameFields, { merge: true }).catch(()=>{}),
-      setDoc(doc(db, "pollVotes", `games_per_week__${voterId}`), nameFields, { merge: true }).catch(()=>{}),
-      setDoc(doc(db, "pollVotes", `app_enroll__${voterId}`), nameFields, { merge: true }).catch(()=>{}),
-      setDoc(doc(db, "feedback", voterId), nameFields, { merge: true }).catch(()=>{}),
-    ]);
+  const nameFields = { firstName: form.firstName || "", lastName: form.lastName || "" };
+  if (voterId && polls) {
+    const writes = [];
+    for (const pollId of ["tf_games", "games_per_week", "app_enroll"]) {
+      const choice = polls[pollId];
+      if (!choice) continue;
+      writes.push(setDoc(doc(db, "pollVotes", `${pollId}__${voterId}`), { pollId, choice, ...nameFields, updatedAt: serverTimestamp() }, { merge: true }).catch(()=>{}));
+    }
+    const feedbackText = (feedback || "").trim();
+    if (feedbackText) {
+      writes.push(setDoc(doc(db, "feedback", voterId), { text: feedbackText, ...nameFields, updatedAt: serverTimestamp() }, { merge: true }).catch(()=>{}));
+    }
+    await Promise.all(writes);
   }
 } catch (e3) {}
 localStorage.setItem("receipt", JSON.stringify({ year, week, code, form, picks, tiebreaker: payload.tiebreaker || null }));
