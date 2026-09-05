@@ -343,8 +343,13 @@ function normalizeEspnItems(events) {
       else if (awayC?.team?.id === possessionTeamId) possession = "away";
     }
 
-    const homePoints = Number(homeC?.score);
-    const awayPoints = Number(awayC?.score);
+    // ESPN reports score:"0" for every game that hasn't kicked off yet, not
+    // an absent/null score - taking that at face value showed a real "0-0"
+    // on the Scorebug for scheduled games instead of the usual "–" dashes.
+    // A pregame score is meaningless, so force it to null until the game
+    // has actually started.
+    const homePoints = (status === "scheduled") ? NaN : Number(homeC?.score);
+    const awayPoints = (status === "scheduled") ? NaN : Number(awayC?.score);
 
     mapObj[toKey(away, home)] = {
       id: e?.id ?? null,
