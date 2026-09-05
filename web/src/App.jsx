@@ -2358,6 +2358,14 @@ useEffect(() => {
   // week is in the past, everyone should be able to see how people picked.
   const isLiveWeek = Number(year) === Number(live?.year) && Number(week) === Number(live?.week);
 
+  // transform:translateZ(0) (plus backface-visibility/WebkitBackfaceVisibility)
+  // forces the sticky cell onto its own GPU compositing layer. Without it,
+  // iOS Safari recalculates each sticky cell's position against the rest of
+  // the page's layout on every scroll frame, which visibly wobbles/lags by
+  // a pixel or two during a scroll on an actual phone - a well-known iOS
+  // WebKit quirk with position:sticky inside a horizontally-scrolling
+  // container, not something that shows up in a desktop browser.
+  const stickyGpuFix = { transform: "translateZ(0)", WebkitBackfaceVisibility: "hidden", backfaceVisibility: "hidden" };
   const sticky1 = (extra = {}) => ({
   position: "sticky",
   left: 0,
@@ -2371,6 +2379,7 @@ useEffect(() => {
   // native double-tap-to-zoom gesture and doesn't reliably fire onDoubleClick
   // (used to jump the games table back to the start).
   touchAction: "manipulation",
+  ...stickyGpuFix,
   ...extra
 });
   const sticky2 = (extra = {}) => ({
@@ -2383,6 +2392,7 @@ useEffect(() => {
   borderRight: "none",
   boxShadow: "inset -1px 0 0 0 #1f2a44",
   touchAction: "manipulation",
+  ...stickyGpuFix,
   ...extra
 });
 
@@ -2640,7 +2650,7 @@ useEffect(() => {
      }}>
   <div id="lbTopSpacer" style={{ height:1 }} />
 </div>
-<div id="lbGrid" style={{ marginTop:0, overflowX:"auto", border:"1px solid #1f2a44", borderRadius:12 }}
+<div id="lbGrid" style={{ marginTop:0, overflowX:"auto", border:"1px solid #1f2a44", borderRadius:12, WebkitOverflowScrolling:"touch" }}
      onScroll={(e) => {
        const t = document.getElementById('lbTopScroll');
        if (t && t.scrollLeft !== e.currentTarget.scrollLeft) t.scrollLeft = e.currentTarget.scrollLeft;
