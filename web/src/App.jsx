@@ -2758,7 +2758,7 @@ useEffect(() => {
                     title="Scroll the table to the first game currently in progress"
                     style={{ marginTop:4, padding:"3px 7px", borderRadius:6, border:"1px solid rgba(255,255,255,.25)", background:"transparent", color:"#fff", fontSize:10, fontWeight:600, cursor:"pointer", whiteSpace:"nowrap" }}
                   >
-                    ⚡ Jump to Live
+                    ⚡ Jump to Live Scores
                   </button>
                 </th>
                 {(() => {
