@@ -15,6 +15,21 @@ service cloud.firestore {
       return get(/databases/$(database)/documents/config/app).data.leaderboardLocked == true;
     }
 
+    // A pick write must include a valid tiebreaker whenever it's for the
+    // currently live year/week AND that week has a College GameDay game
+    // assigned (config/live.gamedayGameId). Added after a client-side race
+    // let three real submissions through with no tiebreaker at all - this
+    // is the server-side backstop so no future client bug can do that
+    // again. Admins are exempt so historical data can still be patched.
+    function tiebreakerValid(data) {
+      let live = get(/databases/$(database)/documents/config/live).data;
+      let gdId = live.get('gamedayGameId', null);
+      let isLiveWeek = data.year == live.get('year', null) && data.week == live.get('week', null);
+      let gdRequired = isLiveWeek && gdId is string && gdId.size() > 0;
+      let tb = data.get('tiebreaker', null);
+      return !gdRequired || (tb is map && tb.get('gameId', null) == gdId && tb.get('total', null) is number);
+    }
+
     // Picks: public create/update with code+lastNameLower checks; reads allowed
     match /picks/{pickId} {
       allow get: if true;
@@ -31,13 +46,15 @@ service cloud.firestore {
         && request.resource.data.phone is string
         && request.resource.data.venmo is string
         && request.resource.data.venmoConfirmed is bool
-        && request.resource.data.picks is map;
+        && request.resource.data.picks is map
+        && (isAdmin() || tiebreakerValid(request.resource.data));
 
       allow update: if (submissionsOpen() || isAdmin())
         && request.resource.data.code == resource.data.code
         && request.resource.data.lastNameLower == resource.data.lastNameLower
         && request.resource.data.year == resource.data.year
-        && request.resource.data.week == resource.data.week;
+        && request.resource.data.week == resource.data.week
+        && (isAdmin() || tiebreakerValid(request.resource.data));
 
       // Real season picks are immutable once the leaderboard opens - no delete,
       // ever, even for admins, past that point. Before the leaderboard opens
