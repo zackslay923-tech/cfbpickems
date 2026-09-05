@@ -781,8 +781,12 @@ exports.publishLiveMap = onSchedule(
       return;
     }
 
-    const date = todayET();
-    const url = `https://api.collegefootballdata.com/scoreboard?groups=80&date=${encodeURIComponent(date)}`;
+    // No explicit `date` param here on purpose - CFBD's own "current games"
+    // default (matching what an admin's browser gets by calling /scoreboard
+    // the same dateless way) reflects live in-progress status correctly,
+    // while pinning an explicit date was returning games stuck as
+    // "scheduled" even well after kickoff.
+    const url = `https://api.collegefootballdata.com/scoreboard?groups=80`;
 
     try {
       const res = await fetch(url, {
@@ -836,8 +840,14 @@ exports.publishLiveMap = onSchedule(
         }
       }
 
-      // Lightweight dedupe using a short hash of the payload
-      const hash = JSON.stringify(mapObj).slice(0, 2048); // cheap hash proxy
+      // Dedupe using the full serialized payload. A truncated slice() here
+      // previously only looked at the first ~2048 characters of the JSON -
+      // with 200+ games in the map, most games' data fell past that cutoff
+      // and their changes were invisible to this comparison, so genuinely
+      // updated scores could get silently treated as "unchanged" and never
+      // written to the public doc, leaving non-admins stuck on stale data
+      // indefinitely even though the fetch itself was working correctly.
+      const hash = JSON.stringify(mapObj);
       const prevHash = prev.exists ? (prev.get("hash") || "") : "";
 
       // Only rewrite the (larger) map+hash when the data actually changed,
