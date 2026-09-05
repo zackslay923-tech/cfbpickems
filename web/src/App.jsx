@@ -2139,7 +2139,6 @@ useEffect(() => {
     });
     return () => unsub();
   }, []);
-  const showPollResults = isAdmin || picksLocked;
   const [showPollResultsModal, setShowPollResultsModal] = useState(false);
 
 // Weeks dropdown: populate from games in the selected year
@@ -2213,6 +2212,8 @@ useEffect(() => {
     });
     return () => unsub();
   }, []);
+  // Poll results follow the same lock/unlock as the leaderboard itself.
+  const showPollResults = isAdmin || !lbLocked;
 
   if (lbLocked && !isAdmin && Number(year) === Number(live?.year) && Number(week) === Number(live?.week)) {
       // Clear selected week if it has NO picks (safety guard)
@@ -2399,7 +2400,7 @@ useEffect(() => {
             <div style={{ background:"#121a2b", border:"1px solid #1f2a44", borderRadius:16, padding:16, maxWidth:420, width:"90%", boxShadow:"0 10px 24px rgba(0,0,0,.35)" }} onClick={e=>e.stopPropagation()}>
               <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:12 }}>
                 <h3 style={{ margin:0, fontSize:16 }}>Poll Results</h3>
-                {!picksLocked && isAdmin && <span style={{ fontSize:11, color:"#f0b429" }}>Preview</span>}
+                {lbLocked && isAdmin && <span style={{ fontSize:11, color:"#f0b429" }}>Preview</span>}
               </div>
               {[
                 { pollId: "tf_games", question: "First game of the week?", order: ["Thursday", "Friday", "Saturday", "No preference"] },
