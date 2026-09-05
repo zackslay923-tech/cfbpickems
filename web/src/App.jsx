@@ -2403,14 +2403,15 @@ useEffect(() => {
                 {lbLocked && isAdmin && <span style={{ fontSize:11, color:"#f0b429" }}>Preview</span>}
               </div>
               {[
-                { pollId: "tf_games", question: "First game of the week?", order: ["Thursday", "Friday", "Saturday", "No preference"] },
-                { pollId: "games_per_week", question: "Games per week?", order: ["Significantly fewer (around 20 games)", "Fewer (around 30 games)", "Keep the same", "More (around 50 games)", "Significantly more (around 60 games)"] },
-              ].map(({ pollId, question, order }) => {
+                { pollId: "tf_games", question: "First game of the week?", note: "Going forward, we'll start picks on Friday night, unless there's a can't-miss game on Thursday.", order: ["Thursday", "Friday", "Saturday", "No preference"] },
+                { pollId: "games_per_week", question: "Games per week?", note: "We'll aim for 30-35 games, pulling out games with significantly high spreads and favoring more competitive matchups, even if it isn't a marquee game.", order: ["Significantly fewer (around 20 games)", "Fewer (around 30 games)", "Keep the same", "More (around 50 games)", "Significantly more (around 60 games)"] },
+              ].map(({ pollId, question, note, order }) => {
                 const data = pollResults[pollId] || { counts: {}, voters: 0 };
                 const answered = order.filter(opt => data.counts[opt] > 0);
                 return (
                   <div key={pollId} style={{ marginBottom:16 }}>
-                    <div style={{ fontWeight:600, marginBottom:6, fontSize:14 }}>{question}</div>
+                    <div style={{ fontWeight:600, marginBottom:2, fontSize:14 }}>{question}</div>
+                    <div style={{ fontSize:12, opacity:.7, marginBottom:8 }}>{note}</div>
                     {answered.length === 0 && <div style={{ fontSize:13, opacity:.6 }}>No votes yet.</div>}
                     {answered.map(opt => (
                       <div key={opt} style={{ display:"flex", justifyContent:"space-between", fontSize:13, padding:"3px 0" }}>
