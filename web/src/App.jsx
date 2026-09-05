@@ -2214,6 +2214,16 @@ useEffect(() => {
   }, []);
   // Poll results follow the same lock/unlock as the leaderboard itself.
   const showPollResults = isAdmin || !lbLocked;
+  // Pop the results up automatically the first time this page loads (once
+  // per visit to the Leaderboard), rather than making people find the button.
+  const pollResultsAutoOpenedRef = useRef(false);
+  useEffect(() => {
+    if (pollResultsAutoOpenedRef.current) return;
+    if (showPollResults && pollResults) {
+      setShowPollResultsModal(true);
+      pollResultsAutoOpenedRef.current = true;
+    }
+  }, [showPollResults, pollResults]);
 
   if (lbLocked && !isAdmin && Number(year) === Number(live?.year) && Number(week) === Number(live?.week)) {
       // Clear selected week if it has NO picks (safety guard)
@@ -2410,8 +2420,7 @@ useEffect(() => {
                 const answered = order.filter(opt => data.counts[opt] > 0);
                 return (
                   <div key={pollId} style={{ marginBottom:16 }}>
-                    <div style={{ fontWeight:600, marginBottom:2, fontSize:14 }}>{question}</div>
-                    <div style={{ fontSize:12, opacity:.7, marginBottom:8 }}>{note}</div>
+                    <div style={{ fontWeight:600, marginBottom:6, fontSize:14 }}>{question}</div>
                     {answered.length === 0 && <div style={{ fontSize:13, opacity:.6 }}>No votes yet.</div>}
                     {answered.map(opt => (
                       <div key={opt} style={{ display:"flex", justifyContent:"space-between", fontSize:13, padding:"3px 0" }}>
@@ -2419,6 +2428,7 @@ useEffect(() => {
                         <span style={{ opacity:.75 }}>{data.counts[opt]}</span>
                       </div>
                     ))}
+                    <div style={{ fontSize:12, opacity:.7, marginTop:8 }}>{note}</div>
                   </div>
                 );
               })}
