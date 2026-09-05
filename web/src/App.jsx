@@ -33,7 +33,9 @@ const winnerCellStyleFn = (results, cell, g) => {
     width: COL_W,
     minWidth: COL_W,
   };
-  const w = results?.[g?.id]?.winner;
+  const r = results?.[g?.id];
+  if (r?.push) return { ...base, background: "#2a3655", color: "#cfd8f0" };
+  const w = r?.winner;
   if (!w) return base;
   const bg = schoolBg(w);
   if (!bg) return base;
@@ -583,6 +585,16 @@ async function setResult(gameId, winner, totalPoints) {
     payload.totalPoints = Number(totalPoints);
   }
   await setDoc(doc(db, "results", gameId), payload, { merge: true });
+}
+// Sentinel winner value for a canceled/postponed game marked "no contest" -
+// truthy (so it counts as resolved for "all games final" / played-count
+// checks everywhere) but guaranteed to never equal a real pick (g.home/g.away
+// are always actual team name strings), so nobody scores on it. The
+// companion push:true flag is what the UI actually keys off of to render
+// "Push" instead of a team.
+const PUSH_WINNER = "PUSH";
+async function markResultAsPush(gameId) {
+  await setDoc(doc(db, "results", gameId), { winner: PUSH_WINNER, push: true, updatedAt: serverTimestamp() }, { merge: true });
 }
 async function getResultsMap(gameIds) {
   const map = {};
@@ -2284,7 +2296,9 @@ useEffect(() => {
 
   const pickCellBase = { ...cell, textAlign:"center", width: GAME_COL_W, minWidth: GAME_COL_W, maxWidth: GAME_COL_W };
   const pickCellStyle = (gameId, choice) => { const base = { ...cell, textAlign:"center", width: 140, minWidth: 140 };
-  const w = results[gameId]?.winner;
+  const r = results[gameId];
+  if (r?.push) return base; // no contest - nobody's pick counts for or against them
+  const w = r?.winner;
   if (!w || !choice) return base;
   if (choice === w) return { ...base, background: "#00ff00", color: "#111" };
   return { ...base, background: "#ea9999", color: "#111" };
@@ -2292,7 +2306,9 @@ useEffect(() => {
 
   // Winner cell with tiny logo
   const winnerCell = (g) => {
-    const w = results[g.id]?.winner;
+    const r = results[g.id];
+    if (r?.push) return <span style={{ fontStyle:"italic", opacity:.8 }}>Push &mdash; No Points</span>;
+    const w = r?.winner;
     if (!w) return "";
     const isHome = w === g.home;
     const rank = isHome ? g.homeRank : g.awayRank;
@@ -4212,6 +4228,16 @@ Type "home" or "away".`,
   setMsg("Saved result. Refresh Leaderboard to update.");
 };
 
+  // For a canceled/postponed game that will never get a real final score:
+  // records it as resolved (so the week can still be marked complete and a
+  // pot winner declared) without awarding anyone points for it, matching the
+  // "push" rule on the Rules page.
+  const markAsPush = async (g) => {
+    if (!window.confirm(`Mark ${g.away} @ ${g.home} as a push (no contest)?\n\nNobody will score on this game, but it'll count as resolved for declaring the week's pot winner.`)) return;
+    await markResultAsPush(g.id);
+    setMsg(`Marked ${g.away} @ ${g.home} as a push. Refresh Leaderboard to update.`);
+  };
+
   // Deselect all included games (batch)
   const deselectAll = async () => {
     const selected = games.filter(x => x.included);
@@ -4763,6 +4789,15 @@ await setDoc(doc(db,"config","app"), { currentYear: year, currentWeek: week, upd
     aria-label={`Set winner for $<div style={{ width:96, textAlign:"center", fontWeight:700, fontSize:13, lineHeight:1.15, whiteSpace:"normal", overflowWrap:"anywhere" }}>{teamLabelNoMascot(g.away, g.awayRank)}</div> at $<div style={{ width:96, textAlign:"center", fontWeight:700, fontSize:13, lineHeight:1.15, whiteSpace:"normal", overflowWrap:"anywhere" }}>{teamLabelNoMascot(g.home, g.homeRank)}</div>`}
   >
     Set Winner
+  </button><button
+    type="button"
+    onClick={(e)=>{ e.stopPropagation(); markAsPush(g); }}
+    onKeyDown={(e)=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); e.stopPropagation(); markAsPush(g);} }}
+    style={{ padding:"6px 10px", borderRadius:10, border:"1px solid #1f2a44", cursor:"pointer", marginLeft:8 }}
+    aria-label={`Mark ${g.away} at ${g.home} as a push (no contest)`}
+    title="Canceled or postponed with no makeup - resolves the game with no points awarded to anyone"
+  >
+    Mark as Push
   </button>
 </div>
     </div>
