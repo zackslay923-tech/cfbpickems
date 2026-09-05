@@ -141,6 +141,43 @@ function Card({ children, style }) {
   , ...style}}>{children}</div>;
 }
 function Container({ children, maxWidth = 720, padding = 24 }) { return <div style={{ maxWidth: maxWidth, margin: "0 auto", padding }}>{children}</div>; }
+// Generic "still loading" gate for a page's initial data fetch. Shows a
+// plain loading message instead of whatever half-populated/default state
+// the page would otherwise render for a moment (e.g. games that haven't
+// actually been picked yet looking like real selections) - people were
+// reading that flash of wrong-looking data as a bug rather than a loading
+// state. A "Refresh" button appears after 5s in case loading is stuck
+// rather than just slow.
+function LoadingGate({ ready, children, label = "Loading…" }) {
+  const [showRefresh, setShowRefresh] = useState(false);
+  useEffect(() => {
+    if (ready) { setShowRefresh(false); return; }
+    const t = setTimeout(() => setShowRefresh(true), 5000);
+    return () => clearTimeout(t);
+  }, [ready]);
+
+  if (ready) return <>{children}</>;
+
+  return (
+    <Card>
+      <div style={{ textAlign: "center", padding: "48px 20px" }}>
+        <div style={{ fontSize: 18, fontWeight: 700, color: "#cfd8f0" }}>{label}</div>
+        {showRefresh && (
+          <>
+            <div style={{ marginTop: 10, fontSize: 13, color: "#9aa4c7" }}>Taking longer than usual.</div>
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              style={{ marginTop: 16, padding: "10px 22px", borderRadius: 10, border: "none", background: "#2563eb", color: "#fff", fontWeight: 700, fontSize: 14, cursor: "pointer" }}
+            >
+              Refresh
+            </button>
+          </>
+        )}
+      </div>
+    </Card>
+  );
+}
 function Header({ user, isAdmin, setPage }) {
   const isMobile = useIsMobile();
   const onIOS = isIOSDevice();
@@ -1087,6 +1124,12 @@ function PicksPage({ user, isAdmin, setPage }) {
   // Default Admin to live Year/Week exactly once
   const liveSyncedRef = useRef(false);
   const [games, setGames] = useState([]);
+  // Only true once load() below has fetched the correctly-filtered
+  // (includedOnly:true) game list. Before that, an earlier effect briefly
+  // populates `games` with the unfiltered list while it waits on the live
+  // week to resolve, which could flash games that were never actually
+  // selected for this week - gated behind LoadingGate until this settles.
+  const [gamesLoaded, setGamesLoaded] = useState(false);
   const [pickCount, setPickCount] = useState(0);
 const pot = useMemo(() => (pickCount * 5), [pickCount]);
   // If games still haven't loaded 5s in (e.g. a slow first load on a freshly
@@ -1322,6 +1365,7 @@ const [code, setCode] = useState("");
         setPicks({}); setTiebreaker({ gameId: null, total: "" });
       }
     }
+    setGamesLoaded(true);
   };
 
   useEffect(() => {
@@ -1499,6 +1543,7 @@ if (typeof window !== "undefined") window.history.pushState(null, "", "/confirm"
 
   return (<Container>
 <Header user={user} isAdmin={isAdmin} setPage={setPage} />
+<LoadingGate ready={gamesLoaded}>
       <Card style={{ background:"#121a2b" , position:"relative" }}>
         <div style={{ position:"absolute", top:8, left:8, zIndex:2 }}>
     {(!potHidden || isAdmin) && (<>
@@ -1836,6 +1881,7 @@ if (typeof window !== "undefined") window.history.pushState(null, "", "/confirm"
   </div>
 )}
 </Card>
+</LoadingGate>
     </Container>
   );
 }
@@ -2128,6 +2174,12 @@ useEffect(() => {
   // Auto-winner detection now runs server-side in the publishLiveMap Cloud
   // Function, so it works regardless of whether an admin has this page open.
   const [players, setPlayers] = useState([]);
+  // Only true once loadAll() below has computed real standings. Before
+  // that, an earlier effect briefly populates `games` with the unfiltered
+  // (includedOnly:false) list while it waits on the live week to resolve,
+  // which could flash games that were never actually selected for this
+  // week - gated behind LoadingGate until this settles.
+  const [boardLoaded, setBoardLoaded] = useState(false);
   // Pickems Coach: public picks flag (read-only)
   const [lbPicksPublic, setLbPicksPublic] = useState(null);
   
@@ -2202,6 +2254,7 @@ const loadAll = async () => {
     setResults(r);
     setPlayers(rows);
     setMsg(`Week ${week}  -  Included games: ${g.length}  -  Finished: ${playedGames}`);
+    setBoardLoaded(true);
   } catch (e) {
     setMsg("Load failed: " + (e?.message || String(e)));
   }
@@ -2523,6 +2576,7 @@ useEffect(() => {
 
   return (<Container maxWidth={1200}>
       <Header user={user} isAdmin={isAdmin} setPage={setPage} />
+      <LoadingGate ready={boardLoaded}>
       <Card>
         <Row style={{ justifyContent:"space-between", alignItems:"flex-end" }}>
           <h2 style={{ margin: 0 }}>CFB Pick'Ems Week {week}</h2>
@@ -2840,8 +2894,9 @@ while (i < seq.length) {
           </table>
         </div>
       </Row>
-      
+
 </Card>
+      </LoadingGate>
     </Container>
   );
 }
