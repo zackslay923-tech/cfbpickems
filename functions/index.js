@@ -98,11 +98,19 @@ exports.subscribePushToken = onDocumentCreated(
   }
 );
 
+// Known name variants that should resolve to the same person (e.g. a
+// nickname or alternate spelling used on a different week's submission).
+// Keep in sync with the identical map in App.jsx's personKey.
+const NAME_ALIASES = {
+  "jack_vardaramatos": "jacques_vardaramatos",
+};
+
 // Same normalization the web app uses (App.jsx's personKey) - kept in sync
 // by hand since this is a separate Node module with no shared code.
 function personKey(p) {
   const n = `${(p.firstName || "").trim().toLowerCase()}_${(p.lastName || "").trim().toLowerCase()}`;
-  return n.replace(/^_+|_+$/g, "") || null;
+  const key = n.replace(/^_+|_+$/g, "") || null;
+  return key ? (NAME_ALIASES[key] || key) : null;
 }
 function deviceNameKey(name) {
   const parts = (name || "").trim().split(/\s+/).filter(Boolean);

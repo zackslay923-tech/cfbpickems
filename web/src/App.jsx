@@ -3325,9 +3325,17 @@ function AdminPaymentsPage({ user, isAdmin, setPage }) {
   </Container>);
 }
 
+// Known name variants that should resolve to the same person (e.g. a
+// nickname or alternate spelling used on a different week's submission).
+// Keep in sync with the identical map in functions/index.js's personKey.
+const NAME_ALIASES = {
+  "jack_vardaramatos": "jacques_vardaramatos",
+};
+
 function personKey(p) {
   const n = `${(p.firstName || "").trim().toLowerCase()}_${(p.lastName || "").trim().toLowerCase()}`;
-  return n.replace(/^_+|_+$/g, "") || null;
+  const key = n.replace(/^_+|_+$/g, "") || null;
+  return key ? (NAME_ALIASES[key] || key) : null;
 }
 function venmoKeyOf(p) {
   const v = String(p.venmo || "").trim().toLowerCase().replace(/^@+/, "");
