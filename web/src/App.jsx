@@ -4783,8 +4783,8 @@ await setDoc(doc(db,"config","app"), { currentYear: year, currentWeek: week, upd
       onKeyDown={(e)=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); toggle(g, !g.included);} }}
       style={{
         position:"relative",
-        display:"flex", flexDirection: isMobile ? "column" : "row", alignItems: isMobile ? "stretch" : "center",
-        gap:12, flexWrap: isMobile ? "wrap" : "nowrap",
+        display:"flex", flexDirection:"row", alignItems: isMobile ? "flex-start" : "center",
+        gap:12, flexWrap:"nowrap",
         border: g.included ? "1px solid #2ecc71" : "1px dashed #1f2a44",
         padding:12, borderRadius:12, margin:"10px auto",
         maxWidth: 1200, width:"100%", cursor:"pointer",
@@ -4798,23 +4798,23 @@ await setDoc(doc(db,"config","app"), { currentYear: year, currentWeek: week, upd
           {g.formattedSpread || ""}{g.formattedSpread && g.overUnder != null ? " · " : ""}{g.overUnder != null ? `O/U ${g.overUnder}` : ""}
         </div>
       )}
-      <div style={{ marginBottom: 16, textAlign:"left", whiteSpace: isMobile ? "normal" : "nowrap", overflow: isMobile ? "visible" : "hidden", textOverflow: isMobile ? "clip" : "ellipsis", minWidth:0, width: isMobile ? "100%" : undefined }}>
-        <strong style={{ display:"inline-flex", flexWrap:"wrap", justifyContent:"center", alignItems:"center", width:"100%", textAlign:"center", rowGap:"0", lineHeight: 1.24, fontWeight:700, fontSize: fitFontByLen(((teamLabelNoMascot(g.away,g.awayRank)||"").length + (teamLabelNoMascot(g.home,g.homeRank)||"").length)), gap:6 }}>
+      <div style={{ marginBottom: 16, textAlign:"left", whiteSpace: isMobile ? "normal" : "nowrap", overflow: isMobile ? "visible" : "hidden", textOverflow: isMobile ? "clip" : "ellipsis", minWidth:0, flex: isMobile ? "1 1 auto" : undefined }}>
+        <strong style={{ display:"inline-flex", flexWrap:"wrap", justifyContent: isMobile ? "flex-start" : "center", alignItems:"center", width:"100%", textAlign:"center", rowGap:"0", lineHeight: 1.24, fontWeight:700, fontSize: fitFontByLen(((teamLabelNoMascot(g.away,g.awayRank)||"").length + (teamLabelNoMascot(g.home,g.homeRank)||"").length)), gap:6 }}>
           <TeamLogo school={g.away} size={48} /> <div style={{ width:96, textAlign:"center", fontWeight:700, fontSize:13, lineHeight:1.15, whiteSpace:"normal", overflowWrap:"anywhere" }}>{teamLabelNoMascot(g.away, g.awayRank)}</div> @ <TeamLogo school={g.home} size={48} /> <div style={{ width:96, textAlign:"center", fontWeight:700, fontSize:13, lineHeight:1.15, whiteSpace:"normal", overflowWrap:"anywhere" }}>{teamLabelNoMascot(g.home, g.homeRank)}</div>
         </strong>
         {isMobile && (g.formattedSpread || g.overUnder != null) && (
-          <div style={{ marginTop:4, fontSize:12, color:"#9aa4c7", textAlign:"center" }}>
+          <div style={{ marginTop:4, fontSize:12, color:"#9aa4c7", textAlign:"left" }}>
             {g.formattedSpread || ""}{g.formattedSpread && g.overUnder != null ? " · " : ""}{g.overUnder != null ? `O/U ${g.overUnder}` : ""}
           </div>
         )}
       </div>
-      <div style={{ display:"flex", alignItems:"center", gap:12, marginLeft: isMobile ? 0 : "auto", width: isMobile ? "100%" : undefined, justifyContent: isMobile ? "space-between" : "flex-start", flexWrap: isMobile ? "wrap" : "nowrap" }}>
+      <div style={{ display:"flex", flexDirection: isMobile ? "column" : "row", alignItems: isMobile ? "flex-end" : "center", gap: isMobile ? 6 : 12, marginLeft:"auto", flexShrink:0 }}>
   <span style={{ whiteSpace:"nowrap", opacity: 0.9, fontSize:13, fontWeight:600 }}>{timeLabelOnly(g,{ timeZone:"America/New_York" })}</span>
     <button
     type="button"
     onClick={(e)=>{ e.stopPropagation(); setGameGameday(g.year, g.week, g.id).then(async ()=>{ setGames(await listGames({ year, week, includedOnly: false })); setMsg("Set College GameDay to " + teamLabelNoMascot(g.away, g.awayRank) + " @ " + teamLabelNoMascot(g.home, g.homeRank)); }); }}
     onKeyDown={(e)=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); e.stopPropagation(); setGameGameday(g.year, g.week, g.id).then(async ()=>{ setGames(await listGames({ year, week, includedOnly: false })); setMsg("Set College GameDay to " + teamLabelNoMascot(g.away, g.awayRank) + " @ " + teamLabelNoMascot(g.home, g.homeRank)); }); }}}
-    style={{ padding:"6px 10px", borderRadius:10, border:"1px solid #1f2a44", cursor:"pointer", color:"#fff", marginRight:8, background: g.gameday ? "rgba(241,196,15,0.1)" : "transparent", boxShadow: g.gameday ? "0 0 0 2px #f1c40f inset" : "none" }}
+    style={{ padding:"6px 10px", borderRadius:10, border:"1px solid #1f2a44", cursor:"pointer", color:"#fff", marginRight: isMobile ? 0 : 8, background: g.gameday ? "rgba(241,196,15,0.1)" : "transparent", boxShadow: g.gameday ? "0 0 0 2px #f1c40f inset" : "none" }}
     aria-label={"Set College GameDay for " + teamLabelNoMascot(g.away, g.awayRank) + " at " + teamLabelNoMascot(g.home, g.homeRank)}
     title={g.gameday ? "College GameDay (selected)" : "Set as College GameDay"}
   >
@@ -4831,7 +4831,7 @@ await setDoc(doc(db,"config","app"), { currentYear: year, currentWeek: week, upd
     type="button"
     onClick={(e)=>{ e.stopPropagation(); markAsPush(g); }}
     onKeyDown={(e)=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); e.stopPropagation(); markAsPush(g);} }}
-    style={{ padding:"6px 10px", borderRadius:10, border:"1px solid #1f2a44", cursor:"pointer", marginLeft:8, color:"#fff", background:"transparent" }}
+    style={{ padding:"6px 10px", borderRadius:10, border:"1px solid #1f2a44", cursor:"pointer", marginLeft: isMobile ? 0 : 8, color:"#fff", background:"transparent" }}
     aria-label={`Mark ${g.away} at ${g.home} as a push (no contest)`}
     title="Canceled or postponed with no makeup - resolves the game with no points awarded to anyone"
   >
