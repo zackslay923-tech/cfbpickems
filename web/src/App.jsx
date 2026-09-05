@@ -4817,7 +4817,7 @@ await setDoc(doc(db,"config","app"), { currentYear: year, currentWeek: week, upd
     style={{ padding:"6px 10px", borderRadius:10, border:"1px solid #1f2a44", cursor:"pointer" }}
     aria-label={`Set winner for $<div style={{ width:96, textAlign:"center", fontWeight:700, fontSize:13, lineHeight:1.15, whiteSpace:"normal", overflowWrap:"anywhere" }}>{teamLabelNoMascot(g.away, g.awayRank)}</div> at $<div style={{ width:96, textAlign:"center", fontWeight:700, fontSize:13, lineHeight:1.15, whiteSpace:"normal", overflowWrap:"anywhere" }}>{teamLabelNoMascot(g.home, g.homeRank)}</div>`}
   >
-    Set Winner
+    {"🏆"}
   </button><button
     type="button"
     onClick={(e)=>{ e.stopPropagation(); markAsPush(g); }}
@@ -4826,7 +4826,7 @@ await setDoc(doc(db,"config","app"), { currentYear: year, currentWeek: week, upd
     aria-label={`Mark ${g.away} at ${g.home} as a push (no contest)`}
     title="Canceled or postponed with no makeup - resolves the game with no points awarded to anyone"
   >
-    Mark as Push
+    {"🚫"}
   </button>
 </div>
     </div>
