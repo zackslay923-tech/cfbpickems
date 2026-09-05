@@ -2428,7 +2428,7 @@ useEffect(() => {
                         <span style={{ opacity:.75 }}>{data.counts[opt]}</span>
                       </div>
                     ))}
-                    <div style={{ fontSize:12, opacity:.7, marginTop:8 }}>{note}</div>
+                    <div style={{ fontSize:12, marginTop:8, padding:"8px 10px", borderRadius:8, background:"rgba(240,180,41,0.1)", border:"1px solid rgba(240,180,41,0.35)", color:"#f0b429" }}>{note}</div>
                   </div>
                 );
               })}
