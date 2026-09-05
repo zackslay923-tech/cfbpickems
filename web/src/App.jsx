@@ -2251,6 +2251,10 @@ useEffect(() => {
     );
   }
 
+  // The admin-only-picks toggle only needs to gate the live week - once a
+  // week is in the past, everyone should be able to see how people picked.
+  const isLiveWeek = Number(year) === Number(live?.year) && Number(week) === Number(live?.week);
+
   const sticky1 = (extra = {}) => ({
   position: "sticky",
   left: 0,
@@ -2411,7 +2415,7 @@ useEffect(() => {
     
 </div>
 )}
-          {!lbPicksPublic && !isAdmin && (
+          {!lbPicksPublic && !isAdmin && isLiveWeek && (
             <div role="status" style={{
               marginTop: 8, marginBottom: 12, padding: "12px 16px", borderRadius: 10,
               lineHeight: 1.6, background: "rgba(240,180,41,0.12)", color: "#f0b429",
@@ -2630,7 +2634,7 @@ return liveItem || fromWinners;
                   </td>
                   <td style={{ ...cell, ...sticky2({ textAlign:"center", fontWeight:700 }) }}>{p.points}</td>
                   {displayGames.map(g => {
-                    const canSeePicks = lbPicksPublic || isAdmin;
+                    const canSeePicks = lbPicksPublic || isAdmin || !isLiveWeek;
                     const choice = p.picks?.[g.id];
                     const label = !canSeePicks ? "🔒" :
                       choice === g.home ? teamLabel(g.home, g.homeRank) :
@@ -2643,7 +2647,7 @@ return liveItem || fromWinners;
                 {gameday ? (
   <td key={"tb_"+(p.email||p.name||p.code||p.id)}
       style={{ ...cell, textAlign:"center", width: 140, minwidth: 140 }}>
-    {(lbPicksPublic || isAdmin) ? (p.tb ?? (p.tiebreaker?.total ?? p.tiebreaker ?? p.tieBreaker ?? p.tiebreak ?? p.tb ?? "")) : "🔒"}
+    {(lbPicksPublic || isAdmin || !isLiveWeek) ? (p.tb ?? (p.tiebreaker?.total ?? p.tiebreaker ?? p.tieBreaker ?? p.tiebreak ?? p.tb ?? "")) : "🔒"}
   </td>
 ) : null}</tr>
               ))}
