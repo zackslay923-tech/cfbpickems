@@ -4809,7 +4809,7 @@ await setDoc(doc(db,"config","app"), { currentYear: year, currentWeek: week, upd
     aria-label={"Set College GameDay for " + teamLabelNoMascot(g.away, g.awayRank) + " at " + teamLabelNoMascot(g.home, g.homeRank)}
     title={g.gameday ? "College GameDay (selected)" : "Set as College GameDay"}
   >
-    {"?"}
+    {"🏈"}
   </button><button
     type="button"
     onClick={(e)=>{ e.stopPropagation(); chooseWinner(g); }}
