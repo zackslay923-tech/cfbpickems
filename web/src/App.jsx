@@ -4768,6 +4768,9 @@ await setDoc(doc(db,"config","app"), { currentYear: year, currentWeek: week, upd
             </button>
           </div>
         }>
+        <div style={{ fontSize:12, opacity:.65, marginBottom:10, textAlign:"right" }}>
+          🏈 College GameDay tiebreaker &nbsp;&middot;&nbsp; 🏆 Set Winner &nbsp;&middot;&nbsp; 🚫 Mark as Push (no contest)
+        </div>
 {renderGamesGroupedByDate(games, {
   timeZone: "America/New_York",
   renderRow: (g, i, { kickoffLabel }) => (
@@ -4814,7 +4817,7 @@ await setDoc(doc(db,"config","app"), { currentYear: year, currentWeek: week, upd
     type="button"
     onClick={(e)=>{ e.stopPropagation(); chooseWinner(g); }}
     onKeyDown={(e)=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); e.stopPropagation(); chooseWinner(g);} }}
-    style={{ padding:"6px 10px", borderRadius:10, border:"1px solid #1f2a44", cursor:"pointer" }}
+    style={{ padding:"6px 10px", borderRadius:10, border:"1px solid #1f2a44", cursor:"pointer", color:"#fff", background:"transparent" }}
     aria-label={`Set winner for $<div style={{ width:96, textAlign:"center", fontWeight:700, fontSize:13, lineHeight:1.15, whiteSpace:"normal", overflowWrap:"anywhere" }}>{teamLabelNoMascot(g.away, g.awayRank)}</div> at $<div style={{ width:96, textAlign:"center", fontWeight:700, fontSize:13, lineHeight:1.15, whiteSpace:"normal", overflowWrap:"anywhere" }}>{teamLabelNoMascot(g.home, g.homeRank)}</div>`}
   >
     {"🏆"}
@@ -4822,7 +4825,7 @@ await setDoc(doc(db,"config","app"), { currentYear: year, currentWeek: week, upd
     type="button"
     onClick={(e)=>{ e.stopPropagation(); markAsPush(g); }}
     onKeyDown={(e)=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); e.stopPropagation(); markAsPush(g);} }}
-    style={{ padding:"6px 10px", borderRadius:10, border:"1px solid #1f2a44", cursor:"pointer", marginLeft:8 }}
+    style={{ padding:"6px 10px", borderRadius:10, border:"1px solid #1f2a44", cursor:"pointer", marginLeft:8, color:"#fff", background:"transparent" }}
     aria-label={`Mark ${g.away} at ${g.home} as a push (no contest)`}
     title="Canceled or postponed with no makeup - resolves the game with no points awarded to anyone"
   >
