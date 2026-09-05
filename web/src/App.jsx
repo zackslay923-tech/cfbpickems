@@ -2405,7 +2405,14 @@ useEffect(() => {
       const s = String(computeLiveForGame(g)?.status || "").toLowerCase();
       return s === "in_progress" || s === "delayed";
     });
-    if (!firstLive) { grid.scrollTo({ left: 0, behavior: "smooth" }); return; }
+    // behavior:"auto" (instant), not "smooth" - the mirrored top scrollbar
+    // re-syncs (and re-measures its spacer) on every single scroll event, and
+    // a "smooth" animation fires dozens of those over its ~300-500ms, so that
+    // sync fought the animation frame-by-frame - looked like barely-moving,
+    // glitchy scrolling on mobile (confirmed on both Safari and Chrome, so a
+    // JS timing issue, not a rendering-engine quirk). An instant jump is a
+    // single scroll event, so there's nothing to fight.
+    if (!firstLive) { grid.scrollTo({ left: 0, behavior: "auto" }); return; }
     const escapedId = (window.CSS && CSS.escape) ? CSS.escape(String(firstLive.id)) : String(firstLive.id);
     const cell = grid.querySelector(`[data-game-id="${escapedId}"]`);
     if (cell) {
@@ -2427,9 +2434,9 @@ useEffect(() => {
       const stickyWidth = NAME_COL_W + POINTS_COL_W;
       const availableWidth = grid.clientWidth - stickyWidth;
       const targetScrollLeft = cellLeftWithinContent + (cellRect.width / 2) - stickyWidth - (availableWidth / 2);
-      grid.scrollTo({ left: Math.max(0, targetScrollLeft), behavior: "smooth" });
+      grid.scrollTo({ left: Math.max(0, targetScrollLeft), behavior: "auto" });
     } else {
-      grid.scrollTo({ left: 0, behavior: "smooth" });
+      grid.scrollTo({ left: 0, behavior: "auto" });
     }
   };
 
