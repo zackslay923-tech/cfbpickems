@@ -2516,6 +2516,42 @@ useEffect(() => {
     if (grid) grid.scrollTo({ left: 0, behavior: "auto" });
   };
 
+  // Keeps #lbGrid and its mirrored top scrollbar (#lbTopScroll) in sync.
+  // Previously did the DOM writes directly in the onScroll handler, once
+  // per raw scroll event - fine for a mouse wheel, but a real touch-drag on
+  // a phone fires far more of those, so that work was competing with the
+  // browser's own sticky-position compositing on every frame and showing up
+  // as a very slight wobble in the sticky Name/Points columns. Coalescing
+  // into at most one sync per animation frame (reading the live scrollLeft
+  // at fire time, not whatever it was when the event was scheduled) cuts
+  // that main-thread work down without changing the sync's behavior.
+  const scrollSyncRafRef = useRef(null);
+  const scrollSyncSourceRef = useRef(null);
+  const scheduleScrollSync = (source) => {
+    scrollSyncSourceRef.current = source;
+    if (scrollSyncRafRef.current) return;
+    scrollSyncRafRef.current = requestAnimationFrame(() => {
+      scrollSyncRafRef.current = null;
+      const grid = document.getElementById("lbGrid");
+      const top = document.getElementById("lbTopScroll");
+      if (!grid || !top) return;
+      if (scrollSyncSourceRef.current === "top") {
+        if (grid.scrollLeft !== top.scrollLeft) grid.scrollLeft = top.scrollLeft;
+      } else {
+        // Widen the spacer *before* setting scrollLeft on it - #lbTopScroll
+        // can only scroll as far as its own content is wide, so setting
+        // scrollLeft first (while the spacer is still whatever width it was
+        // last render) gets silently clamped back down.
+        const spacer = document.getElementById("lbTopSpacer");
+        if (spacer) {
+          const w = grid.scrollWidth;
+          if (spacer.style.width !== (w + "px")) spacer.style.width = w + "px";
+        }
+        if (top.scrollLeft !== grid.scrollLeft) top.scrollLeft = grid.scrollLeft;
+      }
+    });
+  };
+
 
   const pickCellBase = { ...cell, textAlign:"center", width: GAME_COL_W, minWidth: GAME_COL_W, maxWidth: GAME_COL_W };
   const pickCellStyle = (gameId, choice) => { const base = { ...cell, textAlign:"center", width: 140, minWidth: 140 };
@@ -2644,20 +2680,11 @@ useEffect(() => {
         <Row style={{ justifyContent:"space-between", alignItems:"flex-end" }}>
 
 
-                    <div style={{ order:1, flex:1 }} /><div id="lbTopScroll" style={{  overflowX:"auto", height:10, marginBottom:0, width:"100%"  }} onMouseEnter={(e) => { const b = document.getElementById("lbGrid"); const s = document.getElementById("lbTopSpacer"); if (b && s) { const w = b.scrollWidth; if (s.style.width !== (w + "px")) s.style.width = (w + "px"); } }} onScroll={(e) => {
-       const b = document.getElementById('lbGrid');
-       if (b && b.scrollLeft !== e.currentTarget.scrollLeft) b.scrollLeft = e.currentTarget.scrollLeft;
-     }}>
+                    <div style={{ order:1, flex:1 }} /><div id="lbTopScroll" style={{  overflowX:"auto", height:10, marginBottom:0, width:"100%"  }} onMouseEnter={(e) => { const b = document.getElementById("lbGrid"); const s = document.getElementById("lbTopSpacer"); if (b && s) { const w = b.scrollWidth; if (s.style.width !== (w + "px")) s.style.width = (w + "px"); } }} onScroll={() => scheduleScrollSync("top")}>
   <div id="lbTopSpacer" style={{ height:1 }} />
 </div>
 <div id="lbGrid" style={{ marginTop:0, overflowX:"auto", border:"1px solid #1f2a44", borderRadius:12, WebkitOverflowScrolling:"touch" }}
-     onScroll={(e) => {
-       const t = document.getElementById('lbTopScroll');
-       if (t && t.scrollLeft !== e.currentTarget.scrollLeft) t.scrollLeft = e.currentTarget.scrollLeft;
-       const s = document.getElementById('lbTopSpacer');
-       const w = e.currentTarget.scrollWidth;
-       if (s && s.style.width !== (w + 'px')) s.style.width = w + 'px';
-     }}>
+     onScroll={() => scheduleScrollSync("grid")}>
 {isAdmin && (
   <div className="scoreboard-admin-strip" /* SCOREBOARD ADMIN STRIP v1 */
        style={{ display:"flex", gap:12, alignItems:"center", flexWrap:"wrap", fontSize:12, margin:"8px 0",
