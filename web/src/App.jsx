@@ -2419,21 +2419,29 @@ useEffect(() => {
       // Not scrollIntoView({inline:"start"}) - that aligns the column flush
       // against the scroll container's true left edge, which is exactly
       // where the sticky Name/Points columns sit on top of the content, so
-      // the "live" column landed hidden behind them.
+      // the "live" column landed hidden behind them. Scroll past their
+      // width instead, so the target column clears them and lands first.
       //
-      // Centering the column in the space that's actually left over (rather
-      // than flush against the sticky edge) also matters on mobile: a game
-      // column is wider than the sliver of screen left over once the sticky
-      // columns eat their share of a narrow viewport, so flush-left always
-      // ran the column off the right side of the screen there. Centering
-      // can't make a too-wide column fully fit either, but it splits the
-      // overflow evenly instead of dumping all of it on one edge.
+      // Mobile is the exception: a game column (140px) is wider than the
+      // sliver of screen left over once the sticky columns eat their share
+      // of a narrow phone viewport (~101px), so flush-left there always ran
+      // the column off the right edge of the screen. Centering it in the
+      // available space can't make a too-wide column fully fit either, but
+      // it splits the unavoidable overflow evenly instead of dumping all of
+      // it on one edge - worth the tradeoff on mobile only, since desktop
+      // has plenty of room and flush-left (showing it first, plus whatever
+      // else fits after it) reads better there.
       const gridRect = grid.getBoundingClientRect();
       const cellRect = cell.getBoundingClientRect();
       const cellLeftWithinContent = grid.scrollLeft + (cellRect.left - gridRect.left);
       const stickyWidth = NAME_COL_W + POINTS_COL_W;
-      const availableWidth = grid.clientWidth - stickyWidth;
-      const targetScrollLeft = cellLeftWithinContent + (cellRect.width / 2) - stickyWidth - (availableWidth / 2);
+      let targetScrollLeft;
+      if (isMobile) {
+        const availableWidth = grid.clientWidth - stickyWidth;
+        targetScrollLeft = cellLeftWithinContent + (cellRect.width / 2) - stickyWidth - (availableWidth / 2);
+      } else {
+        targetScrollLeft = cellLeftWithinContent - stickyWidth;
+      }
       grid.scrollTo({ left: Math.max(0, targetScrollLeft), behavior: "auto" });
     } else {
       grid.scrollTo({ left: 0, behavior: "auto" });
