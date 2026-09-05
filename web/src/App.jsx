@@ -2887,7 +2887,10 @@ while (i < seq.length) {
               <tr>
                 <td colSpan={2} onDoubleClick={scrollToStart} style={{ ...cell, ...sticky1({ width: NAME_COL_W + POINTS_COL_W, minWidth: NAME_COL_W + POINTS_COL_W, fontStyle:"italic", padding:0 }) }}>
                   <div style={{ display:"flex", alignItems:"stretch", height:"100%" }}>
-                    <span style={{ flex:"1 1 auto", minWidth:0, padding:"4px 6px", display:"flex", alignItems:"center", opacity:.75 }}>Completed Games &rsaquo;</span>
+                    <span style={{ flex:"1 1 auto", minWidth:0, padding:"4px 6px", display:"flex", alignItems:"center", gap:8, color:"#fff", fontWeight:700 }}>
+                      <span>Completed Games</span>
+                      <span style={{ fontStyle:"normal", fontSize:"1.4em", lineHeight:0, display:"inline-flex", alignItems:"center" }}>&rarr;</span>
+                    </span>
                     <span style={{ width:POINTS_COL_W, minWidth:POINTS_COL_W, boxSizing:"border-box", display:"flex", alignItems:"center", justifyContent:"center", fontWeight:600, fontStyle:"normal", borderLeft:"1px solid #1f2a44" }}>{playedCount}</span>
                   </div>
                 </td>
