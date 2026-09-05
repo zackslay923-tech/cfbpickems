@@ -4796,14 +4796,16 @@ await setDoc(doc(db,"config","app"), { currentYear: year, currentWeek: week, upd
         <strong style={{ display:"inline-flex", flexWrap:"wrap", justifyContent:"center", alignItems:"center", width:"100%", textAlign:"center", rowGap:"0", lineHeight: 1.24, fontWeight:700, fontSize: fitFontByLen(((teamLabelNoMascot(g.away,g.awayRank)||"").length + (teamLabelNoMascot(g.home,g.homeRank)||"").length)), gap:6 }}>
           <TeamLogo school={g.away} size={48} /> <div style={{ width:96, textAlign:"center", fontWeight:700, fontSize:13, lineHeight:1.15, whiteSpace:"normal", overflowWrap:"anywhere" }}>{teamLabelNoMascot(g.away, g.awayRank)}</div> @ <TeamLogo school={g.home} size={48} /> <div style={{ width:96, textAlign:"center", fontWeight:700, fontSize:13, lineHeight:1.15, whiteSpace:"normal", overflowWrap:"anywhere" }}>{teamLabelNoMascot(g.home, g.homeRank)}</div>
         </strong>
-        {(g.formattedSpread || g.overUnder != null) && (
-          <div style={{ marginTop:4, fontSize:11, color:"#9aa4c7", textAlign:"center" }}>
-            {g.formattedSpread || ""}{g.formattedSpread && g.overUnder != null ? " · " : ""}{g.overUnder != null ? `O/U ${g.overUnder}` : ""}
-          </div>
-        )}
       </div>
       <div style={{ display:"flex", alignItems:"center", gap:12, marginLeft: isMobile ? 0 : "auto", width: isMobile ? "100%" : undefined, justifyContent: isMobile ? "space-between" : "flex-start", flexWrap: isMobile ? "wrap" : "nowrap" }}>
-  <span style={{ whiteSpace:"nowrap", opacity: 0.8 }}>{timeLabelOnly(g,{ timeZone:"America/New_York" })}</span>
+  <div style={{ display:"flex", flexDirection:"column", alignItems: isMobile ? "flex-start" : "flex-end", lineHeight:1.35 }}>
+    <span style={{ whiteSpace:"nowrap", opacity: 0.9, fontSize:13, fontWeight:600 }}>{timeLabelOnly(g,{ timeZone:"America/New_York" })}</span>
+    {(g.formattedSpread || g.overUnder != null) && (
+      <span style={{ whiteSpace:"nowrap", fontSize:12, color:"#b7c1e6" }}>
+        {g.formattedSpread || ""}{g.formattedSpread && g.overUnder != null ? " · " : ""}{g.overUnder != null ? `O/U ${g.overUnder}` : ""}
+      </span>
+    )}
+  </div>
     <button
     type="button"
     onClick={(e)=>{ e.stopPropagation(); setGameGameday(g.year, g.week, g.id).then(async ()=>{ setGames(await listGames({ year, week, includedOnly: false })); setMsg("Set College GameDay to " + teamLabelNoMascot(g.away, g.awayRank) + " @ " + teamLabelNoMascot(g.home, g.homeRank)); }); }}
