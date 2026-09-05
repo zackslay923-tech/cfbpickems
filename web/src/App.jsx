@@ -4782,6 +4782,7 @@ await setDoc(doc(db,"config","app"), { currentYear: year, currentWeek: week, upd
       onClick={(e)=>toggle(g, !g.included)}
       onKeyDown={(e)=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); toggle(g, !g.included);} }}
       style={{
+        position:"relative",
         display:"flex", flexDirection: isMobile ? "column" : "row", alignItems: isMobile ? "stretch" : "center",
         gap:12, flexWrap: isMobile ? "wrap" : "nowrap",
         border: g.included ? "1px solid #2ecc71" : "1px dashed #1f2a44",
@@ -4792,12 +4793,17 @@ await setDoc(doc(db,"config","app"), { currentYear: year, currentWeek: week, upd
         transition:"box-shadow 120ms ease, background 120ms ease, border-color 120ms ease"
       }}
     >
+      {!isMobile && (g.formattedSpread || g.overUnder != null) && (
+        <div style={{ position:"absolute", top:6, right:10, fontSize:11, color:"#9aa4c7", whiteSpace:"nowrap" }}>
+          {g.formattedSpread || ""}{g.formattedSpread && g.overUnder != null ? " · " : ""}{g.overUnder != null ? `O/U ${g.overUnder}` : ""}
+        </div>
+      )}
       <div style={{ marginBottom: 16, textAlign:"left", whiteSpace: isMobile ? "normal" : "nowrap", overflow: isMobile ? "visible" : "hidden", textOverflow: isMobile ? "clip" : "ellipsis", minWidth:0, width: isMobile ? "100%" : undefined }}>
         <strong style={{ display:"inline-flex", flexWrap:"wrap", justifyContent:"center", alignItems:"center", width:"100%", textAlign:"center", rowGap:"0", lineHeight: 1.24, fontWeight:700, fontSize: fitFontByLen(((teamLabelNoMascot(g.away,g.awayRank)||"").length + (teamLabelNoMascot(g.home,g.homeRank)||"").length)), gap:6 }}>
           <TeamLogo school={g.away} size={48} /> <div style={{ width:96, textAlign:"center", fontWeight:700, fontSize:13, lineHeight:1.15, whiteSpace:"normal", overflowWrap:"anywhere" }}>{teamLabelNoMascot(g.away, g.awayRank)}</div> @ <TeamLogo school={g.home} size={48} /> <div style={{ width:96, textAlign:"center", fontWeight:700, fontSize:13, lineHeight:1.15, whiteSpace:"normal", overflowWrap:"anywhere" }}>{teamLabelNoMascot(g.home, g.homeRank)}</div>
         </strong>
-        {(g.formattedSpread || g.overUnder != null) && (
-          <div style={{ marginTop:4, fontSize:12, color:"#b7c1e6", textAlign:"center" }}>
+        {isMobile && (g.formattedSpread || g.overUnder != null) && (
+          <div style={{ marginTop:4, fontSize:12, color:"#9aa4c7", textAlign:"center" }}>
             {g.formattedSpread || ""}{g.formattedSpread && g.overUnder != null ? " · " : ""}{g.overUnder != null ? `O/U ${g.overUnder}` : ""}
           </div>
         )}
