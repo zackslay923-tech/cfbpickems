@@ -2891,7 +2891,7 @@ while (i < seq.length) {
                       <span>Completed Games</span>
                       <span style={{ fontStyle:"normal", fontSize:"1.4em", lineHeight:0, display:"inline-flex", alignItems:"center" }}>&rarr;</span>
                     </span>
-                    <span style={{ width:POINTS_COL_W, minWidth:POINTS_COL_W, boxSizing:"border-box", display:"flex", alignItems:"center", justifyContent:"center", fontWeight:600, fontStyle:"normal", borderLeft:"1px solid #1f2a44" }}>{playedCount}</span>
+                    <span style={{ width:POINTS_COL_W, minWidth:POINTS_COL_W, boxSizing:"border-box", display:"flex", alignItems:"center", justifyContent:"center", fontWeight:600, fontStyle:"normal", borderLeft:"2px solid #1f2a44" }}>{playedCount}</span>
                   </div>
                 </td>
                 {displayGames.map(g => (
@@ -2913,7 +2913,7 @@ while (i < seq.length) {
                           {p.winNote && <div style={{ fontSize: 10, fontWeight: 400, opacity: 0.75, marginTop: 2 }}>{p.winNote}</div>}
                         </span>
                       </span>
-                      <span style={{ width:POINTS_COL_W, minWidth:POINTS_COL_W, boxSizing:"border-box", display:"flex", alignItems:"center", justifyContent:"center", fontWeight:700, borderLeft:"1px solid #1f2a44" }}>{p.points}</span>
+                      <span style={{ width:POINTS_COL_W, minWidth:POINTS_COL_W, boxSizing:"border-box", display:"flex", alignItems:"center", justifyContent:"center", fontWeight:700, borderLeft:"2px solid #1f2a44" }}>{p.points}</span>
                     </div>
                   </td>
                   {displayGames.map(g => {
