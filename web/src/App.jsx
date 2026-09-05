@@ -2140,6 +2140,7 @@ useEffect(() => {
     return () => unsub();
   }, []);
   const showPollResults = isAdmin || picksLocked;
+  const [showPollResultsModal, setShowPollResultsModal] = useState(false);
 
 // Weeks dropdown: populate from games in the selected year
 const [weeksForYear, setWeeksForYear] = useState([]);
@@ -2380,53 +2381,49 @@ useEffect(() => {
       <Card>
         <Row style={{ justifyContent:"space-between", alignItems:"flex-end" }}>
           <h2 style={{ margin: 0 }}>CFB Pick'Ems Week {week}</h2>
-<Field label="Previous weeks">
-  <select value={(week ?? '')} onChange={e => setWeek(Number(e.target.value))} style={inputStyle}>
-    {(weeksForYear.length ? weeksForYear : Array.from({ length: 21 }, (_, i) => i)).map(w => (
-      <option key={w} value={w}>Week {w}</option>
-    ))}
-  </select>
-</Field>
+          <Row style={{ gap:8, alignItems:"flex-end" }}>
+            {showPollResults && pollResults && (
+              <button type="button" onClick={()=>setShowPollResultsModal(true)}>Poll Results</button>
+            )}
+            <Field label="Previous weeks">
+              <select value={(week ?? '')} onChange={e => setWeek(Number(e.target.value))} style={inputStyle}>
+                {(weeksForYear.length ? weeksForYear : Array.from({ length: 21 }, (_, i) => i)).map(w => (
+                  <option key={w} value={w}>Week {w}</option>
+                ))}
+              </select>
+            </Field>
+          </Row>
         </Row>
-        {showPollResults && pollResults && (
-          <div style={{ marginTop:16, padding:"14px 16px", borderRadius:12, background:"#0e1730", border:"1px solid #1f2a44" }}>
-            <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10 }}>
-              <h3 style={{ margin:0, fontSize:16 }}>This Week's Poll Results</h3>
-              {!picksLocked && isAdmin && <span style={{ fontSize:11, color:"#f0b429" }}>Admin preview &mdash; not public yet</span>}
-            </div>
-            {[
-              { pollId: "tf_games", question: "When should the first game of the week be?", order: ["Thursday", "Friday", "Saturday", "No preference"] },
-              { pollId: "games_per_week", question: "How many games do you want to pick from each week?", order: ["Significantly fewer (around 20 games)", "Fewer (around 30 games)", "Keep the same", "More (around 50 games)", "Significantly more (around 60 games)"] },
-            ].map(({ pollId, question, order }) => {
-              const data = pollResults[pollId] || { counts: {}, voters: 0 };
-              const maxCount = Math.max(1, ...Object.values(data.counts));
-              return (
-                <div key={pollId} style={{ marginBottom:18 }}>
-                  <div style={{ fontWeight:600, marginBottom:8 }}>
-                    {question} <span style={{ opacity:.6, fontWeight:400, fontSize:12 }}>({data.voters} {data.voters === 1 ? "vote" : "votes"})</span>
-                  </div>
-                  {order.filter(opt => data.counts[opt] > 0).length === 0 && (
-                    <div style={{ fontSize:13, opacity:.6 }}>No votes yet.</div>
-                  )}
-                  {order.map(opt => {
-                    const count = data.counts[opt] || 0;
-                    if (!count) return null;
-                    const pct = Math.round((count / maxCount) * 100);
-                    return (
-                      <div key={opt} style={{ marginBottom:6 }}>
-                        <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, marginBottom:2 }}>
-                          <span>{opt}</span>
-                          <span style={{ opacity:.75 }}>{count}</span>
-                        </div>
-                        <div style={{ height:8, borderRadius:4, background:"#1f2a44", overflow:"hidden" }}>
-                          <div style={{ width:`${pct}%`, height:"100%", background:"#6aa2ff", borderRadius:4 }} />
-                        </div>
+        {showPollResultsModal && pollResults && (
+          <div style={{position:"fixed", inset:0, background:"rgba(0,0,0,.6)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:9999}} onClick={()=>setShowPollResultsModal(false)}>
+            <div style={{ background:"#121a2b", border:"1px solid #1f2a44", borderRadius:16, padding:16, maxWidth:420, width:"90%", boxShadow:"0 10px 24px rgba(0,0,0,.35)" }} onClick={e=>e.stopPropagation()}>
+              <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:12 }}>
+                <h3 style={{ margin:0, fontSize:16 }}>Poll Results</h3>
+                {!picksLocked && isAdmin && <span style={{ fontSize:11, color:"#f0b429" }}>Preview</span>}
+              </div>
+              {[
+                { pollId: "tf_games", question: "First game of the week?", order: ["Thursday", "Friday", "Saturday", "No preference"] },
+                { pollId: "games_per_week", question: "Games per week?", order: ["Significantly fewer (around 20 games)", "Fewer (around 30 games)", "Keep the same", "More (around 50 games)", "Significantly more (around 60 games)"] },
+              ].map(({ pollId, question, order }) => {
+                const data = pollResults[pollId] || { counts: {}, voters: 0 };
+                const answered = order.filter(opt => data.counts[opt] > 0);
+                return (
+                  <div key={pollId} style={{ marginBottom:16 }}>
+                    <div style={{ fontWeight:600, marginBottom:6, fontSize:14 }}>{question}</div>
+                    {answered.length === 0 && <div style={{ fontSize:13, opacity:.6 }}>No votes yet.</div>}
+                    {answered.map(opt => (
+                      <div key={opt} style={{ display:"flex", justifyContent:"space-between", fontSize:13, padding:"3px 0" }}>
+                        <span>{opt}</span>
+                        <span style={{ opacity:.75 }}>{data.counts[opt]}</span>
                       </div>
-                    );
-                  })}
-                </div>
-              );
-            })}
+                    ))}
+                  </div>
+                );
+              })}
+              <div style={{ display:"flex", justifyContent:"flex-end", marginTop:8 }}>
+                <button type="button" onClick={()=>setShowPollResultsModal(false)}>Close</button>
+              </div>
+            </div>
           </div>
         )}
         {isMobile && (
