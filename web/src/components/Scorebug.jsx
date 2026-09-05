@@ -18,7 +18,7 @@ const Scorebug = React.memo(function Scorebug({
   live,
 }) {
   const status = live?.status ?? "scheduled";
-  const isLive = (status === "in_progress" || status === "live");
+  const isLive = (status === "in_progress" || status === "live" || status === "delayed");
   const period = live?.period;
   const clock = live?.clock;
   const clockDisplay = (Number(period) === 2 && typeof clock !== 'undefined' && clock !== null && /^0+:?0{2}$/.test(String(clock))) ? 'HALF' : clock;

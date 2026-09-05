@@ -1965,6 +1965,28 @@ useEffect(() => {
   // Scorebug lookup below expects, so no conversion is needed.
   const [publicLiveMap, setPublicLiveMap] = React.useState(null);
 
+  // Which upstream source the server's publishLiveMap cron actually used on
+  // its last write (ESPN primary / CFBD fallback / stale) - unlike
+  // publicLiveMap above, admins read this too, since it's about the
+  // server's poll, not the admin's own direct CFBD tab.
+  const [liveMapMeta, setLiveMapMeta] = React.useState(null);
+  React.useEffect(() => {
+    try {
+      const ref = doc(db, "config", "liveMap");
+      const unsub = onSnapshot(ref, (snap) => {
+        const data = snap.data?.() ?? snap.data();
+        setLiveMapMeta(data ? {
+          source: data.source || null,
+          espnGameCount: (typeof data.espnGameCount === "number") ? data.espnGameCount : null,
+          updatedAt: data.updatedAt ?? null
+        } : null);
+      });
+      return () => unsub && unsub();
+    } catch (e) {
+      if (import.meta?.env?.DEV) console.warn("[liveMap] source listener failed", e);
+    }
+  }, []);
+
   React.useEffect(() => {
     if (isAdmin) return; // admins use direct CFBD map
     try {
@@ -2319,6 +2341,77 @@ useEffect(() => {
   const cell = { lineHeight:"1.15", border:"1px solid #1f2a44", padding:"4px 6px", whiteSpace:"nowrap", fontSize:11 };
   const headerCell = { ...cell, textAlign:"center", paddingTop: 12, paddingBottom: 12, lineHeight: 1.25, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis", fontSize: "clamp(10px, 0.95vw, 12px)" };
 
+  // Live-status lookup for a game, matching the Scorebug's own resolution
+  // logic exactly (winners-map first for past weeks, then the merged live
+  // map with a substring-match fallback for the current week) - shared so
+  // the "Jump to live game" button and the Scorebug row never disagree
+  // about what's currently live.
+  const computeLiveForGame = (g) => {
+    const r = results?.[g?.id] || null;
+    const fromWinners = r ? {
+      status: r.status || (r.winner ? "final" : null),
+      period: (typeof r.period === "number" ? r.period : (r.status === "final" ? 4 : null)),
+      clock: null,
+      homePoints: (typeof r.homePoints === "number" ? r.homePoints : null),
+      awayPoints: (typeof r.awayPoints === "number" ? r.awayPoints : null),
+      possession: null
+    } : null;
+
+    const isCurrent = Number(year) === Number(live?.year) && Number(week) === Number(live?.week);
+    if (!isCurrent) return fromWinners;
+
+    const norm = (s) => {
+      if (!s) return "";
+      let t = String(s).toLowerCase();
+      t = t.replace(/\ba\s*&\s*m\b|\ba\s*and\s*m\b/gi, "a&m");
+      t = t.normalize("NFKD").replace(/[̀-ͯ]/g,"").replace(/[^a-z0-9 ]/g,"").replace(/\s+/g," ");
+      return t.replace(/\s+/g,"");
+    };
+    const awayKey = norm(g?.away);
+    const homeKey = norm(g?.home);
+    const key = awayKey + "__" + homeKey;
+    const uiMap = (() => {
+      try { if (sbMap && typeof sbMap.size === "number" && sbMap.size > 0) return sbMap; } catch {}
+      try { if (publicLiveMap && typeof publicLiveMap.size === "number" && publicLiveMap.size > 0) return publicLiveMap; } catch {}
+      try { if (publicSbMap && typeof publicSbMap.size === "number" && publicSbMap.size > 0) return publicSbMap; } catch {}
+      return new Map();
+    })();
+    let liveItem = (uiMap && uiMap.get) ? uiMap.get(key) : null;
+    if (!liveItem && uiMap && uiMap.size) {
+      try {
+        const keys = Array.from(uiMap.keys());
+        const guess = keys.find(k => k.indexOf(awayKey) !== -1 && k.indexOf(homeKey) !== -1);
+        if (guess) liveItem = uiMap.get(guess);
+      } catch {}
+    }
+    return liveItem || fromWinners;
+  };
+
+  // Scrolls the games table to the first in-progress game's column; if
+  // nothing is currently live, scrolls back to the start instead.
+  const scrollToLiveGame = () => {
+    const grid = document.getElementById("lbGrid");
+    if (!grid) return;
+    // The mirrored top scrollbar's spacer only gets widened to match
+    // #lbGrid's real scrollWidth inside #lbGrid's own onScroll handler,
+    // *after* it syncs scrollLeft onto the top bar. A big instant jump
+    // (rather than an incremental drag) races that: the top bar's scrollLeft
+    // gets clamped against its still-narrow spacer, and that clamped value
+    // echoes straight back and resets #lbGrid to 0. Widening the spacer here
+    // first avoids the clamp entirely.
+    const spacer = document.getElementById("lbTopSpacer");
+    if (spacer) spacer.style.width = grid.scrollWidth + "px";
+    const firstLive = (displayGames || []).find(g => {
+      const s = String(computeLiveForGame(g)?.status || "").toLowerCase();
+      return s === "in_progress" || s === "delayed";
+    });
+    if (!firstLive) { grid.scrollTo({ left: 0, behavior: "smooth" }); return; }
+    const escapedId = (window.CSS && CSS.escape) ? CSS.escape(String(firstLive.id)) : String(firstLive.id);
+    const cell = grid.querySelector(`[data-game-id="${escapedId}"]`);
+    if (cell) cell.scrollIntoView({ inline: "start", block: "nearest", behavior: "smooth" });
+    else grid.scrollTo({ left: 0, behavior: "smooth" });
+  };
+
 
   const pickCellBase = { ...cell, textAlign:"center", width: GAME_COL_W, minWidth: GAME_COL_W, maxWidth: GAME_COL_W };
   const pickCellStyle = (gameId, choice) => { const base = { ...cell, textAlign:"center", width: 140, minWidth: 140 };
@@ -2471,6 +2564,20 @@ useEffect(() => {
     <strong>{(() => { const m = String(sbSource||"none").toLowerCase(); return m === "fixture" ? "Demo" : m === "cfbd" ? "Live" : "Off"; })()}</strong>
     <span style={{opacity:.8}}>Status:</span>
     <span>{(sbSource === "none" ? "Paused" : (sbPaused ? "Paused" : "Running"))}</span>
+    <span style={{opacity:.8, marginLeft:12}}>Source:</span>
+    <strong
+      title={liveMapMeta?.updatedAt ? `Last server poll: ${new Date(liveMapMeta.updatedAt).toLocaleTimeString()}${liveMapMeta.espnGameCount != null ? ` · ESPN games seen: ${liveMapMeta.espnGameCount}` : ""}` : "No live-score poll data yet"}
+      style={{ color: (liveMapMeta?.source === "espn") ? "#2ecc71" : (liveMapMeta?.source === "espn+cfbd") ? "#f0b429" : (liveMapMeta?.source === "cfbd-only") ? "#f0b429" : (liveMapMeta?.source === "stale") ? "#e74c3c" : "inherit" }}
+    >
+      {(() => {
+        const s = liveMapMeta?.source;
+        if (s === "espn") return "ESPN";
+        if (s === "espn+cfbd") return "ESPN + CFBD (partial)";
+        if (s === "cfbd-only") return "CFBD only";
+        if (s === "stale") return "Stale";
+        return "—";
+      })()}
+    </strong>
     <span style={{opacity:.8, marginLeft:12}}>Live Scores:</span>
     <button
       onClick={async (e) => { e.preventDefault(); const next = !(sbHardStopGlobal ?? sbHardStop); try { await setDoc(doc(db,"config","app"), { scoreboard: { hardStop: next, mode: next ? "off" : "on" } }, { merge:true }); } catch (err) { console.error("[hardStop] update failed", err); } }}
@@ -2519,6 +2626,14 @@ useEffect(() => {
                       ? new Intl.DateTimeFormat("en-US", { hour:"numeric", minute:"2-digit", hour12:true, timeZone:"America/New_York" }).format(new Date(liveUpdatedAt))
                       : "—"}
                   </div>
+                  <button
+                    type="button"
+                    onClick={scrollToLiveGame}
+                    title="Scroll the table to the first game currently in progress"
+                    style={{ marginTop:4, padding:"3px 7px", borderRadius:6, border:"1px solid rgba(255,255,255,.25)", background:"transparent", color:"#fff", fontSize:10, fontWeight:600, cursor:"pointer", whiteSpace:"nowrap" }}
+                  >
+                    ⚡ Jump to Live
+                  </button>
                 </th>
                 {(() => {
   const tz = "America/New_York";
@@ -2637,58 +2752,7 @@ while (i < seq.length) {
             awayId={g.away}
             homeId={g.home}
             kickoffLabel={kickoffLabel(g, { timeZone: "America/New_York" })}
-            live={(() => {
-              // winners map for this week (already loaded into `results`)
-              const r = results?.[g?.id] || null;
-              const fromWinners = r ? {
-                status: r.status || (r.winner ? "final" : null),
-                period: (typeof r.period === "number" ? r.period : (r.status === "final" ? 4 : null)),
-                clock: null,
-                homePoints: (typeof r.homePoints === "number" ? r.homePoints : null),
-                awayPoints: (typeof r.awayPoints === "number" ? r.awayPoints : null),
-                possession: null
-              } : null;
-
-              // If this is NOT the current live week, always show winners (finals) for past weeks
-              const isCurrent = Number(year) === Number(live?.year) && Number(week) === Number(live?.week);
-              if (!isCurrent) return fromWinners;
-
-              // For the current week, prefer live scoreboard; fallback to winners if missing/final only
-              const norm = (s) => {
-                if (!s) return "";
-                let t = String(s).toLowerCase();
-                t = t.replace(/\ba\s*&\s*m\b|\ba\s*and\s*m\b/gi, "a&m");
-                t = t.normalize("NFKD").replace(/[\u0300-\u036f]/g,"").replace(/[^a-z0-9 ]/g,"").replace(/\s+/g," ");
-                const squish = t.replace(/\s+/g,"");
-                return squish;
-              };
-              const awayKey = norm(g?.away);
-const homeKey = norm(g?.home);
-const key = awayKey + "__" + homeKey;
-// Prefer CFBD map when active; otherwise use the published public map
-const uiMap = (() => {
-  try {
-    if (sbMap && typeof sbMap.size === "number" && sbMap.size > 0) return sbMap;
-  } catch {}
-  try {
-    if (publicLiveMap && typeof publicLiveMap.size === "number" && publicLiveMap.size > 0) return publicLiveMap;
-  } catch {}
-  try {
-    if (publicSbMap && typeof publicSbMap.size === "number" && publicSbMap.size > 0) return publicSbMap;
-  } catch {}
-  return new Map();
-})();
-let liveItem = (uiMap && uiMap.get) ? uiMap.get(key) : null;
-if (!liveItem && uiMap && uiMap.size) {
-  try {
-    // Fallback: find any key that contains both normalized tokens (covers school-only vs mascot)
-    const keys = Array.from(uiMap.keys());
-    const guess = keys.find(k => k.indexOf(awayKey) !== -1 && k.indexOf(homeKey) !== -1);
-    if (guess) liveItem = uiMap.get(guess);
-  } catch {}
-}
-return liveItem || fromWinners;
-            })()}
+            live={computeLiveForGame(g)}
           />
       </td>
     ))}

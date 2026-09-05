@@ -300,6 +300,88 @@ function normalizeScoreboardItems(items) {
   return mapObj;
 }
 
+// ESPN's public scoreboard - no API key needed, same one that powers
+// espn.com/the ESPN app. Promoted to the PRIMARY live-status source after
+// CFBD's own /scoreboard feed was repeatedly observed reporting live games
+// as still "scheduled" (confirmed side-by-side against ESPN showing the
+// same games correctly in progress, on more than one occasion on a real
+// game day). CFBD is kept as the fallback for any game ESPN doesn't carry.
+function normalizeEspnStatus(typeName, completed) {
+  if (completed) return "completed";
+  const s = String(typeName || "").toLowerCase();
+  if (s.includes("final")) return "completed";
+  // Kept distinct from "in_progress" (rather than folded in) so the
+  // Scorebug can show "DELAYED" instead of a stale/frozen quarter and
+  // clock - it already has a display case for any status matching
+  // /delay|suspend|cancel/, it just never received this value before.
+  if (s.includes("delayed")) return "delayed";
+  if (s.includes("in_progress") || s.includes("halftime") || s.includes("end_period")) return "in_progress";
+  return "scheduled";
+}
+
+function normalizeEspnItems(events) {
+  const mapObj = {};
+  if (!Array.isArray(events)) return mapObj;
+
+  for (const e of events) {
+    const comp = e?.competitions?.[0];
+    if (!comp) continue;
+    const competitors = comp.competitors || [];
+    const homeC = competitors.find(c => c.homeAway === "home");
+    const awayC = competitors.find(c => c.homeAway === "away");
+    const home = homeC?.team?.displayName || "";
+    const away = awayC?.team?.displayName || "";
+    if (!home || !away) continue;
+
+    const statusType = e?.status?.type || {};
+    const status = normalizeEspnStatus(statusType.name, statusType.completed);
+
+    const possessionTeamId = comp?.situation?.possession;
+    let possession = null;
+    if (possessionTeamId) {
+      if (homeC?.team?.id === possessionTeamId) possession = "home";
+      else if (awayC?.team?.id === possessionTeamId) possession = "away";
+    }
+
+    const homePoints = Number(homeC?.score);
+    const awayPoints = Number(awayC?.score);
+
+    mapObj[toKey(away, home)] = {
+      id: e?.id ?? null,
+      home: String(home),
+      away: String(away),
+      status,
+      period: (typeof e?.status?.period === "number") ? e.status.period : null,
+      clock: e?.status?.displayClock || null,
+      homePoints: Number.isFinite(homePoints) ? homePoints : null,
+      awayPoints: Number.isFinite(awayPoints) ? awayPoints : null,
+      possession,
+      startTime: e?.date || null
+    };
+  }
+  return mapObj;
+}
+
+async function fetchEspnScoreboard(year, week) {
+  const url = `https://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard?year=${encodeURIComponent(year)}&week=${encodeURIComponent(week)}&seasontype=2&groups=80`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`ESPN scoreboard ${res.status}`);
+  const json = await res.json();
+  return Array.isArray(json?.events) ? json.events : [];
+}
+
+// ESPN is primary: its entry wins for any game it covers. CFBD's entry is
+// kept only as a fallback for games ESPN doesn't carry (e.g. an FCS
+// opponent CFBD's groups=80 filter still returns but ESPN's group=80
+// scoreboard omits).
+function mergeEspnPrimary(cfbdMap, espnMap) {
+  const merged = { ...cfbdMap };
+  for (const [key, espnItem] of Object.entries(espnMap)) {
+    merged[key] = espnItem;
+  }
+  return merged;
+}
+
 // Read CFBD token from Firestore config/cfbd
 async function readCfbdToken(db) {
   const snap = await db.doc("config/cfbd").get();
@@ -345,8 +427,8 @@ async function recordCfbdResult(db, ok) {
     const failingMinutes = (now - since) / 60000;
     if (failingMinutes >= CFBD_FAILURE_ALERT_MINUTES && !notif.cfbdFailureAlertSent) {
       await sendPushToAdmins({
-        title: "⚠️ Live scores aren't updating",
-        body: `CFBD fetches have been failing for ${CFBD_FAILURE_ALERT_MINUTES}+ minutes - check the API key in config/cfbd, or CFBD's own status.`
+        title: "⚠️ CFBD fallback isn't working",
+        body: `CFBD fetches have been failing for ${CFBD_FAILURE_ALERT_MINUTES}+ minutes. ESPN is the primary live-score source now, so this only matters if ESPN also has an outage - check the API key in config/cfbd, or CFBD's own status, when convenient.`
       });
       await db.doc("config/app").set({ notifications: { cfbdFailureAlertSent: true } }, { merge: true });
     }
@@ -782,103 +864,146 @@ exports.publishLiveMap = onSchedule(
       return;
     }
 
-    let token;
     try {
-      token = await readCfbdToken(db);
-    } catch (err) {
-      logger.error("CFBD token missing:", err?.message || err);
-      await recordCfbdResult(db, false);
-      return;
+    // Live-score refresh, once per scheduled minute. ESPN is the primary
+    // source: no API key, and proven far more reliable for live in-progress
+    // status than CFBD's own feed (confirmed side-by-side more than once on
+    // a real game day - CFBD repeatedly reported games as still "scheduled"
+    // well after kickoff while ESPN had them correct). CFBD is only fetched
+    // at all if ESPN's response is missing an included game we still need.
+    const liveSnap = await db.doc("config/live").get();
+    const liveCfg = liveSnap.exists ? liveSnap.data() : {};
+    const liveYear = Number(liveCfg?.year), liveWeek = Number(liveCfg?.week);
+
+    let expectedKeys = [];
+    if (Number.isFinite(liveYear) && Number.isFinite(liveWeek)) {
+      try {
+        const gamesSnap = await db.collection("games")
+          .where("year", "==", liveYear)
+          .where("week", "==", liveWeek)
+          .get();
+        expectedKeys = gamesSnap.docs
+          .map(d => d.data())
+          .filter(g => g.included !== false)
+          .map(g => toKey(g.away, g.home));
+      } catch (e) {
+        logger.warn("publishLiveMap: could not load games for ESPN gap-check", e?.message || e);
+      }
     }
 
-    // No explicit `date` param here on purpose - CFBD's own "current games"
-    // default (matching what an admin's browser gets by calling /scoreboard
-    // the same dateless way) reflects live in-progress status correctly,
-    // while pinning an explicit date was returning games stuck as
-    // "scheduled" even well after kickoff.
-    const url = `https://api.collegefootballdata.com/scoreboard?groups=80`;
-
-    try {
-      const res = await fetch(url, {
-        headers: { "Authorization": `Bearer ${token}` }
-      });
-      if (!res.ok) {
-        const text = await res.text().catch(() => "");
-        logger.warn("CFBD non-2xx:", res.status, text?.slice(0, 200));
-        await recordCfbdResult(db, false);
-        return;
-      }
-      const json = await res.json();
-      const mapObj = normalizeScoreboardItems(json);
-      await recordCfbdResult(db, true);
-
-      const ref = db.doc("config/liveMap");
-      const prev = await ref.get();
-      const prevMap = prev.exists ? (prev.get("map") || {}) : {};
-
-      // Guard against a bad clock reading: CFBD's feed occasionally reports
-      // a stale/glitched clock that's HIGHER than what we last saw for the
-      // same game in the same period - impossible for a real countdown,
-      // since the clock only ever counts down within a period. When that
-      // happens, hold the previous clock/period for exactly one cycle
-      // instead of letting the displayed time jump backward.
-      //
-      // Only one cycle: if we held last time (prior._clockHeld) and the new
-      // reading STILL looks like an increase relative to that same held
-      // value, trust the new reading anyway and clear the hold. Comparing
-      // forever against one frozen anchor is exactly what caused a real
-      // incident - CFBD legitimately counted a game down (2:00 -> 1:55 ->
-      // 1:38, all genuine, all lower than the previous real reading) while
-      // every one of those got rejected because each was still numerically
-      // higher than a single stale value from minutes earlier, freezing the
-      // displayed clock for the rest of the game. One held cycle catches a
-      // true one-off glitch (which self-corrects on CFBD's very next poll);
-      // never un-sticking after that is a worse bug than the one this
-      // exists to prevent.
-      for (const key of Object.keys(mapObj)) {
-        const cur = mapObj[key];
-        const prior = prevMap[key];
-        if (!prior || cur.status !== "in_progress" || prior.period !== cur.period) continue;
-        if (prior._clockHeld) continue; // already held once - accept this reading unconditionally
-        const curSecs = clockToSeconds(cur.clock);
-        const priorSecs = clockToSeconds(prior.clock);
-        if (curSecs !== null && priorSecs !== null && curSecs > priorSecs) {
-          logger.warn(`Holding implausible clock for one cycle on ${key}: ${cur.clock} > previous ${prior.clock} in same period`);
-          cur.clock = prior.clock;
-          cur.period = prior.period;
-          cur._clockHeld = true;
+    let cachedCfbdMap = null;
+    let cfbdToken;
+    let cfbdTokenTried = false;
+    async function fetchCfbdMapOnce() {
+      if (cachedCfbdMap) return cachedCfbdMap;
+      try {
+        if (!cfbdTokenTried) { cfbdTokenTried = true; cfbdToken = await readCfbdToken(db); }
+        if (!cfbdToken) return {};
+        // No explicit `date` param on purpose - CFBD's own "current games"
+        // default reflects in-progress status better than pinning a date.
+        const res = await fetch(`https://api.collegefootballdata.com/scoreboard?groups=80`, {
+          headers: { "Authorization": `Bearer ${cfbdToken}` }
+        });
+        if (!res.ok) {
+          const text = await res.text().catch(() => "");
+          logger.warn("CFBD fallback non-2xx:", res.status, text?.slice(0, 200));
+          await recordCfbdResult(db, false);
+          return {};
         }
+        const json = await res.json();
+        await recordCfbdResult(db, true);
+        cachedCfbdMap = normalizeScoreboardItems(json);
+        return cachedCfbdMap;
+      } catch (e) {
+        logger.warn("publishLiveMap: CFBD fallback fetch failed", e?.message || e);
+        await recordCfbdResult(db, false).catch(() => {});
+        return {};
       }
+    }
 
-      // Dedupe using the full serialized payload. A truncated slice() here
-      // previously only looked at the first ~2048 characters of the JSON -
-      // with 200+ games in the map, most games' data fell past that cutoff
-      // and their changes were invisible to this comparison, so genuinely
-      // updated scores could get silently treated as "unchanged" and never
-      // written to the public doc, leaving non-admins stuck on stale data
-      // indefinitely even though the fetch itself was working correctly.
-      const hash = JSON.stringify(mapObj);
-      const prevHash = prev.exists ? (prev.get("hash") || "") : "";
+    const ref = db.doc("config/liveMap");
+    const prevDoc = await ref.get();
+    const priorMap = prevDoc.exists ? (prevDoc.get("map") || {}) : {};
+    const priorHash = prevDoc.exists ? (prevDoc.get("hash") || "") : "";
 
-      // Only rewrite the (larger) map+hash when the data actually changed,
-      // but always bump updatedAt so it reflects "last successful poll" -
-      // a clean once-a-minute ticker - rather than "last time a score
-      // changed", which could sit stale for several minutes during a lull.
-      if (hash !== prevHash) {
-        await ref.set(
-          {
-            map: mapObj,
-            hash,
-            updatedAt: Date.now(),
-            source: "cfbd-cron"
-          },
-          { merge: true }
-        );
-        logger.info("liveMap updated (changed)");
-      } else {
-        await ref.set({ updatedAt: Date.now() }, { merge: true });
-        logger.info("liveMap unchanged; refreshed updatedAt only");
+    let espnMap = {};
+    let espnOk = false;
+    try {
+      if (Number.isFinite(liveYear) && Number.isFinite(liveWeek)) {
+        const espnEvents = await fetchEspnScoreboard(liveYear, liveWeek);
+        espnMap = normalizeEspnItems(espnEvents);
+        espnOk = true;
       }
+    } catch (e) {
+      logger.warn("publishLiveMap: ESPN fetch failed", e?.message || e);
+    }
+
+    const missing = expectedKeys.filter(k => !espnMap[k]);
+    let cfbdMap = {};
+    let usedCfbd = false;
+    if (!espnOk || missing.length > 0) {
+      cfbdMap = await fetchCfbdMapOnce();
+      usedCfbd = Object.keys(cfbdMap).length > 0;
+    }
+
+    let mapObj = espnOk
+      ? mergeEspnPrimary(cfbdMap, espnMap)
+      : (usedCfbd ? cfbdMap : priorMap);
+
+    // Guard against a bad clock reading: a live feed occasionally reports
+    // a stale/glitched clock that's HIGHER than what we last saw for the
+    // same game in the same period - impossible for a real countdown,
+    // since the clock only ever counts down within a period. When that
+    // happens, hold the previous clock/period for exactly one cycle
+    // instead of letting the displayed time jump backward.
+    //
+    // Only one cycle: if we held last time (prior._clockHeld) and the new
+    // reading STILL looks like an increase relative to that same held
+    // value, trust the new reading anyway and clear the hold. Comparing
+    // forever against one frozen anchor is exactly what caused a real
+    // incident - CFBD legitimately counted a game down (2:00 -> 1:55 ->
+    // 1:38, all genuine, all lower than the previous real reading) while
+    // every one of those got rejected because each was still numerically
+    // higher than a single stale value from minutes earlier, freezing the
+    // displayed clock for the rest of the game. One held cycle catches a
+    // true one-off glitch (which self-corrects on the very next poll);
+    // never un-sticking after that is a worse bug than the one this
+    // exists to prevent.
+    for (const key of Object.keys(mapObj)) {
+      const cur = mapObj[key];
+      const prior = priorMap[key];
+      if (!prior || cur.status !== "in_progress" || prior.period !== cur.period) continue;
+      if (prior._clockHeld) continue; // already held once - accept this reading unconditionally
+      const curSecs = clockToSeconds(cur.clock);
+      const priorSecs = clockToSeconds(prior.clock);
+      if (curSecs !== null && priorSecs !== null && curSecs > priorSecs) {
+        logger.warn(`Holding implausible clock for one cycle on ${key}: ${cur.clock} > previous ${prior.clock} in same period`);
+        cur.clock = prior.clock;
+        cur.period = prior.period;
+        cur._clockHeld = true;
+      }
+    }
+
+    const source = espnOk ? (usedCfbd ? "espn+cfbd" : "espn") : (usedCfbd ? "cfbd-only" : "stale");
+
+    // Dedupe using the full serialized payload. A truncated slice() here
+    // previously only looked at the first ~2048 characters of the JSON -
+    // with 200+ games in the map, most games' data fell past that cutoff
+    // and their changes were invisible to this comparison, so genuinely
+    // updated scores could get silently treated as "unchanged" and never
+    // written to the public doc, leaving non-admins stuck on stale data
+    // indefinitely even though the fetch itself was working correctly.
+    const hash = JSON.stringify(mapObj);
+    if (hash !== priorHash) {
+      await ref.set(
+        { map: mapObj, hash, updatedAt: Date.now(), source, espnGameCount: Object.keys(espnMap).length },
+        { merge: true }
+      );
+      logger.info("liveMap updated (changed)");
+    } else {
+      await ref.set({ updatedAt: Date.now(), source }, { merge: true });
+      logger.info("liveMap unchanged; refreshed updatedAt only");
+    }
 
       // Auto-write winners for any newly-final games (default on; disable via
       // config/app.scoreboard.autoWriteWinners = false)
@@ -929,8 +1054,7 @@ exports.publishLiveMap = onSchedule(
         }
       }
     } catch (e) {
-      logger.error("CFBD fetch/publish error:", e?.message || e);
-      await recordCfbdResult(db, false);
+      logger.error("publishLiveMap: live-score publish error:", e?.message || e);
     }
   }
 );
