@@ -1843,29 +1843,6 @@ if (typeof window !== "undefined") window.history.pushState(null, "", "/confirm"
 // -------- LEADERBOARD (sticky first two columns, logos in headers + winners row) --------
 function LeaderboardPage({ user, isAdmin, setPage }) {  // DEV: CFBD diagnostics — verify token retrieval/log (no CFBD API calls)
   const isMobile = useIsMobile();
-  const [showRules, setShowRules] = useState(false);
-  const rulesModal = showRules && (
-    <div style={{position:"fixed", inset:0, background:"rgba(0,0,0,.6)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:9999}}>
-      <div style={{ background:"#121a2b", border:"1px solid #1f2a44", borderRadius:16, padding:16, maxWidth:720, width:"90%", boxShadow:"0 10px 24px rgba(0,0,0,.35)" }}>
-        <h3 style={{ marginTop:0, marginBottom:8 }}>Rules</h3>
-        <div style={{ lineHeight: 1.6 }}>
-          <h4 style={{ marginTop: 0 }}>Welcome to the 2026 Season!</h4>
-          <ul style={{ paddingLeft: "1.25rem", margin: 0 }}>
-            <li><strong>Weekly Picks:</strong> Each week you'll pick winners from a curated slate — marquee matchups, AP Top 25 games, all Florida FBS teams, plus a few randoms to keep it interesting.</li>
-            <li><strong>Tiebreaker:</strong> Closest to the actual total combined points (over or under) wins. If still tied, the pot is split.</li>
-            <li><strong>One Entry:</strong> Only one form per person per week. Need to change a pick before the deadline? Click <em>Edit here</em> and enter your code.</li>
-            <li><strong>Canceled/Postponed Games:</strong> If a listed game is canceled or postponed and not completed within the scoring window, it's a <em>push</em> (no points awarded).</li>
-            <li><strong>Deadline:</strong> Picks lock at <strong>kickoff of the first game</strong> on the slate.</li>
-            <li><strong>Payment:</strong> Venmo <strong>$5</strong> each week to <strong>@ZackSlay</strong> (Zack Slay).</li>
-            <li><strong>Payout:</strong> <strong>Winner-take-all.</strong> The highest score wins the entire pot. If there's a tie on points, the tiebreaker decides; if still tied, the pot is split.</li>
-          </ul>
-        </div>
-        <div style={{ display:"flex", justifyContent:"flex-end", marginTop:16 }}>
-          <button type="button" onClick={()=>setShowRules(false)}>Close</button>
-        </div>
-      </div>
-    </div>
-  );
   useEffect(() => { if (!isAdmin) return; if (import.meta && import.meta.env && import.meta.env.DEV) {
       getCfbdKey()
         .then(k => console.debug("[cfbd:diag] token present:", !!k))
@@ -2152,6 +2129,18 @@ useEffect(() => {
     return () => unsub && unsub();
   }, []);
 
+  // Public, names-free poll results (config/pollResults, kept up to date by
+  // the updatePollResults Cloud Function). Shown once the poll has wrapped
+  // (picks locked) - admins can preview it any time before that.
+  const [pollResults, setPollResults] = useState(null);
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, "config", "pollResults"), (s) => {
+      setPollResults(s.exists() ? s.data() : null);
+    });
+    return () => unsub();
+  }, []);
+  const showPollResults = isAdmin || picksLocked;
+
 // Weeks dropdown: populate from games in the selected year
 const [weeksForYear, setWeeksForYear] = useState([]);
 useEffect(() => {
@@ -2270,7 +2259,6 @@ useEffect(() => {
         <Card>
           <Row style={{ justifyContent:"space-between", alignItems:"flex-start" }}>
             <h2 style={{ margin: 0 }}>CFB Pick'Ems Week {week}</h2>
-            <button type="button" onClick={()=>setShowRules(true)}>Rules</button>
           </Row>
 <Field label="Previous weeks">
   <select value={(week ?? '')} onChange={e => setWeek(Number(e.target.value))} style={inputStyle}>
@@ -2285,7 +2273,6 @@ useEffect(() => {
             <div>To submit or edit picks, visit the Picks page</div>
           </div>
         </Card>
-        {rulesModal}
       </Container>
     );
   }
@@ -2400,9 +2387,48 @@ useEffect(() => {
     ))}
   </select>
 </Field>
-          <button type="button" onClick={()=>setShowRules(true)}>Rules</button>
         </Row>
-        {rulesModal}
+        {showPollResults && pollResults && (
+          <div style={{ marginTop:16, padding:"14px 16px", borderRadius:12, background:"#0e1730", border:"1px solid #1f2a44" }}>
+            <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10 }}>
+              <h3 style={{ margin:0, fontSize:16 }}>This Week's Poll Results</h3>
+              {!picksLocked && isAdmin && <span style={{ fontSize:11, color:"#f0b429" }}>Admin preview &mdash; not public yet</span>}
+            </div>
+            {[
+              { pollId: "tf_games", question: "When should the first game of the week be?", order: ["Thursday", "Friday", "Saturday", "No preference"] },
+              { pollId: "games_per_week", question: "How many games do you want to pick from each week?", order: ["Significantly fewer (around 20 games)", "Fewer (around 30 games)", "Keep the same", "More (around 50 games)", "Significantly more (around 60 games)"] },
+            ].map(({ pollId, question, order }) => {
+              const data = pollResults[pollId] || { counts: {}, voters: 0 };
+              const maxCount = Math.max(1, ...Object.values(data.counts));
+              return (
+                <div key={pollId} style={{ marginBottom:18 }}>
+                  <div style={{ fontWeight:600, marginBottom:8 }}>
+                    {question} <span style={{ opacity:.6, fontWeight:400, fontSize:12 }}>({data.voters} {data.voters === 1 ? "vote" : "votes"})</span>
+                  </div>
+                  {order.filter(opt => data.counts[opt] > 0).length === 0 && (
+                    <div style={{ fontSize:13, opacity:.6 }}>No votes yet.</div>
+                  )}
+                  {order.map(opt => {
+                    const count = data.counts[opt] || 0;
+                    if (!count) return null;
+                    const pct = Math.round((count / maxCount) * 100);
+                    return (
+                      <div key={opt} style={{ marginBottom:6 }}>
+                        <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, marginBottom:2 }}>
+                          <span>{opt}</span>
+                          <span style={{ opacity:.75 }}>{count}</span>
+                        </div>
+                        <div style={{ height:8, borderRadius:4, background:"#1f2a44", overflow:"hidden" }}>
+                          <div style={{ width:`${pct}%`, height:"100%", background:"#6aa2ff", borderRadius:4 }} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </div>
+        )}
         {isMobile && (
           <div style={{ fontSize:11, color:"#9aa4c7", margin:"6px 2px 0", textAlign:"center" }}>
             &harr; Swipe the table to see more games

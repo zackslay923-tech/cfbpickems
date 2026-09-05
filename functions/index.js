@@ -1,7 +1,7 @@
 "use strict";
 
 const { onSchedule } = require("firebase-functions/v2/scheduler");
-const { onDocumentCreated } = require("firebase-functions/v2/firestore");
+const { onDocumentCreated, onDocumentWritten } = require("firebase-functions/v2/firestore");
 const logger = require("firebase-functions/logger");
 const admin = require("firebase-admin");
 admin.initializeApp();
@@ -912,5 +912,38 @@ exports.publishLiveMap = onSchedule(
       logger.error("CFBD fetch/publish error:", e?.message || e);
       await recordCfbdResult(db, false);
     }
+  }
+);
+
+// Keep a public, names-free tally of the two "quick survey" poll questions
+// (game-night preference and games-per-week) in config/pollResults, so the
+// Leaderboard can show aggregate results to everyone without exposing the
+// individual pollVotes docs (which carry names) to non-admins. Recomputes
+// from scratch on every vote write - the collection is small (one doc per
+// voter per question) so this is cheap.
+const PUBLIC_POLL_IDS = ["tf_games", "games_per_week"];
+exports.updatePollResults = onDocumentWritten(
+  { document: "pollVotes/{voteId}", region: "us-east4" },
+  async () => {
+    const db = admin.firestore();
+    const snap = await db.collection("pollVotes").get();
+
+    const result = {};
+    for (const pollId of PUBLIC_POLL_IDS) {
+      const counts = {};
+      let voters = 0;
+      snap.forEach((d) => {
+        const v = d.data();
+        if (v.pollId !== pollId || !v.choice) return;
+        counts[v.choice] = (counts[v.choice] || 0) + 1;
+        voters++;
+      });
+      result[pollId] = { counts, voters };
+    }
+
+    await db.doc("config/pollResults").set(
+      { ...result, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
+      { merge: true }
+    );
   }
 );
