@@ -421,6 +421,8 @@ async function autoWriteWinners(db, mapObj) {
     batch.set(db.doc(`results/${g.id}`), {
       winner,
       totalPoints: hp + ap,
+      homePoints: hp,
+      awayPoints: ap,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       source: "auto-cron"
     }, { merge: true });
