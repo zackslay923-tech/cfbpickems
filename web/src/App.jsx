@@ -2408,8 +2408,20 @@ useEffect(() => {
     if (!firstLive) { grid.scrollTo({ left: 0, behavior: "smooth" }); return; }
     const escapedId = (window.CSS && CSS.escape) ? CSS.escape(String(firstLive.id)) : String(firstLive.id);
     const cell = grid.querySelector(`[data-game-id="${escapedId}"]`);
-    if (cell) cell.scrollIntoView({ inline: "start", block: "nearest", behavior: "smooth" });
-    else grid.scrollTo({ left: 0, behavior: "smooth" });
+    if (cell) {
+      // Not scrollIntoView({inline:"start"}) - that aligns the column flush
+      // against the scroll container's true left edge, which is exactly
+      // where the sticky Name/Points columns sit on top of the content, so
+      // the "live" column landed hidden behind them. Scroll past their
+      // width instead, so the target column clears them.
+      const gridRect = grid.getBoundingClientRect();
+      const cellRect = cell.getBoundingClientRect();
+      const cellLeftWithinContent = grid.scrollLeft + (cellRect.left - gridRect.left);
+      const stickyWidth = NAME_COL_W + POINTS_COL_W;
+      grid.scrollTo({ left: Math.max(0, cellLeftWithinContent - stickyWidth), behavior: "smooth" });
+    } else {
+      grid.scrollTo({ left: 0, behavior: "smooth" });
+    }
   };
 
 
