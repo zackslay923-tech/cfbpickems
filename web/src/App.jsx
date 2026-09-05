@@ -2885,9 +2885,10 @@ while (i < seq.length) {
   </tr>
 )}
               <tr>
-                <td colSpan={2} onDoubleClick={scrollToStart} style={{ ...cell, ...sticky1({ width: NAME_COL_W + POINTS_COL_W, minWidth: NAME_COL_W + POINTS_COL_W, fontStyle:"italic" }) }}>
-                  <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
-                    <span></span><span style={{ fontWeight:600, fontStyle:"normal" }}>{playedCount}</span>
+                <td colSpan={2} onDoubleClick={scrollToStart} style={{ ...cell, ...sticky1({ width: NAME_COL_W + POINTS_COL_W, minWidth: NAME_COL_W + POINTS_COL_W, fontStyle:"italic", padding:0 }) }}>
+                  <div style={{ display:"flex", alignItems:"stretch", height:"100%" }}>
+                    <span style={{ flex:"1 1 auto", minWidth:0, padding:"4px 6px" }}></span>
+                    <span style={{ width:POINTS_COL_W, minWidth:POINTS_COL_W, boxSizing:"border-box", display:"flex", alignItems:"center", justifyContent:"center", fontWeight:600, fontStyle:"normal", borderLeft:"1px solid #1f2a44" }}>{playedCount}</span>
                   </div>
                 </td>
                 {displayGames.map(g => (
@@ -2900,14 +2901,16 @@ while (i < seq.length) {
             <tbody>
               {players.map(p => (
                 <tr key={p.id || p.code || p.email || p.name}>
-                  <td colSpan={2} onDoubleClick={scrollToStart} style={{ ...cell, ...sticky1({ width: NAME_COL_W + POINTS_COL_W, minWidth: NAME_COL_W + POINTS_COL_W }) }}>
-                    <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:6 }}>
-                      <span>
-                        {p.isWinner && <span title={p.winNote || "Winner"} style={{ marginRight: 6 }}>🏆</span>}
-                        {p.name}
-                        {p.winNote && <div style={{ fontSize: 10, fontWeight: 400, opacity: 0.75, marginTop: 2 }}>{p.winNote}</div>}
+                  <td colSpan={2} onDoubleClick={scrollToStart} style={{ ...cell, ...sticky1({ width: NAME_COL_W + POINTS_COL_W, minWidth: NAME_COL_W + POINTS_COL_W, padding:0 }) }}>
+                    <div style={{ display:"flex", alignItems:"stretch", height:"100%" }}>
+                      <span style={{ flex:"1 1 auto", minWidth:0, display:"flex", alignItems:"center", padding:"4px 6px" }}>
+                        <span>
+                          {p.isWinner && <span title={p.winNote || "Winner"} style={{ marginRight: 6 }}>🏆</span>}
+                          {p.name}
+                          {p.winNote && <div style={{ fontSize: 10, fontWeight: 400, opacity: 0.75, marginTop: 2 }}>{p.winNote}</div>}
+                        </span>
                       </span>
-                      <span style={{ fontWeight:700 }}>{p.points}</span>
+                      <span style={{ width:POINTS_COL_W, minWidth:POINTS_COL_W, boxSizing:"border-box", display:"flex", alignItems:"center", justifyContent:"center", fontWeight:700, borderLeft:"1px solid #1f2a44" }}>{p.points}</span>
                     </div>
                   </td>
                   {displayGames.map(g => {
