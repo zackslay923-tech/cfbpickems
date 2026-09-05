@@ -1000,9 +1000,19 @@ exports.publishLiveMap = onSchedule(
     // indefinitely even though the fetch itself was working correctly.
     const hash = JSON.stringify(mapObj);
     if (hash !== priorHash) {
+      // No {merge:true} here on purpose: Firestore's merge deep-merges
+      // nested map fields rather than replacing them, so any team pairing
+      // that isn't part of this cycle's freshly computed mapObj (e.g. a
+      // past week's matchup between the same two teams) just stays in the
+      // stored "map" field forever. Confirmed this actually happened -
+      // "config/liveMap" had two entries for Wyoming @ Colorado State, one
+      // live and correct, one a stale leftover from an October 2025
+      // meeting with a stuck "scheduled" status, and the client's
+      // substring-fallback matching picked whichever happened to sort
+      // first, showing the wrong one. A full overwrite makes mapObj the
+      // complete, authoritative state every time - nothing to accumulate.
       await ref.set(
-        { map: mapObj, hash, updatedAt: Date.now(), source, espnGameCount: Object.keys(espnMap).length },
-        { merge: true }
+        { map: mapObj, hash, updatedAt: Date.now(), source, espnGameCount: Object.keys(espnMap).length }
       );
       logger.info("liveMap updated (changed)");
     } else {
