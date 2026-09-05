@@ -4917,6 +4917,7 @@ function ConfirmPage({ setPage }) {
   }, []);
   const [pending, setPending] = React.useState(null);
   const [games, setGames] = React.useState([]);
+  const [gamesLoaded, setGamesLoaded] = React.useState(false);
   const [msg, setMsg] = React.useState("");
 
   React.useEffect(() => {
@@ -4934,6 +4935,7 @@ function ConfirmPage({ setPage }) {
       items = gd ? [...items.filter(x => x && x.id !== gd.id), gd] : items;
 
       setGames(items);
+      setGamesLoaded(true);
     } catch (e) {
       setPage("picks");
     }
@@ -4944,6 +4946,12 @@ function ConfirmPage({ setPage }) {
 const normPhone = (s) => String(s||"").replace(/[^0-9]/g, "");
 const normVenmo = (s) => String(s||"").trim().toLowerCase().replace(/^@+/, "");const confirmAndSubmit = async () => { if (picksLocked) { if (typeof setMsg==="function") setMsg("Submissions are locked right now."); return; }
     if (!pending) return;
+    // Games (and whether this week has a GameDay tiebreaker game) load async
+    // on mount. Submitting before that resolves left `gd` below undefined
+    // even when the user had already entered a tiebreaker guess on the
+    // Picks page, silently dropping it from the payload - confirmed as the
+    // cause of three real submissions missing a tiebreaker entirely.
+    if (!gamesLoaded) { setMsg("Still loading this week's games — try again in a second."); return; }
     setMsg("Saving...");
     try {
       const { year, week, form, picks, code, tiebreaker, polls, feedback } = pending;
@@ -5158,7 +5166,7 @@ localStorage.setItem("receipt", JSON.stringify({ year, week, code, form, picks, 
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginTop:20, gap:12, flexWrap:"wrap" }}>
           <button type="button" style={adminBtn("neutral")} onClick={()=>{ setPage("picks"); window.history.pushState(null, "", "/picks"); }}>Back to Edit</button>
           {msg && <div style={{ flex:1, textAlign:"center", color:"#f0b429", fontSize:13, fontWeight:600 }}>{msg}</div>}
-          <button type="button" style={adminBtn(picksLocked ? "neutral" : "primary")} onClick={confirmAndSubmit} disabled={!!(picksLocked)}>Confirm & Submit</button>
+          <button type="button" style={adminBtn((picksLocked || !gamesLoaded) ? "neutral" : "primary")} onClick={confirmAndSubmit} disabled={!!(picksLocked || !gamesLoaded)}>{gamesLoaded ? "Confirm & Submit" : "Loading…"}</button>
         </div>
       </Card>
     </Container>
