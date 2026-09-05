@@ -2382,19 +2382,13 @@ useEffect(() => {
   ...stickyGpuFix,
   ...extra
 });
-  const sticky2 = (extra = {}) => ({
-  position: "sticky",
-  left: NAME_COL_W,
-  zIndex: 4,
-  background: "#0b1220",
-  width: POINTS_COL_W,
-  minWidth: POINTS_COL_W,
-  borderRight: "none",
-  boxShadow: "inset -1px 0 0 0 #1f2a44",
-  touchAction: "manipulation",
-  ...stickyGpuFix,
-  ...extra
-});
+  // sticky2 (a second independently-sticky column at left:NAME_COL_W) used
+  // to exist for the Points column - removed because two separately-sticky
+  // elements at different left offsets in the same row is exactly the
+  // pattern that wobbled on real iOS Safari, while the header/pot-box's
+  // single merged sticky area (colSpan=2, one sticky element) never did.
+  // Every row now merges Name+Points into one sticky1() cell instead,
+  // matching the header's structure.
 
   const cell = { lineHeight:"1.15", border:"1px solid #1f2a44", padding:"4px 6px", whiteSpace:"nowrap", fontSize:11 };
   const headerCell = { ...cell, textAlign:"center", paddingTop: 12, paddingBottom: 12, lineHeight: 1.25, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis", fontSize: "clamp(10px, 0.95vw, 12px)" };
@@ -2891,8 +2885,11 @@ while (i < seq.length) {
   </tr>
 )}
               <tr>
-                <td onDoubleClick={scrollToStart} style={{ ...cell, ...sticky1({ fontStyle:"italic" }) }}></td>
-                <td onDoubleClick={scrollToStart} style={{ ...cell, ...sticky2({ textAlign:"center", fontWeight:600 }) }}>{playedCount}</td>
+                <td colSpan={2} onDoubleClick={scrollToStart} style={{ ...cell, ...sticky1({ width: NAME_COL_W + POINTS_COL_W, minWidth: NAME_COL_W + POINTS_COL_W, fontStyle:"italic" }) }}>
+                  <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+                    <span></span><span style={{ fontWeight:600, fontStyle:"normal" }}>{playedCount}</span>
+                  </div>
+                </td>
                 {displayGames.map(g => (
 
                   <td key={g.id} data-game-id={g.id} style={{ ...winnerCellStyleFn(results, cell, g), width: 140, minwidth: 140, fontStyle:"italic", fontSize: fitFontByLen(String(results[g.id]?.winner||"").length) }}>{winnerCell(g)}</td>
@@ -2903,12 +2900,16 @@ while (i < seq.length) {
             <tbody>
               {players.map(p => (
                 <tr key={p.id || p.code || p.email || p.name}>
-                  <td onDoubleClick={scrollToStart} style={{ ...cell, ...sticky1() }}>
-                    {p.isWinner && <span title={p.winNote || "Winner"} style={{ marginRight: 6 }}>🏆</span>}
-                    {p.name}
-                    {p.winNote && <div style={{ fontSize: 10, fontWeight: 400, opacity: 0.75, marginTop: 2 }}>{p.winNote}</div>}
+                  <td colSpan={2} onDoubleClick={scrollToStart} style={{ ...cell, ...sticky1({ width: NAME_COL_W + POINTS_COL_W, minWidth: NAME_COL_W + POINTS_COL_W }) }}>
+                    <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:6 }}>
+                      <span>
+                        {p.isWinner && <span title={p.winNote || "Winner"} style={{ marginRight: 6 }}>🏆</span>}
+                        {p.name}
+                        {p.winNote && <div style={{ fontSize: 10, fontWeight: 400, opacity: 0.75, marginTop: 2 }}>{p.winNote}</div>}
+                      </span>
+                      <span style={{ fontWeight:700 }}>{p.points}</span>
+                    </div>
                   </td>
-                  <td onDoubleClick={scrollToStart} style={{ ...cell, ...sticky2({ textAlign:"center", fontWeight:700 }) }}>{p.points}</td>
                   {displayGames.map(g => {
                     const canSeePicks = lbPicksPublic || isAdmin || !isLiveWeek;
                     const choice = p.picks?.[g.id];
