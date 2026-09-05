@@ -1843,6 +1843,29 @@ if (typeof window !== "undefined") window.history.pushState(null, "", "/confirm"
 // -------- LEADERBOARD (sticky first two columns, logos in headers + winners row) --------
 function LeaderboardPage({ user, isAdmin, setPage }) {  // DEV: CFBD diagnostics — verify token retrieval/log (no CFBD API calls)
   const isMobile = useIsMobile();
+  const [showRules, setShowRules] = useState(false);
+  const rulesModal = showRules && (
+    <div style={{position:"fixed", inset:0, background:"rgba(0,0,0,.6)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:9999}}>
+      <div style={{ background:"#121a2b", border:"1px solid #1f2a44", borderRadius:16, padding:16, maxWidth:720, width:"90%", boxShadow:"0 10px 24px rgba(0,0,0,.35)" }}>
+        <h3 style={{ marginTop:0, marginBottom:8 }}>Rules</h3>
+        <div style={{ lineHeight: 1.6 }}>
+          <h4 style={{ marginTop: 0 }}>Welcome to the 2026 Season!</h4>
+          <ul style={{ paddingLeft: "1.25rem", margin: 0 }}>
+            <li><strong>Weekly Picks:</strong> Each week you'll pick winners from a curated slate — marquee matchups, AP Top 25 games, all Florida FBS teams, plus a few randoms to keep it interesting.</li>
+            <li><strong>Tiebreaker:</strong> Closest to the actual total combined points (over or under) wins. If still tied, the pot is split.</li>
+            <li><strong>One Entry:</strong> Only one form per person per week. Need to change a pick before the deadline? Click <em>Edit here</em> and enter your code.</li>
+            <li><strong>Canceled/Postponed Games:</strong> If a listed game is canceled or postponed and not completed within the scoring window, it's a <em>push</em> (no points awarded).</li>
+            <li><strong>Deadline:</strong> Picks lock at <strong>kickoff of the first game</strong> on the slate.</li>
+            <li><strong>Payment:</strong> Venmo <strong>$5</strong> each week to <strong>@ZackSlay</strong> (Zack Slay).</li>
+            <li><strong>Payout:</strong> <strong>Winner-take-all.</strong> The highest score wins the entire pot. If there's a tie on points, the tiebreaker decides; if still tied, the pot is split.</li>
+          </ul>
+        </div>
+        <div style={{ display:"flex", justifyContent:"flex-end", marginTop:16 }}>
+          <button type="button" onClick={()=>setShowRules(false)}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
   useEffect(() => { if (!isAdmin) return; if (import.meta && import.meta.env && import.meta.env.DEV) {
       getCfbdKey()
         .then(k => console.debug("[cfbd:diag] token present:", !!k))
@@ -2245,7 +2268,10 @@ useEffect(() => {
   return (<Container maxWidth={1200}>
         <Header user={user} isAdmin={isAdmin} setPage={setPage} />
         <Card>
-          <h2 style={{ margin: 0 }}>CFB Pick'Ems Week {week}</h2>
+          <Row style={{ justifyContent:"space-between", alignItems:"flex-start" }}>
+            <h2 style={{ margin: 0 }}>CFB Pick'Ems Week {week}</h2>
+            <button type="button" onClick={()=>setShowRules(true)}>Rules</button>
+          </Row>
 <Field label="Previous weeks">
   <select value={(week ?? '')} onChange={e => setWeek(Number(e.target.value))} style={inputStyle}>
     {(weeksForYear.length ? weeksForYear : Array.from({ length: 21 }, (_, i) => i)).map(w => (
@@ -2259,6 +2285,7 @@ useEffect(() => {
             <div>To submit or edit picks, visit the Picks page</div>
           </div>
         </Card>
+        {rulesModal}
       </Container>
     );
   }
@@ -2373,7 +2400,9 @@ useEffect(() => {
     ))}
   </select>
 </Field>
+          <button type="button" onClick={()=>setShowRules(true)}>Rules</button>
         </Row>
+        {rulesModal}
         {isMobile && (
           <div style={{ fontSize:11, color:"#9aa4c7", margin:"6px 2px 0", textAlign:"center" }}>
             &harr; Swipe the table to see more games
