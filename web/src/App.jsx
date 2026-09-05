@@ -3951,6 +3951,20 @@ function AdminPage({ user, isAdmin, setPage }) {
     return () => unsub();
   }, [isAdmin]);
 
+  // Live results map (by game id) so the Set Winner button can highlight once
+  // a game is actually resolved (real winner or a push) - lets the admin spot
+  // at a glance which games still need attention.
+  const [results, setResults] = useState({});
+  useEffect(() => {
+    if (!isAdmin) return;
+    const unsub = onSnapshot(collection(db, "results"), (snap) => {
+      const map = {};
+      snap.forEach(d => { map[d.id] = d.data(); });
+      setResults(map);
+    });
+    return () => unsub();
+  }, [isAdmin]);
+
   const [games, setGames] = useState([]);
   const [pickCount, setPickCount] = useState(0);
   const [msg, setMsg] = useState("");
@@ -4823,8 +4837,9 @@ await setDoc(doc(db,"config","app"), { currentYear: year, currentWeek: week, upd
     type="button"
     onClick={(e)=>{ e.stopPropagation(); chooseWinner(g); }}
     onKeyDown={(e)=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); e.stopPropagation(); chooseWinner(g);} }}
-    style={{ padding:"6px 10px", borderRadius:10, border:"1px solid #1f2a44", cursor:"pointer", color:"#fff", background:"transparent" }}
+    style={{ padding:"6px 10px", borderRadius:10, border:"1px solid #1f2a44", cursor:"pointer", color:"#fff", background: results[g.id]?.winner ? "rgba(46,204,113,0.15)" : "transparent", boxShadow: results[g.id]?.winner ? "0 0 0 2px #2ecc71 inset" : "none" }}
     aria-label={`Set winner for $<div style={{ width:96, textAlign:"center", fontWeight:700, fontSize:13, lineHeight:1.15, whiteSpace:"normal", overflowWrap:"anywhere" }}>{teamLabelNoMascot(g.away, g.awayRank)}</div> at $<div style={{ width:96, textAlign:"center", fontWeight:700, fontSize:13, lineHeight:1.15, whiteSpace:"normal", overflowWrap:"anywhere" }}>{teamLabelNoMascot(g.home, g.homeRank)}</div>`}
+    title={results[g.id]?.winner ? `Resolved: ${results[g.id].push ? "Push (no contest)" : results[g.id].winner}` : "Set winner"}
   >
     {"🏆"}
   </button><button
