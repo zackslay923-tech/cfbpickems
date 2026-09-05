@@ -2236,16 +2236,6 @@ useEffect(() => {
   }, []);
   // Poll results follow the same lock/unlock as the leaderboard itself.
   const showPollResults = isAdmin || !lbLocked;
-  // Pop the results up automatically the first time this page loads (once
-  // per visit to the Leaderboard), rather than making people find the button.
-  const pollResultsAutoOpenedRef = useRef(false);
-  useEffect(() => {
-    if (pollResultsAutoOpenedRef.current) return;
-    if (showPollResults && pollResults) {
-      setShowPollResultsModal(true);
-      pollResultsAutoOpenedRef.current = true;
-    }
-  }, [showPollResults, pollResults]);
 
   if (lbLocked && !isAdmin && Number(year) === Number(live?.year) && Number(week) === Number(live?.week)) {
       // Clear selected week if it has NO picks (safety guard)
