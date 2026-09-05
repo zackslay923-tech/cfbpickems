@@ -2314,6 +2314,10 @@ useEffect(() => {
   minWidth: NAME_COL_W,
   borderRight: "none",
   boxShadow: "inset -1px 0 0 0 #1f2a44",
+  // Without this, a double-tap on mobile is ambiguous with the browser's
+  // native double-tap-to-zoom gesture and doesn't reliably fire onDoubleClick
+  // (used to jump the games table back to the start).
+  touchAction: "manipulation",
   ...extra
 });
   const sticky2 = (extra = {}) => ({
@@ -2325,6 +2329,7 @@ useEffect(() => {
   minWidth: POINTS_COL_W,
   borderRight: "none",
   boxShadow: "inset -1px 0 0 0 #1f2a44",
+  touchAction: "manipulation",
   ...extra
 });
 
@@ -2436,6 +2441,16 @@ useEffect(() => {
     } else {
       grid.scrollTo({ left: 0, behavior: "auto" });
     }
+  };
+
+  // Double-tapping the sticky Name/Points columns scrolls back to the
+  // first game - the return trip to pair with "Jump to Live". Ignores a
+  // double-click landing on a button inside that area (e.g. "Jump to
+  // Live" itself), so mashing that button doesn't also reset the scroll.
+  const scrollToStart = (e) => {
+    if (e?.target?.closest && e.target.closest("button")) return;
+    const grid = document.getElementById("lbGrid");
+    if (grid) grid.scrollTo({ left: 0, behavior: "auto" });
   };
 
 
@@ -2643,7 +2658,7 @@ useEffect(() => {
           <table style={{ tableLayout:"auto", borderCollapse:"separate", borderSpacing:0, width:"max-content", minWidth:"auto" }}>
             <thead>
               <tr>
-                <th rowSpan={2} colSpan={2} style={{ ...headerCell, ...sticky1(), width: NAME_COL_W + POINTS_COL_W, minWidth: NAME_COL_W + POINTS_COL_W, padding:"10px 10px", fontSize:11, lineHeight:1, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis", verticalAlign:"middle" }}>
+                <th rowSpan={2} colSpan={2} onDoubleClick={scrollToStart} style={{ ...headerCell, ...sticky1(), width: NAME_COL_W + POINTS_COL_W, minWidth: NAME_COL_W + POINTS_COL_W, padding:"10px 10px", fontSize:11, lineHeight:1, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis", verticalAlign:"middle" }}>
                   <div style={{ fontSize:"0.95rem", fontWeight:600, color:"#9aa4c7" }}>
                     Last updated:
                   </div>
@@ -2762,7 +2777,7 @@ while (i < seq.length) {
               </tr>
 {showScorebug && (
   <tr className="scorebug-row"> {/* SCOREBUG ROW v1 (disabled by flag) */}
-    <td colSpan={2} style={{ ...cell, ...sticky1(), width: NAME_COL_W + POINTS_COL_W, minWidth: NAME_COL_W + POINTS_COL_W, padding:"10px 10px" }}>
+    <td colSpan={2} onDoubleClick={scrollToStart} style={{ ...cell, ...sticky1(), width: NAME_COL_W + POINTS_COL_W, minWidth: NAME_COL_W + POINTS_COL_W, padding:"10px 10px" }}>
       {(!potHidden || isAdmin) && (<>
         <div style={{ fontSize:"1.1rem", fontWeight:600 }}>
           This Week&apos;s Pot{potHidden ? " (hidden)" : ""}:
@@ -2785,8 +2800,8 @@ while (i < seq.length) {
   </tr>
 )}
               <tr>
-                <td style={{ ...cell, ...sticky1({ fontStyle:"italic" }) }}></td>
-                <td style={{ ...cell, ...sticky2({ textAlign:"center", fontWeight:600 }) }}>{playedCount}</td>
+                <td onDoubleClick={scrollToStart} style={{ ...cell, ...sticky1({ fontStyle:"italic" }) }}></td>
+                <td onDoubleClick={scrollToStart} style={{ ...cell, ...sticky2({ textAlign:"center", fontWeight:600 }) }}>{playedCount}</td>
                 {displayGames.map(g => (
 
                   <td key={g.id} data-game-id={g.id} style={{ ...winnerCellStyleFn(results, cell, g), width: 140, minwidth: 140, fontStyle:"italic", fontSize: fitFontByLen(String(results[g.id]?.winner||"").length) }}>{winnerCell(g)}</td>
@@ -2797,12 +2812,12 @@ while (i < seq.length) {
             <tbody>
               {players.map(p => (
                 <tr key={p.id || p.code || p.email || p.name}>
-                  <td style={{ ...cell, ...sticky1() }}>
+                  <td onDoubleClick={scrollToStart} style={{ ...cell, ...sticky1() }}>
                     {p.isWinner && <span title={p.winNote || "Winner"} style={{ marginRight: 6 }}>🏆</span>}
                     {p.name}
                     {p.winNote && <div style={{ fontSize: 10, fontWeight: 400, opacity: 0.75, marginTop: 2 }}>{p.winNote}</div>}
                   </td>
-                  <td style={{ ...cell, ...sticky2({ textAlign:"center", fontWeight:700 }) }}>{p.points}</td>
+                  <td onDoubleClick={scrollToStart} style={{ ...cell, ...sticky2({ textAlign:"center", fontWeight:700 }) }}>{p.points}</td>
                   {displayGames.map(g => {
                     const canSeePicks = lbPicksPublic || isAdmin || !isLiveWeek;
                     const choice = p.picks?.[g.id];
