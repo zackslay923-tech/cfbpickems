@@ -611,10 +611,31 @@ async function setGameGameday(year, week, gameId) {
   const q = query(collection(db, "games"), where("year","==",year), where("week","==",week));
   const snap = await getDocs(q);
   const batch = writeBatch(db);
+  let selectedGame = null;
   snap.forEach(d => {
-    batch.set(d.ref, { gameday: d.id === gameId }, { merge: true });
+    const isSelected = d.id === gameId;
+    batch.set(d.ref, { gameday: isSelected }, { merge: true });
+    if (isSelected) selectedGame = d.data();
   });
   await batch.commit();
+
+  // Keep config/live.gamedayGameId in sync automatically when the game
+  // being flagged belongs to the currently live week - the Firestore rule
+  // requiring a valid tiebreaker on submission checks against this field,
+  // and it used to only get updated by a separate manual "Sync" button
+  // elsewhere in Admin. Forgetting that step for a new week would silently
+  // reject everyone's picks submissions, since their tiebreaker would
+  // correctly point at the new GameDay game while the rule still expected
+  // the old one.
+  try {
+    const liveSnap = await getDoc(doc(db, "config", "live"));
+    const live = liveSnap.exists() ? liveSnap.data() : null;
+    if (live && Number(live.year) === Number(year) && Number(live.week) === Number(week) && selectedGame) {
+      await setDoc(doc(db, "config", "live"), { gamedayGameId: gameId, gamedayHome: selectedGame.home }, { merge: true });
+    }
+  } catch (e) {
+    console.error("setGameGameday: failed to sync config/live.gamedayGameId", e);
+  }
 }
 async function setResult(gameId, winner, totalPoints) {
   const payload = { winner: String(winner), updatedAt: serverTimestamp() };
