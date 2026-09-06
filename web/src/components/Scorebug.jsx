@@ -33,8 +33,14 @@ const Scorebug = React.memo(function Scorebug({
   } else if (status === "halftime") {
     centerText = "HALF";
   } else if (status === "in_progress" || status === "live") {
-    if (period && clock) centerText = `Q${period} • ${clockDisplay}`;
-    else if (period) centerText = `Q${period}`;
+    // Periods beyond the 4 regulation quarters are overtime - period 5 is
+    // OT, 6 is 2OT, 7 is 3OT, etc. Showing "Q6" instead was just the
+    // literal period number with no OT handling, unlike the FINAL branch
+    // above which already special-cases period > 4.
+    const otNumber = (period && period > 4) ? period - 4 : null;
+    const periodLabel = otNumber ? (otNumber === 1 ? "OT" : `${otNumber}OT`) : (period ? `Q${period}` : null);
+    if (periodLabel && clock) centerText = `${periodLabel} • ${clockDisplay}`;
+    else if (periodLabel) centerText = periodLabel;
     else centerText = "LIVE";
   } else if (typeof status === "string" && /delay|suspend|cancel/i.test(status)) {
     centerText = status.toUpperCase().replace("_"," ");
