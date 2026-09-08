@@ -31,3 +31,12 @@ input[placeholder*="first" i], input[placeholder*="last" i] { margin-bottom: 12p
 #lbGrid::-webkit-scrollbar-thumb:hover {
   background: #2b3a63;
 }
+
+/* === "Share with your friends" CTA === */
+@keyframes sharePulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(106,162,255,.55); }
+  50% { box-shadow: 0 0 0 8px rgba(106,162,255,0); }
+}
+.share-cta {
+  animation: sharePulse 2.2s ease-out infinite;
+}

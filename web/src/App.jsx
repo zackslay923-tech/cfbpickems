@@ -1609,13 +1609,15 @@ if (typeof window !== "undefined") window.history.pushState(null, "", "/confirm"
     {week == null ? "" : ("Welcome to Week " + week + "!")}
   </div>
 </div>
-      <div style={{ marginTop:0, marginBottom:8, textAlign:"center", opacity:.85 }}>
+      <div style={{ marginTop:4, marginBottom:12, textAlign:"center" }}>
         <button
           type="button"
           onClick={handleShare}
-          style={{ background:"transparent", border:"none", padding:0, height:"auto", width:"auto", font:"inherit", color:"inherit", textDecoration:"underline", cursor:"pointer" }}
+          className={shareState === "copied" ? undefined : "share-cta"}
+          style={{ background:"#6aa2ff", color:"#07152b", border:"none", borderRadius:999, padding:"10px 20px", height:"auto", width:"auto", fontSize:15, fontWeight:700, cursor:"pointer", display:"inline-flex", alignItems:"center", gap:8 }}
         >
-          {shareState === "copied" ? "Link copied!" : "(Share with your friends!)"}
+          <span aria-hidden="true">📤</span>
+          {shareState === "copied" ? "Link copied!" : "Click here to share with your friends!"}
         </button>
       </div>
 <div style={{ opacity:.85 }}>
