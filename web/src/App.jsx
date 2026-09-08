@@ -4846,10 +4846,6 @@ Type "home" or "away".`,
               </details>
             )}
           </div>
-          </>
-          ) : (
-            <div style={{ fontSize:13, opacity:.6 }}>The season-preferences poll was Week 1 only.</div>
-          )}
           <div style={{ marginTop:16 }}>
             <div style={{ fontWeight:600, marginBottom:6 }}>
               Suggestions / feedback <span style={{ opacity:.6, fontWeight:400 }}>({feedbackNotes.length})</span>
@@ -4862,6 +4858,10 @@ Type "home" or "away".`,
             ))}
             {feedbackNotes.length === 0 && <div style={{ fontSize:13, opacity:.6 }}>None yet.</div>}
           </div>
+          </>
+          ) : (
+            <div style={{ fontSize:13, opacity:.6 }}>The season-preferences poll was Week 1 only.</div>
+          )}
         </AdminSection>
 
         <AdminSection title="Live Week" tone="primary" right={<StatusBadge tone="primary">Live: {live?.year ?? "-"} / W{live?.week ?? "-"}</StatusBadge>}>
