@@ -637,11 +637,13 @@ async function setGameGameday(year, week, gameId) {
     console.error("setGameGameday: failed to sync config/live.gamedayGameId", e);
   }
 }
-async function setResult(gameId, winner, totalPoints) {
+async function setResult(gameId, winner, totalPoints, homePoints, awayPoints) {
   const payload = { winner: String(winner), updatedAt: serverTimestamp() };
   if (totalPoints !== undefined && totalPoints !== null && totalPoints !== "") {
     payload.totalPoints = Number(totalPoints);
   }
+  if (Number.isFinite(homePoints)) payload.homePoints = homePoints;
+  if (Number.isFinite(awayPoints)) payload.awayPoints = awayPoints;
   await setDoc(doc(db, "results", gameId), payload, { merge: true });
 }
 // Sentinel winner value for a canceled/postponed game marked "no contest" -
@@ -4579,10 +4581,28 @@ Type "home" or "away".`,
   else if (val === "away" || val === g.away.toLowerCase()) w = g.away;
   else { setMsg('Cancelled: type "home" or "away" (or the full team name).'); return; }
 
-  let totalPoints;
-  if (g.gameday) {
-    // This is the week's tiebreaker game — capture the final combined score
-    // by hand instead of trusting an auto-reported CFBD score.
+  let totalPoints, homePoints, awayPoints;
+  // Capture the final score, not just the winner, on every manual override -
+  // otherwise the Leaderboard's scorebug is left showing "FINAL" with no
+  // score digits for this game (this is how the auto-cron score breakdown
+  // used to go missing: it only asked for a score on the GameDay tiebreaker
+  // game). Optional - cancel/leave blank to save just the winner if the
+  // score isn't known yet.
+  const scoreStr = window.prompt(`Final score (optional) for ${g.away} @ ${g.home}\nEnter as AWAY-HOME, e.g. "24-31":`);
+  if (scoreStr) {
+    const m = String(scoreStr).trim().match(/^(\d+)\s*-\s*(\d+)$/);
+    if (m) {
+      awayPoints = Number(m[1]);
+      homePoints = Number(m[2]);
+      totalPoints = awayPoints + homePoints;
+    } else {
+      setMsg('Score not saved (expected "AWAY-HOME", e.g. "24-31") - winner still recorded.');
+    }
+  }
+
+  if (g.gameday && totalPoints === undefined) {
+    // This is the week's tiebreaker game and no score was entered above -
+    // still need at least the combined total to save the GameDay result.
     const totalStr = window.prompt(`Combined final score for the GameDay tiebreaker (${g.away} + ${g.home} points):`);
     if (totalStr === null) { setMsg("Cancelled: total points required to save the GameDay result."); return; }
     const n = Number(totalStr);
@@ -4590,7 +4610,7 @@ Type "home" or "away".`,
     totalPoints = n;
   }
 
-  await setResult(g.id, w, totalPoints);
+  await setResult(g.id, w, totalPoints, homePoints, awayPoints);
   setMsg("Saved result. Refresh Leaderboard to update.");
 };
 

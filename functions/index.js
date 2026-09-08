@@ -495,7 +495,13 @@ async function autoWriteWinners(db, mapObj) {
   let writes = 0;
 
   games.forEach((g, i) => {
-    if (existing[i].exists && existing[i].data()?.winner) return; // already recorded
+    const prior = existing[i].exists ? existing[i].data() : null;
+    // Only skip games that are FULLY recorded (winner + both scores). A
+    // winner with no score breakdown - e.g. from a manual admin override,
+    // which doesn't ask for the score on non-tiebreaker games - is treated
+    // as incomplete so it can self-heal here once the live feed has a final
+    // score for it, instead of being skipped forever.
+    if (prior?.winner && Number.isFinite(prior.homePoints) && Number.isFinite(prior.awayPoints)) return;
 
     const liveGame = findLiveGame(mapObj, g.away, g.home);
     if (!liveGame || !isFinalStatus(liveGame.status)) return;
@@ -505,6 +511,14 @@ async function autoWriteWinners(db, mapObj) {
     if (hp === null || ap === null || hp === ap) return; // incomplete or tied (shouldn't happen in CFB)
 
     const winner = hp > ap ? g.home : g.away;
+    // Don't silently overturn an existing manually-recorded winner that
+    // disagrees with the live feed (e.g. a corrected/overridden call) - just
+    // flag it and leave the manual entry alone.
+    if (prior?.winner && prior.winner !== winner) {
+      logger.warn(`autoWriteWinners: live score disagrees with existing winner for ${g.id} (recorded: ${prior.winner}, live feed: ${winner}) - not overwriting`);
+      return;
+    }
+
     batch.set(db.doc(`results/${g.id}`), {
       winner,
       totalPoints: hp + ap,
