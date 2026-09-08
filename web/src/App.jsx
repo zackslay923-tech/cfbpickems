@@ -2465,7 +2465,24 @@ useEffect(() => {
     if (!liveItem && uiMap && uiMap.size) {
       try {
         const keys = Array.from(uiMap.keys());
-        const guess = keys.find(k => k.indexOf(awayKey) !== -1 && k.indexOf(homeKey) !== -1);
+        // The live map's keys are built from ESPN/CFBD's full team names
+        // (school + mascot, e.g. "kansasjayhawks"), while our own game docs
+        // only store the school name ("kansas") - so an exact key match
+        // often misses and we need a looser fallback. A plain indexOf()
+        // substring check is unsafe here though: e.g. "kansas" is a
+        // substring of "arkansas", so a Missouri @ Kansas game could
+        // wrongly match a stale "Arkansas-Pine Bluff @ Missouri" entry.
+        // Requiring the school name to be a PREFIX of its half of the key
+        // (school names always lead the mascot, never the other way round)
+        // avoids that false positive while still tolerating the mascot
+        // suffix mismatch.
+        const guess = keys.find(k => {
+          const sep = k.indexOf("__");
+          if (sep === -1) return false;
+          const aPart = k.slice(0, sep);
+          const hPart = k.slice(sep + 2);
+          return aPart.startsWith(awayKey) && hPart.startsWith(homeKey);
+        });
         if (guess) liveItem = uiMap.get(guess);
       } catch {}
     }
