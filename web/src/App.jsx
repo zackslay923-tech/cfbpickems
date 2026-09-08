@@ -1395,6 +1395,11 @@ const [code, setCode] = useState("");
   /* eslint-disable-next-line */
 }, [year, week, email]);
 
+  // One-time season-preferences survey - shown for Week 1 only, not every
+  // week. Results already fed into real decisions (e.g. "we'll start picks
+  // on Friday night"), so it doesn't need to keep asking.
+  const showSeasonSurvey = Number(week) === 1;
+
     // --- Step 4: validation & submit gating (Pickems Coach) ---
   const validatePicks = (opts = {}) => {
     const errs = {};
@@ -1416,9 +1421,11 @@ const [code, setCode] = useState("");
       errs.picks = missingGames.length + " game" + (missingGames.length>1?"s":"") + " not selected";
     }
 
-    if (!tfChoice) errs.tfPoll = "Please answer the game-night question";
-    if (!gamesPerWeekChoice) errs.gamesPerWeekPoll = "Please answer the games-per-week question";
-    if (!appEnrollChoice) errs.appEnrollPoll = "Please answer the app enrollment question";
+    if (showSeasonSurvey) {
+      if (!tfChoice) errs.tfPoll = "Please answer the game-night question";
+      if (!gamesPerWeekChoice) errs.gamesPerWeekPoll = "Please answer the games-per-week question";
+      if (!appEnrollChoice) errs.appEnrollPoll = "Please answer the app enrollment question";
+    }
 
     const ok = Object.keys(errs).length === 0;
     const parts = [];
@@ -1771,6 +1778,7 @@ if (typeof window !== "undefined") window.history.pushState(null, "", "/confirm"
             ))}
           </div>
 
+          {showSeasonSurvey && (
           <div style={{ marginTop:24, paddingTop:20, borderTop:"1px solid #1f2a44" }}>
             <h3 style={{ margin:"0 0 16px" }}>Quick Survey for this Season</h3>
 
@@ -1871,6 +1879,7 @@ if (typeof window !== "undefined") window.history.pushState(null, "", "/confirm"
               />
             </div>
           </div>
+          )}
 
           <Row style={{ justifyContent: "flex-end", marginTop: 12 }}><div style={{ marginRight:"auto", display:"flex", alignItems:"center", gap:12 }}><input type="checkbox" aria-label="venmo" checked={form.venmoConfirmed} onChange={e=>setForm({...form, venmoConfirmed:e.target.checked})} /><span style={{ fontSize:12 }}>By checking this box, I confirm I have sent $5 to @ZackSlay on Venmo</span></div>
             <div style={{color:"#c0392b",fontSize:12,margin:"8px 0"}} role="alert">{touchedSubmit && !isValid && (errors.picks || "Please complete all required fields and picks.")}</div>
