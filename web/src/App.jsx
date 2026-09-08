@@ -4809,9 +4809,8 @@ Type "home" or "away".`,
           <div style={{ marginTop:12, padding:"8px 12px", borderRadius:10, background:"rgba(106,162,255,.1)", border:"1px solid rgba(106,162,255,.3)", color:"#cfe0ff", fontSize:13 }}>{msg}</div>
         )}
 
-        <AdminSection title="Weekly Poll Results" tone="neutral" right={<StatusBadge tone="neutral">{Number(live?.week) === 1 ? "Not shown to voters yet" : "Week 1 only"}</StatusBadge>}>
-          {Number(live?.week) === 1 ? (
-          <>
+        {Number(live?.week) === 1 && (
+        <AdminSection title="Weekly Poll Results" tone="neutral" right={<StatusBadge tone="neutral">Not shown to voters yet</StatusBadge>}>
           <div style={{ marginBottom:16 }}>
             <div style={{ fontWeight:600, marginBottom:6 }}>
               When should the first game of the week be? <span style={{ opacity:.6, fontWeight:400 }}>({pollVoterCount("tf_games")} votes)</span>
@@ -4875,11 +4874,8 @@ Type "home" or "away".`,
             ))}
             {feedbackNotes.length === 0 && <div style={{ fontSize:13, opacity:.6 }}>None yet.</div>}
           </div>
-          </>
-          ) : (
-            <div style={{ fontSize:13, opacity:.6 }}>The season-preferences poll was Week 1 only.</div>
-          )}
         </AdminSection>
+        )}
 
         <AdminSection title="Live Week" tone="primary" right={<StatusBadge tone="primary">Live: {live?.year ?? "-"} / W{live?.week ?? "-"}</StatusBadge>}>
           <Row>
