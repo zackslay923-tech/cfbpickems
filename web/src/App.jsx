@@ -2317,8 +2317,11 @@ useEffect(() => {
     });
     return () => unsub();
   }, []);
-  // Poll results follow the same lock/unlock as the leaderboard itself.
-  const showPollResults = isAdmin || !lbLocked;
+  // Poll results follow the same lock/unlock as the leaderboard itself, and
+  // (like the survey itself, see showSeasonSurvey in PicksPage) only ever
+  // pertained to Week 1 - stop surfacing them to non-admins once the live
+  // week moves past Week 1.
+  const showPollResults = isAdmin || (!lbLocked && Number(live?.week) === 1);
 
   if (lbLocked && !isAdmin && Number(year) === Number(live?.year) && Number(week) === Number(live?.week)) {
       // Clear selected week if it has NO picks (safety guard)
@@ -4789,7 +4792,9 @@ Type "home" or "away".`,
           <div style={{ marginTop:12, padding:"8px 12px", borderRadius:10, background:"rgba(106,162,255,.1)", border:"1px solid rgba(106,162,255,.3)", color:"#cfe0ff", fontSize:13 }}>{msg}</div>
         )}
 
-        <AdminSection title="Weekly Poll Results" tone="neutral" right={<StatusBadge tone="neutral">Not shown to voters yet</StatusBadge>}>
+        <AdminSection title="Weekly Poll Results" tone="neutral" right={<StatusBadge tone="neutral">{Number(live?.week) === 1 ? "Not shown to voters yet" : "Week 1 only"}</StatusBadge>}>
+          {Number(live?.week) === 1 ? (
+          <>
           <div style={{ marginBottom:16 }}>
             <div style={{ fontWeight:600, marginBottom:6 }}>
               When should the first game of the week be? <span style={{ opacity:.6, fontWeight:400 }}>({pollVoterCount("tf_games")} votes)</span>
@@ -4841,6 +4846,10 @@ Type "home" or "away".`,
               </details>
             )}
           </div>
+          </>
+          ) : (
+            <div style={{ fontSize:13, opacity:.6 }}>The season-preferences poll was Week 1 only.</div>
+          )}
           <div style={{ marginTop:16 }}>
             <div style={{ fontWeight:600, marginBottom:6 }}>
               Suggestions / feedback <span style={{ opacity:.6, fontWeight:400 }}>({feedbackNotes.length})</span>
