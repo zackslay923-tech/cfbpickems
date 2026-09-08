@@ -1265,6 +1265,25 @@ const [form, setForm] = useState({ firstName:"", lastName:"", email:"", phone:""
   const [picks, setPicks] = useState({});
   useEffect(() => { window._picks = picks; window._setPicks = setPicks; }, [picks]);
   const [msg, setMsg] = useState("");
+  // "Share with your friends" - native share sheet where available (mobile),
+  // otherwise copy the link to the clipboard.
+  const [shareState, setShareState] = useState("idle"); // idle | copied
+  const handleShare = async () => {
+    const url = window.location.origin + "/";
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: "CFB Pick'em", text: "Join my CFB Pick'em group!", url });
+        return;
+      }
+    } catch (e) {
+      return; // user cancelled the share sheet
+    }
+    try {
+      await navigator.clipboard.writeText(url);
+      setShareState("copied");
+      setTimeout(() => setShareState("idle"), 2000);
+    } catch (e) {}
+  };
   // Submissions lock (config/app.picksLocked)
   const [picksLocked, setPicksLocked] = useState(false);
   const [potHidden, setPotHidden] = useState(false);
@@ -1590,7 +1609,15 @@ if (typeof window !== "undefined") window.history.pushState(null, "", "/confirm"
     {week == null ? "" : ("Welcome to Week " + week + "!")}
   </div>
 </div>
-      <div style={{ marginTop:0, marginBottom:8, textAlign:"center", opacity:.85 }}>(Share with your friends!)</div>
+      <div style={{ marginTop:0, marginBottom:8, textAlign:"center", opacity:.85 }}>
+        <button
+          type="button"
+          onClick={handleShare}
+          style={{ background:"transparent", border:"none", padding:0, height:"auto", width:"auto", font:"inherit", color:"inherit", textDecoration:"underline", cursor:"pointer" }}
+        >
+          {shareState === "copied" ? "Link copied!" : "(Share with your friends!)"}
+        </button>
+      </div>
 <div style={{ opacity:.85 }}>
       Deadline to submit: {earliestGame ? kickoffLabel(earliestGame, { timeZone: "America/New_York" }) : "TBD"}
     </div>
