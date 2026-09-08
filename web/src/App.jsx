@@ -2316,9 +2316,9 @@ useEffect(() => {
   }, []);
   // Poll results follow the same lock/unlock as the leaderboard itself, and
   // (like the survey itself, see showSeasonSurvey in PicksPage) only ever
-  // pertained to Week 1 - stop surfacing them to non-admins once the live
-  // week moves past Week 1.
-  const showPollResults = isAdmin || (!lbLocked && Number(live?.week) === 1);
+  // pertained to Week 1 - stop surfacing them to non-admins on any leaderboard
+  // week besides Week 1, regardless of which week is currently live.
+  const showPollResults = isAdmin || (!lbLocked && Number(week) === 1);
 
   if (lbLocked && !isAdmin && Number(year) === Number(live?.year) && Number(week) === Number(live?.week)) {
       // Clear selected week if it has NO picks (safety guard)
