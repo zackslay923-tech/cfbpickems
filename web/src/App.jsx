@@ -1614,7 +1614,7 @@ if (typeof window !== "undefined") window.history.pushState(null, "", "/confirm"
           type="button"
           onClick={handleShare}
           className={shareState === "copied" ? undefined : "share-cta"}
-          style={{ background:"#6aa2ff", color:"#07152b", border:"none", borderRadius:999, padding:"10px 20px", height:"auto", width:"auto", fontSize:15, fontWeight:700, cursor:"pointer", display:"inline-flex", alignItems:"center", gap:8 }}
+          style={{ background:"#6aa2ff", color:"#07152b", border:"none", borderRadius:999, padding:"6px 14px", height:"auto", width:"auto", fontSize:12.5, fontWeight:700, cursor:"pointer", display:"inline-flex", alignItems:"center", gap:6 }}
         >
           <span aria-hidden="true">📤</span>
           {shareState === "copied" ? "Link copied!" : "Click here to share with your friends!"}
