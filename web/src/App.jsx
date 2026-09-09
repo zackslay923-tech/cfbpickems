@@ -4056,7 +4056,7 @@ function AdminMissingPicksPage({ user, isAdmin, setPage }) {
               <th style={{ padding:"8px 10px", borderBottom:"1px solid #1f2a44" }}>Email</th>
               <th style={{ padding:"8px 10px", borderBottom:"1px solid #1f2a44" }}>Phone</th>
               <th style={{ padding:"8px 10px", borderBottom:"1px solid #1f2a44" }}>Venmo</th>
-              <th style={{ padding:"8px 10px", borderBottom:"1px solid #1f2a44" }}></th>
+              <th style={{ padding:"8px 10px", borderBottom:"1px solid #1f2a44", position:"sticky", right:0, background:"#121a2b", boxShadow:"-4px 0 6px -4px rgba(0,0,0,.4)" }}></th>
             </tr>
           </thead>
           <tbody>
@@ -4081,9 +4081,11 @@ function AdminMissingPicksPage({ user, isAdmin, setPage }) {
                       <input style={{ ...inputStyle, padding:"4px 8px", fontSize:12, width:120 }} placeholder="venmo"
                         value={editDraft.venmo} onChange={e => setEditDraft(d => ({ ...d, venmo: e.target.value }))} />
                     </td>
-                    <td style={{ padding:"8px 10px", display:"flex", gap:6 }}>
-                      <button style={{ ...adminBtn("success"), padding:"4px 8px", fontSize:12 }} onClick={() => saveEdit(p)}>Save</button>
-                      <button style={{ ...adminBtn("neutral"), padding:"4px 8px", fontSize:12 }} onClick={cancelEdit}>Cancel</button>
+                    <td style={{ padding:"8px 10px", position:"sticky", right:0, background:"#121a2b", boxShadow:"-4px 0 6px -4px rgba(0,0,0,.4)" }}>
+                      <div style={{ display:"flex", gap:6 }}>
+                        <button style={{ ...adminBtn("success"), padding:"4px 8px", fontSize:12 }} onClick={() => saveEdit(p)}>Save</button>
+                        <button style={{ ...adminBtn("neutral"), padding:"4px 8px", fontSize:12 }} onClick={cancelEdit}>Cancel</button>
+                      </div>
                     </td>
                   </tr>
                 );
@@ -4098,16 +4100,18 @@ function AdminMissingPicksPage({ user, isAdmin, setPage }) {
                   </td>
                   <td style={{ padding:"8px 10px", opacity:.9 }}>{p.phone}</td>
                   <td style={{ padding:"8px 10px", opacity:.9 }}>{p.venmo}</td>
-                  <td style={{ padding:"8px 10px", display:"flex", gap:6 }}>
-                    <button style={{ ...adminBtn("neutral"), padding:"4px 8px", fontSize:12 }} onClick={() => startEdit(p)}>Edit</button>
-                    <button
-                      style={{ ...adminBtn(p.optedOut ? "neutral" : "warning"), padding:"4px 8px", fontSize:12 }}
-                      title={p.optedOut ? "Excluded from Email Missing for this week — click to opt back in" : "Exclude this person from this week's Email Missing draft"}
-                      onClick={() => toggleOptOut(p, weekKey)}
-                      disabled={!weekKey}
-                    >
-                      {p.optedOut ? "Opted out" : "Opt out"}
-                    </button>
+                  <td style={{ padding:"8px 10px", position:"sticky", right:0, background:"#121a2b", boxShadow:"-4px 0 6px -4px rgba(0,0,0,.4)" }}>
+                    <div style={{ display:"flex", gap:6 }}>
+                      <button style={{ ...adminBtn("neutral"), padding:"4px 8px", fontSize:12 }} onClick={() => startEdit(p)}>Edit</button>
+                      <button
+                        style={{ ...adminBtn(p.optedOut ? "neutral" : "warning"), padding:"4px 8px", fontSize:12 }}
+                        title={p.optedOut ? "Excluded from Email Missing for this week — click to opt back in" : "Exclude this person from this week's Email Missing draft"}
+                        onClick={() => toggleOptOut(p, weekKey)}
+                        disabled={!weekKey}
+                      >
+                        {p.optedOut ? "Opted out" : "Opt out"}
+                      </button>
+                    </div>
                   </td>
                 </tr>
               );
