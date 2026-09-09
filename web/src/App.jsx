@@ -2718,7 +2718,21 @@ useEffect(() => {
               <button type="button" onClick={()=>setShowPollResultsModal(true)}>Poll Results</button>
             )}
             <Field label="Previous weeks">
-              <select value={(week ?? '')} onChange={e => setWeek(Number(e.target.value))} style={inputStyle}>
+              <select
+                value={(week ?? '')}
+                onChange={e => {
+                  // Drop boardLoaded here too, not just inside loadAll() -
+                  // otherwise this render (new week, but still last week's
+                  // games/standings since the data fetch hasn't started yet)
+                  // paints for a frame before the effect kicks off loadAll(),
+                  // which is the flicker of the old week that was reported.
+                  // Batching both updates in the same handler means the very
+                  // next paint goes straight to the Loading screen.
+                  setBoardLoaded(false);
+                  setWeek(Number(e.target.value));
+                }}
+                style={inputStyle}
+              >
                 {(weeksForYear.length ? weeksForYear : Array.from({ length: 21 }, (_, i) => i)).map(w => (
                   <option key={w} value={w}>Week {w}</option>
                 ))}
