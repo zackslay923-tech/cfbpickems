@@ -53,7 +53,7 @@ import AdminPicksPage from "./components/AdminPicksPage";
 import BulkImportPicksPreview from "./components/BulkImportPicksPreview";
 import { db, googleLogin, logout, onAuth, enablePushNotifications } from "./firebase";
 
-import { onSnapshot, collection, doc, getDoc, getDocs, setDoc, addDoc, deleteDoc, serverTimestamp, writeBatch, query, where , runTransaction } from "firebase/firestore";
+import { onSnapshot, collection, doc, documentId, getDoc, getDocs, setDoc, addDoc, deleteDoc, serverTimestamp, writeBatch, query, where , runTransaction } from "firebase/firestore";
 
 
 /* === Fit font helper (for header + winners) === */
@@ -658,10 +658,22 @@ async function markResultAsPush(gameId) {
 }
 async function getResultsMap(gameIds) {
   const map = {};
-  await Promise.all(gameIds.map(async id => {
-    const s = await getDoc(doc(db, "results", id));
-    if (s.exists()) map[id] = s.data();
-  }));
+  if (!gameIds.length) return map;
+  // One getDoc() per game (up to ~40 for a full week) meant this alone was
+  // firing off that many individual reads for the SDK to coordinate on every
+  // load - a lot of chatter, especially over a slower mobile connection.
+  // documentId() `in` queries batch up to 30 ids per request, so a full
+  // week's worth collapses into 1-2 queries instead of ~40.
+  const CHUNK = 30;
+  const chunks = [];
+  for (let i = 0; i < gameIds.length; i += CHUNK) chunks.push(gameIds.slice(i, i + CHUNK));
+  const resultsCol = collection(db, "results");
+  const snaps = await Promise.all(
+    chunks.map(chunk => getDocs(query(resultsCol, where(documentId(), "in", chunk))))
+  );
+  for (const snap of snaps) {
+    snap.forEach(d => { map[d.id] = d.data(); });
+  }
   return map;
 }
 
@@ -737,12 +749,16 @@ async function computeWeekStandings(year, week) {
   let g = await listGames({ year, week, includedOnly: true });
   if (!Array.isArray(g) || g.length === 0) { g = await listGames({ year, week, includedOnly: false }); }
   const ids = g.map(x => x.id);
-  const [rFromWeek, rFromGames] = await Promise.all([
+  // getPicksForWeek() only needs year/week, not the games list, so there's
+  // no reason it has to wait on the results fetches below - running it
+  // alongside them instead of after cuts a full extra network round trip
+  // off every load.
+  const [rFromWeek, rFromGames, picks] = await Promise.all([
     getWeekResultsMap(year, week, g),
-    getResultsMap(ids)
+    getResultsMap(ids),
+    getPicksForWeek(year, week)
   ]);
   const r = { ...(rFromWeek || {}), ...(rFromGames || {}) };
-  const picks = await getPicksForWeek(year, week);
 
   const rows = picks.map(p => {
     let correct = 0;
@@ -2433,7 +2449,7 @@ useEffect(() => {
             <h2 style={{ margin: 0 }}>CFB Pick'Ems Week {week}</h2>
           </Row>
 <Field label="Previous weeks">
-  <select value={(week ?? '')} onChange={e => { userChangedWeekRef.current = true; setWeek(Number(e.target.value)); }} style={inputStyle}>
+  <select value={(week ?? '')} onChange={e => { setBoardLoaded(false); userChangedWeekRef.current = true; setWeek(Number(e.target.value)); }} style={inputStyle}>
     {(weeksForYear.length ? weeksForYear : Array.from({ length: 21 }, (_, i) => i)).map(w => (
       <option key={w} value={w}>Week {w}</option>
     ))}
