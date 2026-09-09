@@ -3959,15 +3959,35 @@ function AdminMissingPicksPage({ user, isAdmin, setPage }) {
     try { await deleteDoc(doc(db, "unassignedContacts", id)); } catch (err) { alert("Couldn't remove: " + (err?.message || String(err))); }
   };
 
-  // Manual opt-out is per-week (see toggleOptOut); "notified" is a live,
-  // automatic signal (has a named, unblocked device) that's never written to
-  // Firestore - it reflects current pushTokens state as of each render, so
-  // it can't go stale the way a one-time-written flag could.
+  // Manual opt-out is recorded per-week (see toggleOptOut) but carries
+  // forward: once someone's opted out, that status applies to every later
+  // week too until explicitly toggled again, rather than needing a fresh
+  // click every single week. Resolved by finding the most recent explicit
+  // choice at or before the week being viewed, so an override for one
+  // specific week (e.g. opting back in just for this one) still works and
+  // itself carries forward from there.
+  const weekOrdinal = (y, w) => Number(y) * 100 + Number(w);
+  const resolveOptedOut = (optedOutWeeks, y, w) => {
+    if (!optedOutWeeks || !hasWeekValue(y) || !hasWeekValue(w)) return false;
+    const targetOrd = weekOrdinal(y, w);
+    let best = false, bestOrd = -Infinity;
+    for (const k of Object.keys(optedOutWeeks)) {
+      const m = /^(\d+)_(\d+)$/.exec(k);
+      if (!m) continue;
+      const ord = weekOrdinal(m[1], m[2]);
+      if (ord <= targetOrd && ord > bestOrd) { bestOrd = ord; best = !!optedOutWeeks[k]; }
+    }
+    return best;
+  };
+  // "notified" is a live, automatic signal (has a named, unblocked device)
+  // that's never written to Firestore - it reflects current pushTokens
+  // state as of each render, so it can't go stale the way a one-time-written
+  // flag could.
   const missing = useMemo(() => {
     const withFlags = (p, optedOutWeeks) => {
       const nameKey = personKey({ firstName: p.firstName, lastName: p.lastName });
       const notified = !!(nameKey && notifiedNameKeys.has(nameKey));
-      const optedOut = !!(weekKey && optedOutWeeks && optedOutWeeks[weekKey]);
+      const optedOut = resolveOptedOut(optedOutWeeks, year, week);
       return { ...p, optedOut, notified, excluded: optedOut || notified };
     };
     const fromRoster = data ? [...data.clusters.values()]
