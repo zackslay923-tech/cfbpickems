@@ -2188,16 +2188,23 @@ useEffect(() => {
   const [pickCount, setPickCount] = useState(0);
 const pot = useMemo(() => (pickCount * 5), [pickCount]);
 
+// Same out-of-order-response risk as loadAll()'s loadAllSeqRef - without a
+// guard, switching weeks quickly could let a stale pick count from the
+// previous week overwrite the correct one for the new week.
+const pickCountSeqRef = useRef(0);
 useEffect(() => {
+  const seq = ++pickCountSeqRef.current;
   (async () => {
     try {
       if (hasWeekValue(year) && hasWeekValue(week)) {
         const arr = await getPicksForWeek(year, week);
+        if (seq !== pickCountSeqRef.current) return;
         setPickCount(Array.isArray(arr) ? arr.length : 0);
       } else {
         setPickCount(0);
       }
     } catch {
+      if (seq !== pickCountSeqRef.current) return;
       setPickCount(0);
     }
   })();
@@ -2310,9 +2317,18 @@ const loadAll = async () => {
   // header still said the right week (that's set separately, synchronously)
   // but the table underneath didn't match it.
   const seq = ++loadAllSeqRef.current;
+  const startedAt = Date.now();
+  // Hold the Loading screen up for at least this long regardless of how
+  // fast the fetch comes back, as a buffer on top of the seq check above -
+  // extra insurance against any other still-unknown source of a stale
+  // render landing right at the edge of a week switch.
+  const MIN_LOADING_MS = 500;
   try {
     const { games: g, results: r, rows, playedGames } = await computeWeekStandings(year, week);
     if (seq !== loadAllSeqRef.current) return; // a newer load has since started - discard this stale response
+    const remaining = MIN_LOADING_MS - (Date.now() - startedAt);
+    if (remaining > 0) await new Promise(resolve => setTimeout(resolve, remaining));
+    if (seq !== loadAllSeqRef.current) return; // re-check - a newer load could have started during that wait
     setGames(g);
     setResults(r);
     setPlayers(rows);
