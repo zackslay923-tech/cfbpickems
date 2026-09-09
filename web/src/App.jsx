@@ -3807,16 +3807,47 @@ function AdminMissingPicksPage({ user, isAdmin, setPage }) {
     });
     return () => unsub();
   }, [isAdmin]);
+
+  const weekKey = hasWeekValue(year) && hasWeekValue(week) ? `${year}_${week}` : null;
+
+  // Anyone who already has push notifications on for a device tagged with
+  // their name doesn't need an email reminder too - auto-treated as opted
+  // out (on top of, not instead of, the manual per-week toggle below). Only
+  // catches devices whose pushTokens doc has a name on it, which happens the
+  // first time that device is used to submit picks (see ConfirmPage) - a
+  // brand-new person who enables notifications but has never submitted has
+  // no identity to attach the token to yet, so they won't be caught here.
+  const [notifiedNameKeys, setNotifiedNameKeys] = useState(new Set());
+  useEffect(() => {
+    if (!isAdmin) return;
+    const unsub = onSnapshot(collection(db, "pushTokens"), (snap) => {
+      const keys = new Set();
+      snap.forEach(d => {
+        const v = d.data() || {};
+        if (v.blocked) return;
+        const k = personKey({ firstName: (v.name || "").trim().split(/\s+/)[0], lastName: (v.name || "").trim().split(/\s+/).slice(1).join(" ") });
+        if (k) keys.add(k);
+      });
+      setNotifiedNameKeys(keys);
+    });
+    return () => unsub();
+  }, [isAdmin]);
+
   // Someone can opt out of the "Email Missing" reminder without being removed
   // from the roster - stored alongside their contact info (contacts for
-  // existing players, unassignedContacts for promoted new invitees).
-  const toggleOptOut = async (p) => {
+  // existing players, unassignedContacts for promoted new invitees). Per-week
+  // (a map keyed by "{year}_{week}"), not a permanent flag - someone who sits
+  // out one week shouldn't be silently excluded from every week after it. A
+  // plain merge:true deep-merges nested map fields (same behavior relied on
+  // elsewhere in this app), so writing just this week's key leaves every
+  // other week's flag untouched.
+  const toggleOptOut = async (p, weekKey) => {
     const next = !p.optedOut;
     try {
       if (p.key.startsWith("unassigned:")) {
-        await setDoc(doc(db, "unassignedContacts", p.key.slice("unassigned:".length)), { optedOut: next }, { merge: true });
+        await setDoc(doc(db, "unassignedContacts", p.key.slice("unassigned:".length)), { optedOutWeeks: { [weekKey]: next } }, { merge: true });
       } else {
-        await setDoc(doc(db, "contacts", p.key), { optedOut: next, updatedAt: serverTimestamp() }, { merge: true });
+        await setDoc(doc(db, "contacts", p.key), { optedOutWeeks: { [weekKey]: next }, updatedAt: serverTimestamp() }, { merge: true });
       }
     } catch (err) {
       alert("Couldn't update opt-out status: " + (err?.message || String(err)));
@@ -3880,7 +3911,7 @@ function AdminMissingPicksPage({ user, isAdmin, setPage }) {
   const promotedRoster = useMemo(() => {
     return Object.entries(unassigned).filter(([, v]) => v.promoted).map(([id, v]) => {
       const parts = (v.name || "").trim().split(/\s+/).filter(Boolean);
-      return { key: `unassigned:${id}`, firstName: parts[0] || v.email || id, lastName: parts.slice(1).join(" "), phone: v.phone || "", venmo: v.venmo || "", email: v.email || id, optedOut: !!v.optedOut };
+      return { key: `unassigned:${id}`, firstName: parts[0] || v.email || id, lastName: parts.slice(1).join(" "), phone: v.phone || "", venmo: v.venmo || "", email: v.email || id, optedOutWeeks: v.optedOutWeeks || {} };
     });
   }, [unassigned]);
   const [unassignedDraft, setUnassignedDraft] = useState("");
@@ -3928,30 +3959,40 @@ function AdminMissingPicksPage({ user, isAdmin, setPage }) {
     try { await deleteDoc(doc(db, "unassignedContacts", id)); } catch (err) { alert("Couldn't remove: " + (err?.message || String(err))); }
   };
 
+  // Manual opt-out is per-week (see toggleOptOut); "notified" is a live,
+  // automatic signal (has a named, unblocked device) that's never written to
+  // Firestore - it reflects current pushTokens state as of each render, so
+  // it can't go stale the way a one-time-written flag could.
   const missing = useMemo(() => {
+    const withFlags = (p, optedOutWeeks) => {
+      const nameKey = personKey({ firstName: p.firstName, lastName: p.lastName });
+      const notified = !!(nameKey && notifiedNameKeys.has(nameKey));
+      const optedOut = !!(weekKey && optedOutWeeks && optedOutWeeks[weekKey]);
+      return { ...p, optedOut, notified, excluded: optedOut || notified };
+    };
     const fromRoster = data ? [...data.clusters.values()]
       .filter(c => !data.submittedRoots.has(c.key))
       .map(c => {
         const ov = contactOverrides[c.key] || {};
-        return {
+        return withFlags({
           ...c,
           firstName: ov.firstName || c.firstName,
           lastName: ov.lastName || c.lastName,
           phone: ov.phone || c.phone,
           venmo: ov.venmo || c.venmo,
           email: ov.email || c.email || "",
-          optedOut: !!ov.optedOut,
-        };
+        }, ov.optedOutWeeks);
       }) : [];
-    return [...fromRoster, ...promotedRoster]
+    const promoted = promotedRoster.map(p => withFlags(p, p.optedOutWeeks));
+    return [...fromRoster, ...promoted]
       .sort((a, b) => (a.lastName || "").localeCompare(b.lastName || "") || (a.firstName || "").localeCompare(b.firstName || ""));
-  }, [data, contactOverrides, promotedRoster]);
+  }, [data, contactOverrides, promotedRoster, weekKey, notifiedNameKeys]);
 
   const loaded = !!data;
   const totalEver = (data ? data.clusters.size : 0) + promotedRoster.length;
   const submittedCount = totalEver - missing.length;
 
-  const missingEmails = useMemo(() => [...new Set(missing.filter(p => !p.optedOut).map(p => String(p.email || "").trim()).filter(Boolean))], [missing]);
+  const missingEmails = useMemo(() => [...new Set(missing.filter(p => !p.excluded).map(p => String(p.email || "").trim()).filter(Boolean))], [missing]);
 
   const openGmailDraft = () => {
     if (missingEmails.length === 0) { alert("No email addresses on file for anyone missing."); return; }
@@ -4050,23 +4091,23 @@ function AdminMissingPicksPage({ user, isAdmin, setPage }) {
               return (
                 <tr key={p.key} style={{ borderBottom:"1px solid #1f2a44" }}>
                   <td style={{ padding:"8px 10px" }}>{`${p.firstName || ""} ${p.lastName || ""}`.trim()}</td>
-                  <td style={{ padding:"8px 10px", opacity: p.optedOut ? 0.5 : .9 }}>
+                  <td style={{ padding:"8px 10px", opacity: p.excluded ? 0.5 : .9 }}>
                     {p.email || "—"}
-                    {p.optedOut && <span style={{ marginLeft:6, fontSize:11, color:"#f0b429" }}>(opted out)</span>}
+                    {p.notified && <span style={{ marginLeft:6, fontSize:11, color:"#6aa2ff" }} title="Has push notifications enabled — auto-excluded from Email Missing">🔔 notified</span>}
+                    {p.optedOut && <span style={{ marginLeft:6, fontSize:11, color:"#f0b429" }}>(opted out this week)</span>}
                   </td>
                   <td style={{ padding:"8px 10px", opacity:.9 }}>{p.phone}</td>
                   <td style={{ padding:"8px 10px", opacity:.9 }}>{p.venmo}</td>
                   <td style={{ padding:"8px 10px", display:"flex", gap:6 }}>
                     <button style={{ ...adminBtn("neutral"), padding:"4px 8px", fontSize:12 }} onClick={() => startEdit(p)}>Edit</button>
-                    {p.email && (
-                      <button
-                        style={{ ...adminBtn(p.optedOut ? "neutral" : "warning"), padding:"4px 8px", fontSize:12 }}
-                        title={p.optedOut ? "Excluded from Email Missing — click to opt back in" : "Exclude this person from the Email Missing draft"}
-                        onClick={() => toggleOptOut(p)}
-                      >
-                        {p.optedOut ? "Opted out" : "Opt out"}
-                      </button>
-                    )}
+                    <button
+                      style={{ ...adminBtn(p.optedOut ? "neutral" : "warning"), padding:"4px 8px", fontSize:12 }}
+                      title={p.optedOut ? "Excluded from Email Missing for this week — click to opt back in" : "Exclude this person from this week's Email Missing draft"}
+                      onClick={() => toggleOptOut(p, weekKey)}
+                      disabled={!weekKey}
+                    >
+                      {p.optedOut ? "Opted out" : "Opt out"}
+                    </button>
                   </td>
                 </tr>
               );
