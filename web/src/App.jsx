@@ -2287,6 +2287,33 @@ useEffect(() => {
   }, []);
   const [showPollResultsModal, setShowPollResultsModal] = useState(false);
 
+  // Years dropdown: which seasons have anything to show (current + any
+  // imported history), and any special label a week goes by (e.g. bowls/
+  // conference-champs weeks) instead of a plain "Week N" - written once by
+  // the historical-season import, read here on mount.
+  const [seasonYears, setSeasonYears] = useState([]);
+  const [weekLabels, setWeekLabels] = useState({});
+  useEffect(() => {
+    (async () => {
+      try {
+        const s = await getDoc(doc(db, "config", "seasons"));
+        const d = s.exists() ? s.data() : {};
+        setSeasonYears(Array.isArray(d.years) ? d.years : []);
+        setWeekLabels(d.weekLabels || {});
+      } catch (err) {
+        console.error("config/seasons load failed", err);
+      }
+    })();
+  }, []);
+  // Always include the live year even if config/seasons (written once by the
+  // historical import) hasn't been updated for it - so a brand new season
+  // shows up in the selector without needing to remember to touch that doc.
+  const yearsAvailable = useMemo(() => {
+    const set = new Set(seasonYears.map(Number));
+    if (hasWeekValue(live?.year)) set.add(Number(live.year));
+    return [...set].sort((a, b) => b - a);
+  }, [seasonYears, live]);
+
 // Weeks dropdown: populate from games in the selected year
 const [weeksForYear, setWeeksForYear] = useState([]);
 useEffect(() => {
@@ -2305,7 +2332,34 @@ useEffect(() => {
       setWeeksForYear([]);
     }
   })();
-}, [year]);const [loadCode, setLoadCode] = useState("");
+}, [year]);
+
+  const weekLabelFor = (y, w) => weekLabels[`${y}_${w}`] || `Week ${w}`;
+
+  // Switching years mirrors the same anti-flicker/anti-stale-overwrite
+  // protections already in place for week switches (see the "Previous
+  // weeks" selects' onChange) - reset boardLoaded and mark the change
+  // synchronously in the same handler as setYear, then land on the new
+  // year's most recent week rather than whatever week number happened to
+  // be selected before (which may not even exist in the new year).
+  const handleYearChange = async (newYear) => {
+    setBoardLoaded(false);
+    userChangedWeekRef.current = true;
+    setYear(newYear);
+    try {
+      const q = query(collection(db, "games"), where("year", "==", Number(newYear)));
+      const snap = await getDocs(q);
+      const uniq = new Set();
+      snap.forEach(d => { const w = d.data()?.week; if (Number.isFinite(+w)) uniq.add(Number(w)); });
+      const weeks = [...uniq].sort((a, b) => a - b);
+      setWeek(weeks.length ? weeks[weeks.length - 1] : 1);
+    } catch (err) {
+      console.error("handleYearChange: failed to load weeks for new year", err);
+      setWeek(1);
+    }
+  };
+
+  const [loadCode, setLoadCode] = useState("");
   const [loadLastName, setLoadLastName] = useState("");
   const [editing, setEditing] = useState(false);
   const [showLoad, setShowLoad] = useState(false);
@@ -2446,15 +2500,26 @@ useEffect(() => {
         <Header user={user} isAdmin={isAdmin} setPage={setPage} />
         <Card>
           <Row style={{ justifyContent:"space-between", alignItems:"flex-start" }}>
-            <h2 style={{ margin: 0 }}>CFB Pick'Ems Week {week}</h2>
+            <h2 style={{ margin: 0 }}>CFB Pick'Ems {weekLabelFor(year, week)}</h2>
           </Row>
+          <Row style={{ gap: 8 }}>
+{yearsAvailable.length > 1 && (
+  <Field label="Season">
+    <select value={(year ?? '')} onChange={e => handleYearChange(Number(e.target.value))} style={inputStyle}>
+      {yearsAvailable.map(y => (
+        <option key={y} value={y}>{y}</option>
+      ))}
+    </select>
+  </Field>
+)}
 <Field label="Previous weeks">
   <select value={(week ?? '')} onChange={e => { setBoardLoaded(false); userChangedWeekRef.current = true; setWeek(Number(e.target.value)); }} style={inputStyle}>
     {(weeksForYear.length ? weeksForYear : Array.from({ length: 21 }, (_, i) => i)).map(w => (
-      <option key={w} value={w}>Week {w}</option>
+      <option key={w} value={w}>{weekLabelFor(year, w)}</option>
     ))}
   </select>
 </Field>
+          </Row>
           <div style={{ marginTop: 8, lineHeight: 1.6 }}>
             <div style={{ fontWeight: 700 }}>Leaderboard locked for Week {week}</div>
             <div>Leaderboard will be activated when the first game kicks off</div>
@@ -2745,10 +2810,19 @@ useEffect(() => {
       <LoadingGate ready={boardLoaded}>
       <Card>
         <Row style={{ justifyContent:"space-between", alignItems:"flex-end" }}>
-          <h2 style={{ margin: 0 }}>CFB Pick'Ems Week {week}</h2>
+          <h2 style={{ margin: 0 }}>CFB Pick'Ems {weekLabelFor(year, week)}</h2>
           <Row style={{ gap:8, alignItems:"flex-end" }}>
             {showPollResults && pollResults && (
               <button type="button" onClick={()=>setShowPollResultsModal(true)}>Poll Results</button>
+            )}
+            {yearsAvailable.length > 1 && (
+              <Field label="Season">
+                <select value={(year ?? '')} onChange={e => handleYearChange(Number(e.target.value))} style={inputStyle}>
+                  {yearsAvailable.map(y => (
+                    <option key={y} value={y}>{y}</option>
+                  ))}
+                </select>
+              </Field>
             )}
             <Field label="Previous weeks">
               <select
@@ -2772,7 +2846,7 @@ useEffect(() => {
                 style={inputStyle}
               >
                 {(weeksForYear.length ? weeksForYear : Array.from({ length: 21 }, (_, i) => i)).map(w => (
-                  <option key={w} value={w}>Week {w}</option>
+                  <option key={w} value={w}>{weekLabelFor(year, w)}</option>
                 ))}
               </select>
             </Field>
