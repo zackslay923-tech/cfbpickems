@@ -2221,12 +2221,14 @@ useEffect(() => {
   // Auto-winner detection now runs server-side in the publishLiveMap Cloud
   // Function, so it works regardless of whether an admin has this page open.
   const [players, setPlayers] = useState([]);
-  // Only true once loadAll() below has computed real standings. Before
-  // that, an earlier effect briefly populates `games` with the unfiltered
-  // (includedOnly:false) list while it waits on the live week to resolve,
-  // which could flash games that were never actually selected for this
-  // week - gated behind LoadingGate until this settles.
+  // Only true once loadAll() below has computed real standings for the
+  // currently selected week - gated behind LoadingGate until this settles.
   const [boardLoaded, setBoardLoaded] = useState(false);
+  // Bumped on every loadAll() call; lets a resolved fetch check whether a
+  // newer one has since started so it can discard itself instead of
+  // overwriting fresher data with stale results that just happened to
+  // resolve later (see loadAll() below).
+  const loadAllSeqRef = useRef(0);
   // Pickems Coach: public picks flag (read-only)
   const [lbPicksPublic, setLbPicksPublic] = useState(null);
   
@@ -2300,14 +2302,24 @@ const loadAll = async () => {
   // came back, so picking a different week briefly flashed the old one.
   setBoardLoaded(false);
   setMsg("Loading...");
+  // Guard against out-of-order responses: switching weeks quickly can leave
+  // two of these in flight at once (one for the week just left, one for the
+  // new pick), and network timing doesn't guarantee the older one resolves
+  // first. Without this, an older fetch landing after the newer one silently
+  // overwrote the correct games/standings with the previous week's - the
+  // header still said the right week (that's set separately, synchronously)
+  // but the table underneath didn't match it.
+  const seq = ++loadAllSeqRef.current;
   try {
     const { games: g, results: r, rows, playedGames } = await computeWeekStandings(year, week);
+    if (seq !== loadAllSeqRef.current) return; // a newer load has since started - discard this stale response
     setGames(g);
     setResults(r);
     setPlayers(rows);
     setMsg(`Week ${week}  -  Included games: ${g.length}  -  Finished: ${playedGames}`);
     setBoardLoaded(true);
   } catch (e) {
+    if (seq !== loadAllSeqRef.current) return;
     setMsg("Load failed: " + (e?.message || String(e)));
   }
 };
