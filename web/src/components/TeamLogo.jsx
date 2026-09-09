@@ -71,6 +71,17 @@ const ALIASES = new Map(Object.entries({
   "olemiss": "mississippirebels",
   "nicholls": "nichollsstate",
   "searizonalouisiana": "southeasternlouisiana", // guard against weird minifications
+
+  // Short/abbreviated display names -> local filenames
+  "appalachianstate": "appstate",
+  "sanjosest": "sanjosestate",
+  "mtsu": "middletennessee",
+  "mississippist": "mississippistate",
+  "bethune": "bethunecookman",
+  "gasouthern": "georgiasouthern",
+  "jaxstate": "jacksonvillestate",
+  "alcornstate": "alcorn",
+  "miamifl": "miami",
 }));
 
 /**
