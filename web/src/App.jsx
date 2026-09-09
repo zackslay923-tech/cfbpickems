@@ -2305,6 +2305,11 @@ useEffect(() => {
 const GAME_COL_W = 140;
 const loadAll = async () => {
   if (!(hasWeekValue(year) && hasWeekValue(week))) { return; }
+  // Reset before fetching, not just on first load - otherwise switching
+  // weeks left the previous week's games/standings on screen (LoadingGate
+  // only hides content while boardLoaded is false) until the new data
+  // came back, so picking a different week briefly flashed the old one.
+  setBoardLoaded(false);
   setMsg("Loading...");
   try {
     const { games: g, results: r, rows, playedGames } = await computeWeekStandings(year, week);
