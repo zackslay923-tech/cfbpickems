@@ -4336,16 +4336,58 @@ async function findMySeason({ firstName, lastName, venmo }) {
       winNote: mineRow?.winNote || null,
     });
   }
+  weeks.sort((a, b) => b.year - a.year || b.week - a.week); // most recent first
   return { weeks };
 }
 
+// Small horizontal bar showing correct-picks percentage, color-graded from
+// red (rough week) through amber to green (great week) - same visual idea
+// as the stat tiles below, just per-row.
+function RecordBar({ pct }) {
+  const color = pct == null ? "#3a4770" : pct >= 65 ? "#3ecf8e" : pct >= 45 ? "#f0b429" : "#f0596b";
+  return (
+    <div style={{ width: "100%", height: 5, borderRadius: 999, background: "#1a2440", overflow: "hidden" }}>
+      <div style={{ width: `${Math.max(0, Math.min(100, pct ?? 0))}%`, height: "100%", background: color, borderRadius: 999 }} />
+    </div>
+  );
+}
+
+function MySeasonStatTile({ tone, value, label }) {
+  const t = ADMIN_TONES[tone] || ADMIN_TONES.neutral;
+  return (
+    <div style={{
+      flex: "1 1 130px", minWidth: 130, borderRadius: 14, padding: "14px 16px",
+      background: `${t.dot}14`, border: `1px solid ${t.dot}40`,
+    }}>
+      <div style={{ fontSize: 24, fontWeight: 800, color: "#fff", lineHeight: 1.1 }}>{value}</div>
+      <div style={{ marginTop: 4, fontSize: 12.5, color: t.dot, fontWeight: 600 }}>{label}</div>
+    </div>
+  );
+}
+
 function MySeasonPage({ user, isAdmin, setPage }) {
+  const isMobile = useIsMobile();
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [venmo, setVenmo] = useState("");
   const [status, setStatus] = useState("idle"); // idle | loading | done | error
   const [error, setError] = useState("");
   const [weeks, setWeeks] = useState(null);
+
+  // Special-week display names ("Conference Champs", "Bowls", etc.), same
+  // source LeaderboardPage's Year/Week selector reads from.
+  const [weekLabels, setWeekLabels] = useState({});
+  useEffect(() => {
+    (async () => {
+      try {
+        const s = await getDoc(doc(db, "config", "seasons"));
+        setWeekLabels(s.exists() ? (s.data().weekLabels || {}) : {});
+      } catch (err) {
+        console.error("config/seasons load failed", err);
+      }
+    })();
+  }, []);
+  const weekLabelFor = (y, w) => weekLabels[`${y}_${w}`] || `Week ${w}`;
 
   const onSubmit = async (e) => {
     e.preventDefault();
@@ -4364,22 +4406,33 @@ function MySeasonPage({ user, isAdmin, setPage }) {
   const totalCorrect = weeks ? weeks.reduce((sum, w) => sum + (w.points ?? 0), 0) : 0;
   const bestWeek = weeks && weeks.length ? weeks.reduce((a, b) => (b.points ?? -1) > (a.points ?? -1) ? b : a) : null;
 
-  return (<Container maxWidth={720}>
+  // Weeks already arrive most-recent-first from findMySeason; group them by
+  // year for display so each season reads as its own block.
+  const byYear = useMemo(() => {
+    const m = new Map();
+    for (const w of weeks || []) {
+      if (!m.has(w.year)) m.set(w.year, []);
+      m.get(w.year).push(w);
+    }
+    return [...m.entries()]; // years already descending, since weeks are
+  }, [weeks]);
+
+  return (<Container maxWidth={760}>
     <Header user={user} isAdmin={isAdmin} setPage={setPage} />
     <Card>
-      <h2 style={{ margin: 0 }}>My Season</h2>
-      <p style={{ margin: "10px 0 0", fontSize: 13, color: "#9aa4c7" }}>
+      <h2 style={{ margin: 0, fontSize: 24 }}>🏈 My Season</h2>
+      <p style={{ margin: "8px 0 0", fontSize: 13, color: "#9aa4c7", lineHeight: 1.5 }}>
         See every week you've played, your record, and any weeks you've won. We match you by name and Venmo — the same edit code you use each week doesn't carry over between weeks.
       </p>
 
       <form onSubmit={onSubmit}>
-        <Row style={{ marginTop: 16, gap: 14 }}>
+        <Row style={{ marginTop: 18, gap: 14 }}>
           <Field label="First name"><input style={inputStyle} value={firstName} onChange={e => setFirstName(e.target.value)} placeholder="Jane" /></Field>
           <Field label="Last name"><input style={inputStyle} value={lastName} onChange={e => setLastName(e.target.value)} placeholder="Smith" /></Field>
           <Field label="Venmo (optional)"><input style={inputStyle} value={venmo} onChange={e => setVenmo(e.target.value)} placeholder="@jane-smith" /></Field>
         </Row>
-        <button type="submit" style={{ marginTop: 14, padding: "10px 16px", borderRadius: 10, border: "1px solid #1f2a44", background: "#6aa2ff", color: "#07152b", fontWeight: 700, cursor: "pointer" }} disabled={status === "loading"}>
-          {status === "loading" ? "Looking..." : "Find My Season"}
+        <button type="submit" style={{ marginTop: 14, padding: "10px 20px", borderRadius: 10, border: "1px solid #1f2a44", background: "#6aa2ff", color: "#07152b", fontWeight: 700, fontSize: 14.5, cursor: "pointer" }} disabled={status === "loading"}>
+          {status === "loading" ? "Looking…" : "Find My Season"}
         </button>
       </form>
 
@@ -4395,36 +4448,61 @@ function MySeasonPage({ user, isAdmin, setPage }) {
 
       {status === "done" && weeks && weeks.length > 0 && (
         <>
-          <div style={{ marginTop: 16, display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <StatusBadge tone="neutral">{weeks.length} week{weeks.length === 1 ? "" : "s"} played</StatusBadge>
-            <StatusBadge tone={weeksWon > 0 ? "success" : "neutral"}>{weeksWon} week{weeksWon === 1 ? "" : "s"} won</StatusBadge>
-            <StatusBadge tone="neutral">{totalCorrect} total correct picks</StatusBadge>
-            {bestWeek && <StatusBadge tone="primary">Best week: W{bestWeek.week} ({bestWeek.points}/{bestWeek.totalGames})</StatusBadge>}
+          <div style={{ marginTop: 20, display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <MySeasonStatTile tone="neutral" value={weeks.length} label={`WEEK${weeks.length === 1 ? "" : "S"} PLAYED`} />
+            <MySeasonStatTile tone={weeksWon > 0 ? "success" : "neutral"} value={`🏆 ${weeksWon}`} label={`WEEK${weeksWon === 1 ? "" : "S"} WON`} />
+            <MySeasonStatTile tone="primary" value={totalCorrect} label="TOTAL CORRECT PICKS" />
+            {bestWeek && (
+              <MySeasonStatTile
+                tone="purple"
+                value={`${bestWeek.points}/${bestWeek.totalGames}`}
+                label={`BEST WEEK · ${bestWeek.year} ${weekLabelFor(bestWeek.year, bestWeek.week)}`}
+              />
+            )}
           </div>
 
-          <div style={{ marginTop: 14, overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 480 }}>
-              <thead>
-                <tr style={{ textAlign: "left" }}>
-                  <th style={{ padding: "8px 10px", borderBottom: "1px solid #1f2a44" }}>Year</th>
-                  <th style={{ padding: "8px 10px", borderBottom: "1px solid #1f2a44" }}>Week</th>
-                  <th style={{ padding: "8px 10px", borderBottom: "1px solid #1f2a44" }}>Record</th>
-                  <th style={{ padding: "8px 10px", borderBottom: "1px solid #1f2a44" }}>Result</th>
-                </tr>
-              </thead>
-              <tbody>
-                {weeks.map(w => (
-                  <tr key={`${w.year}_${w.week}`} style={{ borderBottom: "1px solid #1f2a44" }}>
-                    <td style={{ padding: "8px 10px" }}>{w.year}</td>
-                    <td style={{ padding: "8px 10px" }}>{w.week}</td>
-                    <td style={{ padding: "8px 10px" }}>{w.points ?? "-"} / {w.totalGames}</td>
-                    <td style={{ padding: "8px 10px" }}>
-                      {w.isWinner ? <span title={w.winNote || "Winner"}>🏆 Won{w.winNote ? " (tiebreaker)" : ""}</span> : "-"}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div style={{ marginTop: 22, display: "flex", flexDirection: "column", gap: 18 }}>
+            {byYear.map(([year, yearWeeks]) => (
+              <div key={year}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                  <span style={{ fontSize: 15, fontWeight: 800, color: "#eef2ff", letterSpacing: .3 }}>{year}</span>
+                  <span style={{ flex: 1, height: 1, background: "#1f2a44" }} />
+                  <span style={{ fontSize: 12, color: "#6b7797" }}>{yearWeeks.length} week{yearWeeks.length === 1 ? "" : "s"}</span>
+                </div>
+                <div style={{ borderRadius: 14, border: "1px solid #1f2a44", overflow: "hidden", background: "#0e1730" }}>
+                  {yearWeeks.map((w, i) => {
+                    const pct = w.points != null && w.totalGames ? Math.round((w.points / w.totalGames) * 100) : null;
+                    return (
+                      <div
+                        key={`${w.year}_${w.week}`}
+                        style={{
+                          display: "flex", alignItems: "center", gap: isMobile ? 10 : 16,
+                          padding: isMobile ? "10px 12px" : "11px 16px",
+                          borderTop: i === 0 ? "none" : "1px solid #1f2a44",
+                          background: w.isWinner ? "rgba(62,207,142,.07)" : "transparent",
+                        }}
+                      >
+                        <div style={{ flex: "0 0 auto", minWidth: isMobile ? 84 : 130, display: "flex", alignItems: "center", gap: 6 }}>
+                          {w.isWinner && <span title={w.winNote || "Winner"} style={{ fontSize: 15 }}>🏆</span>}
+                          <span style={{ fontSize: isMobile ? 13 : 14, fontWeight: 600, color: "#cfd8f0" }}>{weekLabelFor(w.year, w.week)}</span>
+                        </div>
+                        <div style={{ flex: "1 1 auto", minWidth: 40 }}>
+                          <RecordBar pct={pct} />
+                        </div>
+                        <div style={{ flex: "0 0 auto", minWidth: isMobile ? 56 : 64, textAlign: "right", fontSize: isMobile ? 13 : 14, fontWeight: 700, color: "#fff" }}>
+                          {w.points ?? "-"}/{w.totalGames}
+                        </div>
+                        {!isMobile && (
+                          <div style={{ flex: "0 0 auto", minWidth: 42, textAlign: "right", fontSize: 12.5, color: "#6b7797" }}>
+                            {pct != null ? `${pct}%` : "—"}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
           </div>
         </>
       )}
