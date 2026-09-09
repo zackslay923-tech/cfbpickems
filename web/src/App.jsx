@@ -2351,6 +2351,18 @@ useEffect(() => {
   // week besides Week 1, regardless of which week is currently live.
   const showPollResults = isAdmin || (!lbLocked && Number(week) === 1);
 
+  // These two refs back scheduleScrollSync(), used further down by the
+  // sticky-column scroll-sync logic - they have to be declared here,
+  // unconditionally, rather than down where they're used, because the
+  // locked-leaderboard branch just below this returns early. Hooks (useRef
+  // included) must run in the same order on every render of this component;
+  // declaring them after a conditional early return meant the locked and
+  // unlocked render paths called a different number of hooks, which crashed
+  // React with "Rendered fewer hooks than expected" (visible as the
+  // Leaderboard going blank for any locked-out viewer).
+  const scrollSyncRafRef = useRef(null);
+  const scrollSyncSourceRef = useRef(null);
+
   if (lbLocked && !isAdmin && Number(year) === Number(live?.year) && Number(week) === Number(live?.week)) {
       // Clear selected week if it has NO picks (safety guard)
   const clearWeekIfNoPicks = async () => {
@@ -2597,8 +2609,6 @@ useEffect(() => {
   // into at most one sync per animation frame (reading the live scrollLeft
   // at fire time, not whatever it was when the event was scheduled) cuts
   // that main-thread work down without changing the sync's behavior.
-  const scrollSyncRafRef = useRef(null);
-  const scrollSyncSourceRef = useRef(null);
   const scheduleScrollSync = (source) => {
     scrollSyncSourceRef.current = source;
     if (scrollSyncRafRef.current) return;
