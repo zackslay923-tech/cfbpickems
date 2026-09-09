@@ -2169,8 +2169,16 @@ useEffect(() => {
 
   const [live, setLive] = useState({ year: null, week: null });
   const initFromLiveRef = useRef(false);
+  // Set once a viewer manually picks a week (see the "Previous weeks"
+  // select below) so this effect - and the config/live listener elsewhere
+  // in this component - never clobbers that choice with the live week once
+  // their own (possibly slow, e.g. mobile) fetch of config/live finally
+  // resolves. Without this, picking Week 1 could still get silently
+  // reverted back to the live week a moment later if that fetch was still
+  // in flight when the pick happened.
+  const userChangedWeekRef = useRef(false);
   useEffect(() => {
-    if (!initFromLiveRef.current && live?.year && live?.week) {
+    if (!initFromLiveRef.current && !userChangedWeekRef.current && live?.year && live?.week) {
       setYear(live.year);
       setWeek(live.week);
       initFromLiveRef.current = true;
@@ -2194,36 +2202,17 @@ useEffect(() => {
     }
   })();
 }, [year, week]);
-// INITIAL_LIVE_AUTOLOAD: on first mount, load games for the live week (config/live)
-  useEffect(() => {
-        try {
-      const ref = doc(db, "config", "live");
-      // Subscribe once, then auto-unsub after we apply the first live week load
-      const unsub = onSnapshot(ref, async (s) => {
-        const d = s.data() || {};
-        const y = Number(d.year), w = Number(d.week);
-        setLive({ year: y, week: w });
-        if (!hasWeekValue(y) || !hasWeekValue(w)) { return; }
-
-        // Keep Admin controls consistent, but the important part is we load the live week now:
-        setYear(y);
-        setWeek(w);
-
-        try {
-          const gs = await listGames({ year: y, week: w, includedOnly: false });
-          setGames(gs);
-        } catch (e) {
-          console.error(e);
-        } finally {
-          // We only need this once on entry; further changes can be manual
-          unsub();
-        }
-      });
-      return () => { try { unsub(); } catch {} };
-    } catch (e) {
-      console.error(e);
-    }
-  }, []);
+  // A separate INITIAL_LIVE_AUTOLOAD effect used to live here, with its own
+  // independent config/live subscription that set year/week AND called
+  // setGames() directly - duplicating what initFromLiveRef above already
+  // does, except bypassing the boardLoaded/LoadingGate on the way (since it
+  // wrote `games` straight from its own fetch, not through loadAll()) and
+  // racing the user's own week choice if this fetch was still in flight
+  // when they picked one - the "select Week 1, briefly see the live week,
+  // then Week 1 shows" bug reported on mobile. initFromLiveRef + the
+  // [year, week] effect that calls loadAll() already cover the "default to
+  // the live week on first load" case correctly, so this was pure
+  // duplication and safe to remove outright.
 
   // Put College GameDay at the end of the list (Leaderboard)
   const gameday = (Array.isArray(games) ? games.find(x => x && x.gameday) : null);
@@ -2416,7 +2405,7 @@ useEffect(() => {
             <h2 style={{ margin: 0 }}>CFB Pick'Ems Week {week}</h2>
           </Row>
 <Field label="Previous weeks">
-  <select value={(week ?? '')} onChange={e => setWeek(Number(e.target.value))} style={inputStyle}>
+  <select value={(week ?? '')} onChange={e => { userChangedWeekRef.current = true; setWeek(Number(e.target.value)); }} style={inputStyle}>
     {(weeksForYear.length ? weeksForYear : Array.from({ length: 21 }, (_, i) => i)).map(w => (
       <option key={w} value={w}>Week {w}</option>
     ))}
@@ -2729,6 +2718,11 @@ useEffect(() => {
                   // Batching both updates in the same handler means the very
                   // next paint goes straight to the Loading screen.
                   setBoardLoaded(false);
+                  // Also record that the viewer picked a week themselves, so
+                  // the live-week default effect above can't clobber it if
+                  // its own (possibly slow, e.g. mobile) config/live fetch
+                  // is still in flight - see userChangedWeekRef.
+                  userChangedWeekRef.current = true;
                   setWeek(Number(e.target.value));
                 }}
                 style={inputStyle}
