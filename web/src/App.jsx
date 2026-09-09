@@ -316,6 +316,7 @@ function Header({ user, isAdmin, setPage }) {
     history.pushState(null, "", "/picks"); setPage("picks");}}>Picks</a>
         <a href="#" onClick={(e)=>{e.preventDefault(); history.pushState(null, "", "/leader"); setPage("leader");}}>Leaderboard</a>
         <a href="#" onClick={(e)=>{e.preventDefault(); history.pushState(null, "", "/myseason"); setPage("myseason");}}>My Season</a>
+        <a href="#" onClick={(e)=>{e.preventDefault(); history.pushState(null, "", "/overall"); setPage("overall");}}>Overall</a>
         {isAdmin && <a href="#" onClick={(e)=>{e.preventDefault(); history.pushState(null, "", "/admin"); setPage("admin");}}>Admin</a>}
         {isMobile && !isStandaloneMode() && (
           <a href="#" onClick={(e)=>{e.preventDefault(); setShowInstallModal(true);}} title="Add to home screen" aria-label="Add to home screen">📲</a>
@@ -3760,9 +3761,18 @@ function personKey(p) {
   const key = n.replace(/^_+|_+$/g, "") || null;
   return key ? (NAME_ALIASES[key] || key) : null;
 }
+// Placeholder text people type in the Venmo field when they actually paid
+// through someone else ("yes", "-", "n/a", "sent through Michael"...) isn't
+// a real handle, and different unrelated people reuse the same placeholder -
+// treating it as an identity key would wrongly merge their picks together.
+const VENMO_JUNK = new Set([
+  "yes", "yea", "yeah", "y", "no", "n", "n/a", "na", "-", "none", "redacted",
+  "paid", "cash", "cashapp", "venmo", "check", "tbd", "idk", "unknown", "?",
+]);
 function venmoKeyOf(p) {
   const v = String(p.venmo || "").trim().toLowerCase().replace(/^@+/, "");
-  return v ? `v:${v}` : null;
+  if (!v || /\s/.test(v) || VENMO_JUNK.has(v)) return null; // not a real handle
+  return `v:${v}`;
 }
 // Simple union-find: two picks docs count as the same person if they share
 // either a normalized name or a normalized Venmo username, so a typo'd or
@@ -4324,26 +4334,98 @@ async function findMySeason({ firstName, lastName, venmo }) {
   }
   const weekRefs = [...byWeek.values()].sort((a, b) => a.year - b.year || a.week - b.week);
 
-  const weeks = [];
-  for (const wr of weekRefs) {
+  const weeks = await Promise.all(weekRefs.map(async (wr) => {
     const { rows, totalGames } = await computeWeekStandings(wr.year, wr.week);
     const mineRow = rows.find(r => r.email && wr.email && r.email === wr.email) || null;
-    // Standard competition ranking (ties share a place) among everyone who
-    // played that week - lets "average place" mean something consistent
-    // across weeks with different-sized fields.
-    const place = mineRow ? 1 + rows.filter(r => r.points > mineRow.points).length : null;
-    weeks.push({
+    return {
       year: wr.year, week: wr.week,
       points: mineRow?.points ?? null,
       totalGames,
       isWinner: !!mineRow?.isWinner,
       winNote: mineRow?.winNote || null,
-      place,
-      fieldSize: rows.length,
-    });
-  }
+    };
+  }));
   weeks.sort((a, b) => b.year - a.year || b.week - a.week); // most recent first
   return { weeks };
+}
+
+// Cross-referenced by both MySeasonPage (one person's percentile) and
+// OverallLeaderboardPage (everyone's ranking): each person's "average
+// finish" is the mean of (place/fieldSize) across every week they've
+// played - place uses the same standard competition ranking (ties share a
+// place) computeWeekStandings already sorts rows by - so a 5th out of 10
+// and an 8th out of 20 both mean "finished in the top half." Lower is
+// better. Ranked against everyone else who's played more than 5 weeks.
+async function computeAllTimePercentiles() {
+  const snap = await getDocs(collection(db, "picks"));
+  const allPicks = [];
+  snap.forEach(d => allPicks.push(d.data()));
+
+  const dsu = makeDSU();
+  for (const p of allPicks) {
+    const nk = personKey(p);
+    const vk = venmoKeyOf(p);
+    if (nk && vk) dsu.union(nk, vk);
+  }
+
+  const weekKeys = new Map();
+  for (const p of allPicks) {
+    if (!hasWeekValue(p.year) || !hasWeekValue(p.week)) continue;
+    const wk = `${p.year}_${p.week}`;
+    if (!weekKeys.has(wk)) weekKeys.set(wk, { year: Number(p.year), week: Number(p.week) });
+  }
+
+  const weekStandings = await Promise.all(
+    [...weekKeys.values()].map(({ year, week }) => computeWeekStandings(year, week))
+  );
+
+  const agg = new Map(); // dsu root -> aggregate
+  for (const { rows } of weekStandings) {
+    const fieldSize = rows.length;
+    if (!fieldSize) continue;
+    for (const r of rows) {
+      const nk = personKey(r);
+      const vk = venmoKeyOf(r);
+      const key = nk || vk;
+      if (!key) continue;
+      const root = dsu.find(key);
+      const place = 1 + rows.filter(x => x.points > r.points).length;
+      if (!agg.has(root)) agg.set(root, { nameCounts: new Map(), weeksPlayed: 0, weeksWon: 0, ratioSum: 0, keys: new Set() });
+      const a = agg.get(root);
+      a.weeksPlayed += 1;
+      if (r.isWinner) a.weeksWon += 1;
+      a.ratioSum += place / fieldSize;
+      if (nk) a.keys.add(nk);
+      if (vk) a.keys.add(vk);
+      // Display name is whichever spelling they used most often - a single
+      // joke entry (e.g. "bigsot money 1000000") shouldn't outrank the name
+      // used on every other week just because it's a longer string.
+      if (r.name) a.nameCounts.set(r.name, (a.nameCounts.get(r.name) || 0) + 1);
+    }
+  }
+
+  const list = [...agg.values()]
+    .map(a => {
+      let name = "", bestCount = -1;
+      for (const [nm, c] of a.nameCounts) {
+        if (c > bestCount || (c === bestCount && nm.length > name.length)) { name = nm; bestCount = c; }
+      }
+      return {
+        name, weeksPlayed: a.weeksPlayed, weeksWon: a.weeksWon,
+        avgFinishPct: (a.ratioSum / a.weeksPlayed) * 100,
+        keys: a.keys,
+      };
+    })
+    .filter(p => p.weeksPlayed > 5)
+    .sort((a, b) => a.avgFinishPct - b.avgFinishPct);
+
+  const n = list.length;
+  list.forEach((p, i) => {
+    p.rank = i + 1;
+    p.percentile = n > 1 ? Math.round(100 * (1 - (p.rank - 1) / (n - 1))) : 100;
+  });
+
+  return list;
 }
 
 // Small horizontal bar showing correct-picks percentage, color-graded from
@@ -4390,6 +4472,7 @@ function MySeasonPage({ user, isAdmin, setPage }) {
   const [status, setStatus] = useState("idle"); // idle | loading | done | error
   const [error, setError] = useState("");
   const [weeks, setWeeks] = useState(null);
+  const [percentileInfo, setPercentileInfo] = useState(null); // { percentile, rank, total } | null
 
   // Special-week display names ("Conference Champs", "Bowls", etc.), same
   // source LeaderboardPage's Year/Week selector reads from.
@@ -4408,10 +4491,17 @@ function MySeasonPage({ user, isAdmin, setPage }) {
 
   const onSubmit = async (e) => {
     e.preventDefault();
-    setStatus("loading"); setError(""); setWeeks(null);
+    setStatus("loading"); setError(""); setWeeks(null); setPercentileInfo(null);
     try {
-      const result = await findMySeason({ firstName, lastName, venmo });
+      const [result, allTime] = await Promise.all([
+        findMySeason({ firstName, lastName, venmo }),
+        computeAllTimePercentiles(),
+      ]);
       setWeeks(result.weeks);
+      const nk = personKey({ firstName, lastName });
+      const vk = venmoKeyOf({ venmo });
+      const mine = allTime.find(p => (nk && p.keys.has(nk)) || (vk && p.keys.has(vk)));
+      setPercentileInfo(mine ? { percentile: mine.percentile, rank: mine.rank, total: allTime.length } : null);
       setStatus("done");
     } catch (err) {
       setError(err?.message || "Something went wrong looking that up.");
@@ -4430,17 +4520,6 @@ function MySeasonPage({ user, isAdmin, setPage }) {
     for (const w of chrono) { cur = w.isWinner ? cur + 1 : 0; if (cur > best) best = cur; }
     return best;
   }, [weeks]);
-
-  // Average place uses standard competition ranking (ties share a place),
-  // and the all-time percentile converts that average place into "you
-  // typically finish ahead of X% of the field" using the average field size
-  // across the weeks played.
-  const placedWeeks = useMemo(() => (weeks || []).filter(w => w.place != null && w.fieldSize > 0), [weeks]);
-  const avgPlace = placedWeeks.length ? placedWeeks.reduce((s, w) => s + w.place, 0) / placedWeeks.length : null;
-  const avgFieldSize = placedWeeks.length ? placedWeeks.reduce((s, w) => s + w.fieldSize, 0) / placedWeeks.length : null;
-  const percentile = (avgPlace != null && avgFieldSize > 1)
-    ? Math.round(100 * (1 - (avgPlace - 1) / (avgFieldSize - 1)))
-    : null;
 
   // Weeks already arrive most-recent-first from findMySeason; group them by
   // year for display so each season reads as its own block.
@@ -4488,8 +4567,11 @@ function MySeasonPage({ user, isAdmin, setPage }) {
             <MySeasonStatTile tone="neutral" value={weeks.length} label={`WEEK${weeks.length === 1 ? "" : "S"} PLAYED`} />
             <MySeasonStatTile tone={weeksWon > 0 ? "success" : "neutral"} value={`🏆 ${weeksWon}`} label={`WEEK${weeksWon === 1 ? "" : "S"} WON`} />
             <MySeasonStatTile tone={longestWinStreak > 1 ? "warning" : "neutral"} value={longestWinStreak > 1 ? `🔥 ${longestWinStreak}` : longestWinStreak} label="LONGEST WIN STREAK" />
-            <MySeasonStatTile tone="primary" value={avgPlace != null ? `#${avgPlace.toFixed(1)}` : "—"} label={`AVG PLACE${avgFieldSize ? ` OF ~${Math.round(avgFieldSize)}` : ""}`} />
-            <MySeasonStatTile tone="purple" value={percentile != null ? `${percentile}${ordinalSuffix(percentile)}` : "—"} label="ALL-TIME PERCENTILE" />
+            <MySeasonStatTile
+              tone="purple"
+              value={percentileInfo ? `${percentileInfo.percentile}${ordinalSuffix(percentileInfo.percentile)}` : "—"}
+              label={percentileInfo ? `ALL-TIME PERCENTILE · #${percentileInfo.rank} OF ${percentileInfo.total}` : "ALL-TIME PERCENTILE (6+ WEEKS NEEDED)"}
+            />
           </div>
 
           <div style={{ marginTop: 22, display: "flex", flexDirection: "column", gap: 18 }}>
@@ -4536,6 +4618,79 @@ function MySeasonPage({ user, isAdmin, setPage }) {
             ))}
           </div>
         </>
+      )}
+    </Card>
+  </Container>);
+}
+
+function OverallLeaderboardPage({ user, isAdmin, setPage }) {
+  const isMobile = useIsMobile();
+  const [status, setStatus] = useState("loading"); // loading | done | error
+  const [list, setList] = useState([]);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const result = await computeAllTimePercentiles();
+        if (!cancelled) { setList(result); setStatus("done"); }
+      } catch (err) {
+        if (!cancelled) { setError(err?.message || "Something went wrong loading the leaderboard."); setStatus("error"); }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const medal = (rank) => rank === 1 ? "🥇" : rank === 2 ? "🥈" : rank === 3 ? "🥉" : `#${rank}`;
+  const medalColor = (rank) => rank === 1 ? "#f0b429" : rank === 2 ? "#cbd5e1" : rank === 3 ? "#cd7f32" : "#6b7797";
+
+  return (<Container maxWidth={760}>
+    <Header user={user} isAdmin={isAdmin} setPage={setPage} />
+    <Card>
+      <h2 style={{ margin: 0, fontSize: 24 }}>🏆 Overall Leaderboard</h2>
+      <p style={{ margin: "8px 0 0", fontSize: 13, color: "#9aa4c7", lineHeight: 1.5 }}>
+        Ranked by average finish across every week played — a 5th out of 10 counts the same as an 8th out of 20, so it's fair across seasons with different-sized pools. Only players with more than 5 weeks played are ranked.
+      </p>
+
+      {status === "loading" && (
+        <div style={{ marginTop: 24, textAlign: "center", color: "#9aa4c7", fontSize: 14, padding: "20px 0" }}>Crunching everyone's numbers…</div>
+      )}
+
+      {status === "error" && (
+        <div style={{ marginTop: 16, padding: "10px 12px", borderRadius: 10, background: "rgba(239,68,68,.1)", border: "1px solid rgba(239,68,68,.3)", color: "#fca5a5", fontSize: 13 }}>{error}</div>
+      )}
+
+      {status === "done" && list.length === 0 && (
+        <div style={{ marginTop: 16, padding: "10px 12px", borderRadius: 10, background: "rgba(240,180,41,.1)", border: "1px solid rgba(240,180,41,.3)", color: "#f0b429", fontSize: 13 }}>
+          Nobody has played more than 5 weeks yet.
+        </div>
+      )}
+
+      {status === "done" && list.length > 0 && (
+        <div style={{ marginTop: 18, borderRadius: 14, border: "1px solid #1f2a44", overflow: "hidden", background: "#0e1730" }}>
+          {list.map((p, i) => (
+            <div
+              key={`${p.name}_${i}`}
+              style={{
+                display: "flex", alignItems: "center", gap: isMobile ? 10 : 16,
+                padding: isMobile ? "10px 12px" : "11px 16px",
+                borderTop: i === 0 ? "none" : "1px solid #1f2a44",
+                background: p.rank <= 3 ? "rgba(240,180,41,.06)" : "transparent",
+              }}
+            >
+              <div style={{ flex: "0 0 auto", width: isMobile ? 32 : 40, textAlign: "center", fontSize: p.rank <= 3 ? 18 : 14, fontWeight: 800, color: medalColor(p.rank) }}>
+                {medal(p.rank)}
+              </div>
+              <div style={{ flex: "1 1 auto", minWidth: 0, fontSize: isMobile ? 13.5 : 14.5, fontWeight: 700, color: "#eef2ff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {p.name}
+              </div>
+              <div style={{ flex: "0 0 auto", fontSize: isMobile ? 12 : 13, color: "#9aa4c7", fontWeight: 600, minWidth: isMobile ? 70 : 110, textAlign: "right" }}>
+                {p.weeksPlayed} wks · 🏆 {p.weeksWon}
+              </div>
+            </div>
+          ))}
+        </div>
       )}
     </Card>
   </Container>);
@@ -5942,7 +6097,7 @@ export default function App() {
     const readPath = () => {
       const p = (window.location.pathname || "/").replace(/^\/|\/$/g, "");
       if (p === "") { setPage("picks"); return; }
-      if (p === "picks" || p === "leader" || p === "admin" || p === "myseason") { setPage(p); return; }
+      if (p === "picks" || p === "leader" || p === "admin" || p === "myseason" || p === "overall") { setPage(p); return; }
       if (p === "admin/picks") { setPage("adminpicks"); return; }
       if (p === "admin/notifications") { setPage("adminnotifications"); return; }
       if (p === "admin/payments") { setPage("adminpayments"); return; }
@@ -5965,6 +6120,7 @@ export default function App() {
       {(page === "picks" || page === "confirm" || page === "receipt") && <PicksPage user={user} isAdmin={isAdmin} setPage={setPage} />}
       {page === "leader" && <LeaderboardPage user={user} isAdmin={isAdmin} setPage={setPage} />}
       {page === "myseason" && <MySeasonPage user={user} isAdmin={isAdmin} setPage={setPage} />}
+      {page === "overall" && <OverallLeaderboardPage user={user} isAdmin={isAdmin} setPage={setPage} />}
       {page === "admin" && <AdminPage user={user} isAdmin={isAdmin} setPage={setPage} />}
       {page === "adminpicks" && <AdminPicksPage user={user} isAdmin={isAdmin} setPage={setPage} />}
       {page === "adminnotifications" && <AdminNotificationsPage user={user} isAdmin={isAdmin} setPage={setPage} />}
