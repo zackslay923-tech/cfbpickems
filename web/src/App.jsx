@@ -4328,12 +4328,18 @@ async function findMySeason({ firstName, lastName, venmo }) {
   for (const wr of weekRefs) {
     const { rows, totalGames } = await computeWeekStandings(wr.year, wr.week);
     const mineRow = rows.find(r => r.email && wr.email && r.email === wr.email) || null;
+    // Standard competition ranking (ties share a place) among everyone who
+    // played that week - lets "average place" mean something consistent
+    // across weeks with different-sized fields.
+    const place = mineRow ? 1 + rows.filter(r => r.points > mineRow.points).length : null;
     weeks.push({
       year: wr.year, week: wr.week,
       points: mineRow?.points ?? null,
       totalGames,
       isWinner: !!mineRow?.isWinner,
       winNote: mineRow?.winNote || null,
+      place,
+      fieldSize: rows.length,
     });
   }
   weeks.sort((a, b) => b.year - a.year || b.week - a.week); // most recent first
@@ -4352,11 +4358,22 @@ function RecordBar({ pct }) {
   );
 }
 
+function ordinalSuffix(n) {
+  const v = Math.abs(n) % 100;
+  if (v >= 11 && v <= 13) return "th";
+  switch (Math.abs(n) % 10) {
+    case 1: return "st";
+    case 2: return "nd";
+    case 3: return "rd";
+    default: return "th";
+  }
+}
+
 function MySeasonStatTile({ tone, value, label }) {
   const t = ADMIN_TONES[tone] || ADMIN_TONES.neutral;
   return (
     <div style={{
-      flex: "1 1 130px", minWidth: 130, borderRadius: 14, padding: "14px 16px",
+      flex: "0 1 150px", minWidth: 130, maxWidth: 200, borderRadius: 14, padding: "14px 16px",
       background: `${t.dot}14`, border: `1px solid ${t.dot}40`,
     }}>
       <div style={{ fontSize: 24, fontWeight: 800, color: "#fff", lineHeight: 1.1 }}>{value}</div>
@@ -4403,8 +4420,27 @@ function MySeasonPage({ user, isAdmin, setPage }) {
   };
 
   const weeksWon = weeks ? weeks.filter(w => w.isWinner).length : 0;
-  const totalCorrect = weeks ? weeks.reduce((sum, w) => sum + (w.points ?? 0), 0) : 0;
-  const bestWeek = weeks && weeks.length ? weeks.reduce((a, b) => (b.points ?? -1) > (a.points ?? -1) ? b : a) : null;
+
+  // Longest win streak runs over weeks actually played, in chronological
+  // order - a bye doesn't break it, but a played-and-lost week does.
+  const longestWinStreak = useMemo(() => {
+    if (!weeks) return 0;
+    const chrono = [...weeks].sort((a, b) => a.year - b.year || a.week - b.week);
+    let best = 0, cur = 0;
+    for (const w of chrono) { cur = w.isWinner ? cur + 1 : 0; if (cur > best) best = cur; }
+    return best;
+  }, [weeks]);
+
+  // Average place uses standard competition ranking (ties share a place),
+  // and the all-time percentile converts that average place into "you
+  // typically finish ahead of X% of the field" using the average field size
+  // across the weeks played.
+  const placedWeeks = useMemo(() => (weeks || []).filter(w => w.place != null && w.fieldSize > 0), [weeks]);
+  const avgPlace = placedWeeks.length ? placedWeeks.reduce((s, w) => s + w.place, 0) / placedWeeks.length : null;
+  const avgFieldSize = placedWeeks.length ? placedWeeks.reduce((s, w) => s + w.fieldSize, 0) / placedWeeks.length : null;
+  const percentile = (avgPlace != null && avgFieldSize > 1)
+    ? Math.round(100 * (1 - (avgPlace - 1) / (avgFieldSize - 1)))
+    : null;
 
   // Weeks already arrive most-recent-first from findMySeason; group them by
   // year for display so each season reads as its own block.
@@ -4451,14 +4487,9 @@ function MySeasonPage({ user, isAdmin, setPage }) {
           <div style={{ marginTop: 20, display: "flex", gap: 10, flexWrap: "wrap" }}>
             <MySeasonStatTile tone="neutral" value={weeks.length} label={`WEEK${weeks.length === 1 ? "" : "S"} PLAYED`} />
             <MySeasonStatTile tone={weeksWon > 0 ? "success" : "neutral"} value={`🏆 ${weeksWon}`} label={`WEEK${weeksWon === 1 ? "" : "S"} WON`} />
-            <MySeasonStatTile tone="primary" value={totalCorrect} label="TOTAL CORRECT PICKS" />
-            {bestWeek && (
-              <MySeasonStatTile
-                tone="purple"
-                value={`${bestWeek.points}/${bestWeek.totalGames}`}
-                label={`BEST WEEK · ${bestWeek.year} ${weekLabelFor(bestWeek.year, bestWeek.week)}`}
-              />
-            )}
+            <MySeasonStatTile tone={longestWinStreak > 1 ? "warning" : "neutral"} value={longestWinStreak > 1 ? `🔥 ${longestWinStreak}` : longestWinStreak} label="LONGEST WIN STREAK" />
+            <MySeasonStatTile tone="primary" value={avgPlace != null ? `#${avgPlace.toFixed(1)}` : "—"} label={`AVG PLACE${avgFieldSize ? ` OF ~${Math.round(avgFieldSize)}` : ""}`} />
+            <MySeasonStatTile tone="purple" value={percentile != null ? `${percentile}${ordinalSuffix(percentile)}` : "—"} label="ALL-TIME PERCENTILE" />
           </div>
 
           <div style={{ marginTop: 22, display: "flex", flexDirection: "column", gap: 18 }}>
