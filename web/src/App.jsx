@@ -4669,36 +4669,39 @@ function OverallLeaderboardPage({ user, isAdmin, setPage }) {
 
       {status === "done" && list.length > 0 && (
         <div style={{ marginTop: 18, borderRadius: 14, border: "1px solid #1f2a44", overflow: "hidden", background: "#0e1730" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 8 : 16, padding: isMobile ? "7px 10px" : "8px 16px", borderBottom: "1px solid #1f2a44", fontSize: isMobile ? 10 : 11, color: "#6b7797", fontWeight: 700, letterSpacing: .3 }}>
-            <div style={{ flex: "0 0 auto", width: isMobile ? 26 : 40 }} />
-            <div style={{ flex: "1 1 auto" }}>PLAYER</div>
-            <div style={{ flex: "0 0 auto", minWidth: isMobile ? 44 : 90, textAlign: "right" }}>PLAYED</div>
-            <div style={{ flex: "0 0 auto", minWidth: isMobile ? 48 : 78, textAlign: "right" }}>TOP %</div>
+          <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 6 : 16, padding: isMobile ? "7px 8px" : "8px 16px", borderBottom: "1px solid #1f2a44", fontSize: isMobile ? 10 : 11, color: "#6b7797", fontWeight: 700, letterSpacing: .3 }}>
+            <div style={{ flex: "0 0 auto", width: isMobile ? 22 : 40 }} />
+            <div style={{ flex: isMobile ? "0 1 auto" : "1 1 auto", minWidth: 0, maxWidth: isMobile ? 118 : "none" }}>PLAYER</div>
+            <div style={{ flex: "0 0 auto", minWidth: isMobile ? 40 : 60, textAlign: "right" }}>PLAYED</div>
+            <div style={{ flex: "0 0 auto", minWidth: isMobile ? 30 : 46, textAlign: "right" }}>WON</div>
+            <div style={{ flex: "0 0 auto", minWidth: isMobile ? 44 : 78, textAlign: "right" }}>TOP %</div>
           </div>
           {list.map((p, i) => (
             <div
               key={`${p.name}_${i}`}
               style={{
-                display: "flex", alignItems: "center", gap: isMobile ? 8 : 16,
-                padding: isMobile ? "9px 10px" : "11px 16px",
+                display: "flex", alignItems: "center", gap: isMobile ? 6 : 16,
+                padding: isMobile ? "9px 8px" : "11px 16px",
                 borderTop: i === 0 ? "none" : "1px solid #1f2a44",
                 background: p.rank <= 3 ? "rgba(240,180,41,.06)" : "transparent",
               }}
             >
-              <div style={{ flex: "0 0 auto", width: isMobile ? 26 : 40, textAlign: "center", fontSize: p.rank <= 3 ? (isMobile ? 16 : 18) : (isMobile ? 12.5 : 14), fontWeight: 800, color: medalColor(p.rank) }}>
+              <div style={{ flex: "0 0 auto", width: isMobile ? 22 : 40, textAlign: "center", fontSize: p.rank <= 3 ? (isMobile ? 16 : 18) : (isMobile ? 12.5 : 14), fontWeight: 800, color: medalColor(p.rank) }}>
                 {medal(p.rank)}
               </div>
-              <div style={{ flex: "1 1 auto", minWidth: 0, fontSize: isMobile ? 13 : 14.5, fontWeight: 700, color: "#eef2ff", lineHeight: 1.25, wordBreak: "break-word" }}>
+              <div style={{ flex: isMobile ? "0 1 auto" : "1 1 auto", minWidth: 0, maxWidth: isMobile ? 118 : "none", fontSize: isMobile ? 13 : 14.5, fontWeight: 700, color: "#eef2ff", lineHeight: 1.25, wordBreak: "break-word" }}>
                 {p.name}
               </div>
-              <div style={{ flex: "0 0 auto", minWidth: isMobile ? 44 : 90, textAlign: "right" }}>
-                <div style={{ fontSize: isMobile ? 11.5 : 13, color: "#9aa4c7", fontWeight: 600, whiteSpace: "nowrap" }}>{p.weeksPlayed} wks</div>
-                <div style={{ fontSize: isMobile ? 11 : 12, color: "#f0b429", fontWeight: 700, marginTop: 1, whiteSpace: "nowrap" }}>🏆 {p.weeksWon}</div>
+              <div style={{ flex: "0 0 auto", minWidth: isMobile ? 40 : 60, textAlign: "right", fontSize: isMobile ? 11.5 : 13, color: "#9aa4c7", fontWeight: 600, whiteSpace: "nowrap" }}>
+                {p.weeksPlayed} wks
+              </div>
+              <div style={{ flex: "0 0 auto", minWidth: isMobile ? 30 : 46, textAlign: "right", fontSize: isMobile ? 12 : 13, color: "#f0b429", fontWeight: 700, whiteSpace: "nowrap" }}>
+                🏆 {p.weeksWon}
               </div>
               <div
                 title="On average, this player finishes in the top X% of that week's field - lower is better"
                 style={{
-                  flex: "0 0 auto", minWidth: isMobile ? 48 : 78, textAlign: "right", fontWeight: 800,
+                  flex: "0 0 auto", minWidth: isMobile ? 44 : 78, textAlign: "right", fontWeight: 800,
                   fontSize: isMobile ? 12.5 : 14.5, color: "#b48aef", whiteSpace: "nowrap",
                 }}
               >
