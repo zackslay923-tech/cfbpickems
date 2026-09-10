@@ -4532,9 +4532,9 @@ function MySeasonPage({ user, isAdmin, setPage }) {
     return [...m.entries()]; // years already descending, since weeks are
   }, [weeks]);
 
-  return (<Container maxWidth={760}>
+  return (<Container maxWidth={760} padding={isMobile ? 12 : 24}>
     <Header user={user} isAdmin={isAdmin} setPage={setPage} />
-    <Card>
+    <Card style={{ padding: isMobile ? 12 : 16 }}>
       <h2 style={{ margin: 0, fontSize: 24 }}>🏈 My Season</h2>
       <p style={{ margin: "8px 0 0", fontSize: 13, color: "#9aa4c7", lineHeight: 1.5 }}>
         See every week you've played, your record, and any weeks you've won. We match you by name and Venmo — the same edit code you use each week doesn't carry over between weeks.
@@ -4645,11 +4645,11 @@ function OverallLeaderboardPage({ user, isAdmin, setPage }) {
   const medal = (rank) => rank === 1 ? "🥇" : rank === 2 ? "🥈" : rank === 3 ? "🥉" : `#${rank}`;
   const medalColor = (rank) => rank === 1 ? "#f0b429" : rank === 2 ? "#cbd5e1" : rank === 3 ? "#cd7f32" : "#6b7797";
 
-  return (<Container maxWidth={760}>
+  return (<Container maxWidth={760} padding={isMobile ? 12 : 24}>
     <Header user={user} isAdmin={isAdmin} setPage={setPage} />
-    <Card>
-      <h2 style={{ margin: 0, fontSize: 24 }}>🏆 Overall Leaderboard</h2>
-      <p style={{ margin: "8px 0 0", fontSize: 13, color: "#9aa4c7", lineHeight: 1.5 }}>
+    <Card style={{ padding: isMobile ? 12 : 16 }}>
+      <h2 style={{ margin: 0, fontSize: isMobile ? 20 : 24 }}>🏆 Overall Leaderboard</h2>
+      <p style={{ margin: "8px 0 0", fontSize: isMobile ? 12 : 13, color: "#9aa4c7", lineHeight: 1.45 }}>
         Ranked by average finish across every week played — a 5th out of 10 counts the same as a 10th out of 20 (both mean you finished ahead of half the field), so it's fair across seasons with different-sized pools. Only players with more than 5 weeks played are ranked.
       </p>
 
@@ -4669,37 +4669,37 @@ function OverallLeaderboardPage({ user, isAdmin, setPage }) {
 
       {status === "done" && list.length > 0 && (
         <div style={{ marginTop: 18, borderRadius: 14, border: "1px solid #1f2a44", overflow: "hidden", background: "#0e1730" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 10 : 16, padding: isMobile ? "8px 12px" : "8px 16px", borderBottom: "1px solid #1f2a44", fontSize: 11, color: "#6b7797", fontWeight: 700, letterSpacing: .3 }}>
-            <div style={{ flex: "0 0 auto", width: isMobile ? 32 : 40 }} />
+          <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 8 : 16, padding: isMobile ? "7px 10px" : "8px 16px", borderBottom: "1px solid #1f2a44", fontSize: isMobile ? 10 : 11, color: "#6b7797", fontWeight: 700, letterSpacing: .3 }}>
+            <div style={{ flex: "0 0 auto", width: isMobile ? 26 : 40 }} />
             <div style={{ flex: "1 1 auto" }}>PLAYER</div>
-            <div style={{ flex: "0 0 auto", minWidth: isMobile ? 56 : 90, textAlign: "right" }}>PLAYED</div>
-            <div style={{ flex: "0 0 auto", minWidth: isMobile ? 56 : 78, textAlign: "right" }}>TOP %</div>
+            <div style={{ flex: "0 0 auto", minWidth: isMobile ? 44 : 90, textAlign: "right" }}>PLAYED</div>
+            <div style={{ flex: "0 0 auto", minWidth: isMobile ? 48 : 78, textAlign: "right" }}>TOP %</div>
           </div>
           {list.map((p, i) => (
             <div
               key={`${p.name}_${i}`}
               style={{
-                display: "flex", alignItems: "center", gap: isMobile ? 10 : 16,
-                padding: isMobile ? "10px 12px" : "11px 16px",
+                display: "flex", alignItems: "center", gap: isMobile ? 8 : 16,
+                padding: isMobile ? "9px 10px" : "11px 16px",
                 borderTop: i === 0 ? "none" : "1px solid #1f2a44",
                 background: p.rank <= 3 ? "rgba(240,180,41,.06)" : "transparent",
               }}
             >
-              <div style={{ flex: "0 0 auto", width: isMobile ? 32 : 40, textAlign: "center", fontSize: p.rank <= 3 ? 18 : 14, fontWeight: 800, color: medalColor(p.rank) }}>
+              <div style={{ flex: "0 0 auto", width: isMobile ? 26 : 40, textAlign: "center", fontSize: p.rank <= 3 ? (isMobile ? 16 : 18) : (isMobile ? 12.5 : 14), fontWeight: 800, color: medalColor(p.rank) }}>
                 {medal(p.rank)}
               </div>
-              <div style={{ flex: "1 1 auto", minWidth: 0, fontSize: isMobile ? 13.5 : 14.5, fontWeight: 700, color: "#eef2ff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              <div style={{ flex: "1 1 auto", minWidth: 0, fontSize: isMobile ? 13 : 14.5, fontWeight: 700, color: "#eef2ff", lineHeight: 1.25, wordBreak: "break-word" }}>
                 {p.name}
               </div>
-              <div style={{ flex: "0 0 auto", minWidth: isMobile ? 56 : 90, textAlign: "right" }}>
-                <div style={{ fontSize: isMobile ? 12 : 13, color: "#9aa4c7", fontWeight: 600 }}>{p.weeksPlayed} wks</div>
-                <div style={{ fontSize: isMobile ? 11 : 12, color: "#f0b429", fontWeight: 700, marginTop: 1 }}>🏆 {p.weeksWon}</div>
+              <div style={{ flex: "0 0 auto", minWidth: isMobile ? 44 : 90, textAlign: "right" }}>
+                <div style={{ fontSize: isMobile ? 11.5 : 13, color: "#9aa4c7", fontWeight: 600, whiteSpace: "nowrap" }}>{p.weeksPlayed} wks</div>
+                <div style={{ fontSize: isMobile ? 11 : 12, color: "#f0b429", fontWeight: 700, marginTop: 1, whiteSpace: "nowrap" }}>🏆 {p.weeksWon}</div>
               </div>
               <div
                 title="On average, this player finishes in the top X% of that week's field - lower is better"
                 style={{
-                  flex: "0 0 auto", minWidth: isMobile ? 56 : 78, textAlign: "right", fontWeight: 800,
-                  fontSize: isMobile ? 13 : 14.5, color: "#b48aef",
+                  flex: "0 0 auto", minWidth: isMobile ? 48 : 78, textAlign: "right", fontWeight: 800,
+                  fontSize: isMobile ? 12.5 : 14.5, color: "#b48aef", whiteSpace: "nowrap",
                 }}
               >
                 Top {Math.max(1, Math.round(p.avgFinishPct))}%
