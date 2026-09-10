@@ -4650,7 +4650,7 @@ function OverallLeaderboardPage({ user, isAdmin, setPage }) {
     <Card>
       <h2 style={{ margin: 0, fontSize: 24 }}>🏆 Overall Leaderboard</h2>
       <p style={{ margin: "8px 0 0", fontSize: 13, color: "#9aa4c7", lineHeight: 1.5 }}>
-        Ranked by average finish across every week played — a 5th out of 10 counts the same as an 8th out of 20, so it's fair across seasons with different-sized pools. Only players with more than 5 weeks played are ranked.
+        Ranked by average finish across every week played — a 5th out of 10 counts the same as a 10th out of 20 (both mean you finished ahead of half the field), so it's fair across seasons with different-sized pools. Only players with more than 5 weeks played are ranked.
       </p>
 
       {status === "loading" && (
@@ -4669,6 +4669,12 @@ function OverallLeaderboardPage({ user, isAdmin, setPage }) {
 
       {status === "done" && list.length > 0 && (
         <div style={{ marginTop: 18, borderRadius: 14, border: "1px solid #1f2a44", overflow: "hidden", background: "#0e1730" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 10 : 16, padding: isMobile ? "8px 12px" : "8px 16px", borderBottom: "1px solid #1f2a44", fontSize: 11, color: "#6b7797", fontWeight: 700, letterSpacing: .3 }}>
+            <div style={{ flex: "0 0 auto", width: isMobile ? 32 : 40 }} />
+            <div style={{ flex: "1 1 auto" }}>PLAYER</div>
+            <div style={{ flex: "0 0 auto", minWidth: isMobile ? 62 : 110, textAlign: "right" }}>PLAYED</div>
+            <div style={{ flex: "0 0 auto", minWidth: isMobile ? 56 : 78, textAlign: "right" }}>AVG FINISH</div>
+          </div>
           {list.map((p, i) => (
             <div
               key={`${p.name}_${i}`}
@@ -4685,8 +4691,18 @@ function OverallLeaderboardPage({ user, isAdmin, setPage }) {
               <div style={{ flex: "1 1 auto", minWidth: 0, fontSize: isMobile ? 13.5 : 14.5, fontWeight: 700, color: "#eef2ff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                 {p.name}
               </div>
-              <div style={{ flex: "0 0 auto", fontSize: isMobile ? 12 : 13, color: "#9aa4c7", fontWeight: 600, minWidth: isMobile ? 70 : 110, textAlign: "right" }}>
-                {p.weeksPlayed} wks · 🏆 {p.weeksWon}
+              <div style={{ flex: "0 0 auto", fontSize: isMobile ? 12 : 13, color: "#9aa4c7", fontWeight: 600, minWidth: isMobile ? 62 : 110, textAlign: "right" }}>
+                {p.weeksPlayed} wks{!isMobile ? ` · 🏆 ${p.weeksWon}` : ""}
+              </div>
+              <div
+                title="Average finish - lower is better (e.g. 20% means top-20% finishes on average)"
+                style={{
+                  flex: "0 0 auto", minWidth: isMobile ? 56 : 78, textAlign: "right", fontWeight: 800,
+                  fontSize: isMobile ? 13 : 14.5,
+                  color: p.avgFinishPct <= 30 ? "#3ecf8e" : p.avgFinishPct <= 50 ? "#f0b429" : "#f0596b",
+                }}
+              >
+                {p.avgFinishPct.toFixed(1)}%
               </div>
             </div>
           ))}
