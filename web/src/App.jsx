@@ -4672,8 +4672,8 @@ function OverallLeaderboardPage({ user, isAdmin, setPage }) {
           <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 10 : 16, padding: isMobile ? "8px 12px" : "8px 16px", borderBottom: "1px solid #1f2a44", fontSize: 11, color: "#6b7797", fontWeight: 700, letterSpacing: .3 }}>
             <div style={{ flex: "0 0 auto", width: isMobile ? 32 : 40 }} />
             <div style={{ flex: "1 1 auto" }}>PLAYER</div>
-            <div style={{ flex: "0 0 auto", minWidth: isMobile ? 62 : 110, textAlign: "right" }}>PLAYED</div>
-            <div style={{ flex: "0 0 auto", minWidth: isMobile ? 56 : 78, textAlign: "right" }}>AVG FINISH</div>
+            <div style={{ flex: "0 0 auto", minWidth: isMobile ? 56 : 90, textAlign: "right" }}>PLAYED</div>
+            <div style={{ flex: "0 0 auto", minWidth: isMobile ? 56 : 78, textAlign: "right" }}>TOP %</div>
           </div>
           {list.map((p, i) => (
             <div
@@ -4691,18 +4691,18 @@ function OverallLeaderboardPage({ user, isAdmin, setPage }) {
               <div style={{ flex: "1 1 auto", minWidth: 0, fontSize: isMobile ? 13.5 : 14.5, fontWeight: 700, color: "#eef2ff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                 {p.name}
               </div>
-              <div style={{ flex: "0 0 auto", fontSize: isMobile ? 12 : 13, color: "#9aa4c7", fontWeight: 600, minWidth: isMobile ? 62 : 110, textAlign: "right" }}>
-                {p.weeksPlayed} wks{!isMobile ? ` · 🏆 ${p.weeksWon}` : ""}
+              <div style={{ flex: "0 0 auto", minWidth: isMobile ? 56 : 90, textAlign: "right" }}>
+                <div style={{ fontSize: isMobile ? 12 : 13, color: "#9aa4c7", fontWeight: 600 }}>{p.weeksPlayed} wks</div>
+                <div style={{ fontSize: isMobile ? 11 : 12, color: "#f0b429", fontWeight: 700, marginTop: 1 }}>🏆 {p.weeksWon}</div>
               </div>
               <div
-                title="Average finish - lower is better (e.g. 20% means top-20% finishes on average)"
+                title="On average, this player finishes in the top X% of that week's field - lower is better"
                 style={{
                   flex: "0 0 auto", minWidth: isMobile ? 56 : 78, textAlign: "right", fontWeight: 800,
-                  fontSize: isMobile ? 13 : 14.5,
-                  color: p.avgFinishPct <= 30 ? "#3ecf8e" : p.avgFinishPct <= 50 ? "#f0b429" : "#f0596b",
+                  fontSize: isMobile ? 13 : 14.5, color: "#b48aef",
                 }}
               >
-                {p.avgFinishPct.toFixed(1)}%
+                Top {Math.max(1, Math.round(p.avgFinishPct))}%
               </div>
             </div>
           ))}
