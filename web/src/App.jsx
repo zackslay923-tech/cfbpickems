@@ -4337,11 +4337,15 @@ async function findMySeason({ firstName, lastName, venmo }) {
   const weeks = await Promise.all(weekRefs.map(async (wr) => {
     const { rows, totalGames } = await computeWeekStandings(wr.year, wr.week);
     const mineRow = rows.find(r => r.email && wr.email && r.email === wr.email) || null;
+    // A tied-for-1st week (pot split) credits a fractional win - e.g. 0.5
+    // apiece for a two-way tie - instead of a full win each.
+    const coWinnerCount = rows.filter(r => r.isWinner).length || 1;
     return {
       year: wr.year, week: wr.week,
       points: mineRow?.points ?? null,
       totalGames,
       isWinner: !!mineRow?.isWinner,
+      winCredit: mineRow?.isWinner ? 1 / coWinnerCount : 0,
       winNote: mineRow?.winNote || null,
     };
   }));
@@ -4383,6 +4387,10 @@ async function computeAllTimePercentiles() {
   for (const { rows } of weekStandings) {
     const fieldSize = rows.length;
     if (!fieldSize) continue;
+    // A week with multiple co-winners (pot split) credits each of them a
+    // fractional win (e.g. 0.5 apiece for a two-way tie) instead of a full
+    // win each, so the total credited per week always sums to 1.
+    const coWinnerCount = rows.filter(x => x.isWinner).length || 1;
     for (const r of rows) {
       const nk = personKey(r);
       const vk = venmoKeyOf(r);
@@ -4393,7 +4401,7 @@ async function computeAllTimePercentiles() {
       if (!agg.has(root)) agg.set(root, { nameCounts: new Map(), weeksPlayed: 0, weeksWon: 0, ratioSum: 0, keys: new Set() });
       const a = agg.get(root);
       a.weeksPlayed += 1;
-      if (r.isWinner) a.weeksWon += 1;
+      if (r.isWinner) a.weeksWon += 1 / coWinnerCount;
       a.ratioSum += place / fieldSize;
       if (nk) a.keys.add(nk);
       if (vk) a.keys.add(vk);
@@ -4411,7 +4419,7 @@ async function computeAllTimePercentiles() {
         if (c > bestCount || (c === bestCount && nm.length > name.length)) { name = nm; bestCount = c; }
       }
       return {
-        name, weeksPlayed: a.weeksPlayed, weeksWon: a.weeksWon,
+        name, weeksPlayed: a.weeksPlayed, weeksWon: Math.round(a.weeksWon * 100) / 100,
         avgFinishPct: (a.ratioSum / a.weeksPlayed) * 100,
         keys: a.keys,
       };
@@ -4509,7 +4517,7 @@ function MySeasonPage({ user, isAdmin, setPage }) {
     }
   };
 
-  const weeksWon = weeks ? weeks.filter(w => w.isWinner).length : 0;
+  const weeksWon = weeks ? Math.round(weeks.reduce((sum, w) => sum + (w.winCredit || 0), 0) * 100) / 100 : 0;
 
   // Longest win streak runs over weeks actually played, in chronological
   // order - a bye doesn't break it, but a played-and-lost week does.
