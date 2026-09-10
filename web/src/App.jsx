@@ -4761,7 +4761,7 @@ function OverallLeaderboardPage({ user, isAdmin, setPage }) {
             <div style={{ flex: "1 1 auto", minWidth: 0 }}>PLAYER</div>
             <div style={{ flex: "0 0 auto", minWidth: isMobile ? 38 : 60, textAlign: "right" }}>PLAYED</div>
             <div style={{ flex: "0 0 auto", minWidth: isMobile ? 28 : 46, textAlign: "right" }}>WON</div>
-            <div style={{ flex: "0 0 auto", minWidth: isMobile ? 40 : 78, textAlign: "right" }}>TOP %</div>
+            <div style={{ flex: "0 0 auto", minWidth: isMobile ? 40 : 78, textAlign: "right" }}>AVG FINISH</div>
           </div>
           {list.map((p, i) => (
             <div
