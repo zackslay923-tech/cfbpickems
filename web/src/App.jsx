@@ -4360,7 +4360,12 @@ async function findMySeason({ firstName, lastName, venmo }) {
 // place) computeWeekStandings already sorts rows by - so a 5th out of 10
 // and an 8th out of 20 both mean "finished in the top half." Lower is
 // better. Ranked against everyone else who's played more than 5 weeks.
-async function computeAllTimePercentiles() {
+// yearFilter: null/omitted ranks all-time (weeksPlayed > 5, existing
+// behavior). A specific year ranks just that season - >=3 weeks played,
+// except when that year is the currently-live one, where anyone who's
+// played at all is included (a season in progress hasn't had a chance to
+// reach 3 weeks yet).
+async function computeAllTimePercentiles({ yearFilter = null, currentYear = null } = {}) {
   const snap = await getDocs(collection(db, "picks"));
   const allPicks = [];
   snap.forEach(d => allPicks.push(d.data()));
@@ -4375,6 +4380,7 @@ async function computeAllTimePercentiles() {
   const weekKeys = new Map();
   for (const p of allPicks) {
     if (!hasWeekValue(p.year) || !hasWeekValue(p.week)) continue;
+    if (yearFilter != null && Number(p.year) !== Number(yearFilter)) continue;
     const wk = `${p.year}_${p.week}`;
     if (!weekKeys.has(wk)) weekKeys.set(wk, { year: Number(p.year), week: Number(p.week) });
   }
@@ -4432,17 +4438,20 @@ async function computeAllTimePercentiles() {
         keys: a.keys,
         wonWeeks: a.wonWeeks.sort((x, y) => y.year - x.year || y.week - x.week),
       };
-    })
-    .filter(p => p.weeksPlayed > 5)
+    });
+
+  const minPlayed = yearFilter == null ? 5 : (currentYear != null && Number(yearFilter) === Number(currentYear)) ? 0 : 2;
+  const filtered = list
+    .filter(p => p.weeksPlayed > minPlayed)
     .sort((a, b) => a.avgFinishPct - b.avgFinishPct);
 
-  const n = list.length;
-  list.forEach((p, i) => {
+  const n = filtered.length;
+  filtered.forEach((p, i) => {
     p.rank = i + 1;
     p.percentile = n > 1 ? Math.round(100 * (1 - (p.rank - 1) / (n - 1))) : 100;
   });
 
-  return list;
+  return filtered;
 }
 
 // Small horizontal bar showing correct-picks percentage, color-graded from
@@ -4647,14 +4656,18 @@ function OverallLeaderboardPage({ user, isAdmin, setPage }) {
   const [error, setError] = useState("");
   const [selected, setSelected] = useState(null); // the row whose won-weeks modal is open
 
-  // Special-week display names ("Conference Champs", "Bowls", etc.), same
-  // source My Season and the Leaderboard's Year/Week selector read from.
+  // Special-week display names ("Conference Champs", "Bowls", etc.) and the
+  // list of seasons with anything to show, same source the Leaderboard's
+  // Year/Week selector reads from.
   const [weekLabels, setWeekLabels] = useState({});
+  const [seasonYears, setSeasonYears] = useState([]);
   useEffect(() => {
     (async () => {
       try {
         const s = await getDoc(doc(db, "config", "seasons"));
-        setWeekLabels(s.exists() ? (s.data().weekLabels || {}) : {});
+        const d = s.exists() ? s.data() : {};
+        setWeekLabels(d.weekLabels || {});
+        setSeasonYears(Array.isArray(d.years) ? d.years : []);
       } catch (err) {
         console.error("config/seasons load failed", err);
       }
@@ -4662,28 +4675,69 @@ function OverallLeaderboardPage({ user, isAdmin, setPage }) {
   }, []);
   const weekLabelFor = (y, w) => weekLabels[`${y}_${w}`] || `Week ${w}`;
 
+  const [live, setLive] = useState({ year: null, week: null });
   useEffect(() => {
+    const unsub = onSnapshot(doc(db, "config", "live"), (s) => setLive(s.data() || {}));
+    return () => unsub();
+  }, []);
+  const currentYear = hasWeekValue(live?.year) ? Number(live.year) : null;
+  const yearsAvailable = useMemo(() => {
+    const set = new Set(seasonYears.map(Number));
+    if (currentYear != null) set.add(currentYear);
+    return [...set].sort((a, b) => b - a);
+  }, [seasonYears, currentYear]);
+
+  // "overall" ranks every season combined; a specific year defaults in once
+  // the live year is known, so first paint shows this season's standings.
+  const [selectedYear, setSelectedYear] = useState(null);
+  const seededYearRef = useRef(false);
+  useEffect(() => {
+    if (seededYearRef.current) return;
+    if (currentYear != null) { setSelectedYear(currentYear); seededYearRef.current = true; }
+  }, [currentYear]);
+
+  useEffect(() => {
+    if (selectedYear === null && !seededYearRef.current) return; // wait for the default to seed
     let cancelled = false;
+    setStatus("loading");
     (async () => {
       try {
-        const result = await computeAllTimePercentiles();
+        const result = await computeAllTimePercentiles({ yearFilter: selectedYear, currentYear });
         if (!cancelled) { setList(result); setStatus("done"); }
       } catch (err) {
         if (!cancelled) { setError(err?.message || "Something went wrong loading the leaderboard."); setStatus("error"); }
       }
     })();
     return () => { cancelled = true; };
-  }, []);
+  }, [selectedYear, currentYear]);
 
   const medal = (rank) => rank === 1 ? "🥇" : rank === 2 ? "🥈" : rank === 3 ? "🥉" : `#${rank}`;
   const medalColor = (rank) => rank === 1 ? "#f0b429" : rank === 2 ? "#cbd5e1" : rank === 3 ? "#cd7f32" : "#6b7797";
+  const minPlayedLabel = selectedYear === null ? "more than 5 weeks played"
+    : (currentYear != null && selectedYear === currentYear) ? "played at least once this year"
+    : "at least 3 weeks played that year";
 
   return (<Container maxWidth={760} padding={isMobile ? 12 : 24}>
     <Header user={user} isAdmin={isAdmin} setPage={setPage} />
     <Card style={{ padding: isMobile ? 12 : 16 }}>
-      <h2 style={{ margin: 0, fontSize: isMobile ? 20 : 24 }}>🏆 Overall Leaderboard</h2>
-      <p style={{ margin: "8px 0 0", fontSize: isMobile ? 12 : 13, color: "#9aa4c7", lineHeight: 1.45 }}>
-        Ranked by average finish across every week played — a 5th out of 10 counts the same as a 10th out of 20 (both mean you finished ahead of half the field), so it's fair across seasons with different-sized pools. Only players with more than 5 weeks played are ranked.
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+        <h2 style={{ margin: 0, fontSize: isMobile ? 20 : 24 }}>🏆 Overall Leaderboard</h2>
+        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "#9aa4c7" }}>
+          Season
+          <select
+            value={selectedYear === null ? "overall" : selectedYear}
+            onChange={e => setSelectedYear(e.target.value === "overall" ? null : Number(e.target.value))}
+            style={{ ...inputStyle, padding: "8px 10px", fontSize: 13.5 }}
+          >
+            <option value="overall">Overall (all-time)</option>
+            {yearsAvailable.map(y => (
+              <option key={y} value={y}>{y}{currentYear != null && y === currentYear ? " (current)" : ""}</option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <p style={{ margin: "10px 0 0", fontSize: isMobile ? 12 : 13, color: "#9aa4c7", lineHeight: 1.45 }}>
+        Ranked by average finish across every week played — a 5th out of 10 counts the same as a 10th out of 20 (both mean you finished ahead of half the field), so it's fair across seasons with different-sized pools. Only players with {minPlayedLabel} are ranked.
       </p>
 
       {status === "loading" && (
@@ -4696,7 +4750,7 @@ function OverallLeaderboardPage({ user, isAdmin, setPage }) {
 
       {status === "done" && list.length === 0 && (
         <div style={{ marginTop: 16, padding: "10px 12px", borderRadius: 10, background: "rgba(240,180,41,.1)", border: "1px solid rgba(240,180,41,.3)", color: "#f0b429", fontSize: 13 }}>
-          Nobody has played more than 5 weeks yet.
+          Nobody has {minPlayedLabel} yet.
         </div>
       )}
 
