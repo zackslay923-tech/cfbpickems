@@ -4380,17 +4380,18 @@ async function computeAllTimePercentiles() {
   }
 
   const weekStandings = await Promise.all(
-    [...weekKeys.values()].map(({ year, week }) => computeWeekStandings(year, week))
+    [...weekKeys.values()].map(async ({ year, week }) => ({ year, week, ...(await computeWeekStandings(year, week)) }))
   );
 
   const agg = new Map(); // dsu root -> aggregate
-  for (const { rows } of weekStandings) {
+  for (const { year, week, rows } of weekStandings) {
     const fieldSize = rows.length;
     if (!fieldSize) continue;
     // A week with multiple co-winners (pot split) credits each of them a
     // fractional win (e.g. 0.5 apiece for a two-way tie) instead of a full
     // win each, so the total credited per week always sums to 1.
-    const coWinnerCount = rows.filter(x => x.isWinner).length || 1;
+    const winnerNames = rows.filter(x => x.isWinner).map(x => x.name);
+    const coWinnerCount = winnerNames.length || 1;
     for (const r of rows) {
       const nk = personKey(r);
       const vk = venmoKeyOf(r);
@@ -4398,10 +4399,17 @@ async function computeAllTimePercentiles() {
       if (!key) continue;
       const root = dsu.find(key);
       const place = 1 + rows.filter(x => x.points > r.points).length;
-      if (!agg.has(root)) agg.set(root, { nameCounts: new Map(), weeksPlayed: 0, weeksWon: 0, ratioSum: 0, keys: new Set() });
+      if (!agg.has(root)) agg.set(root, { nameCounts: new Map(), weeksPlayed: 0, weeksWon: 0, ratioSum: 0, keys: new Set(), wonWeeks: [] });
       const a = agg.get(root);
       a.weeksPlayed += 1;
-      if (r.isWinner) a.weeksWon += 1 / coWinnerCount;
+      if (r.isWinner) {
+        a.weeksWon += 1 / coWinnerCount;
+        a.wonWeeks.push({
+          year, week,
+          coWinners: winnerNames.filter(n => n !== r.name),
+          winNote: r.winNote || null,
+        });
+      }
       a.ratioSum += place / fieldSize;
       if (nk) a.keys.add(nk);
       if (vk) a.keys.add(vk);
@@ -4422,6 +4430,7 @@ async function computeAllTimePercentiles() {
         name, weeksPlayed: a.weeksPlayed, weeksWon: Math.round(a.weeksWon * 100) / 100,
         avgFinishPct: (a.ratioSum / a.weeksPlayed) * 100,
         keys: a.keys,
+        wonWeeks: a.wonWeeks.sort((x, y) => y.year - x.year || y.week - x.week),
       };
     })
     .filter(p => p.weeksPlayed > 5)
@@ -4636,6 +4645,22 @@ function OverallLeaderboardPage({ user, isAdmin, setPage }) {
   const [status, setStatus] = useState("loading"); // loading | done | error
   const [list, setList] = useState([]);
   const [error, setError] = useState("");
+  const [selected, setSelected] = useState(null); // the row whose won-weeks modal is open
+
+  // Special-week display names ("Conference Champs", "Bowls", etc.), same
+  // source My Season and the Leaderboard's Year/Week selector read from.
+  const [weekLabels, setWeekLabels] = useState({});
+  useEffect(() => {
+    (async () => {
+      try {
+        const s = await getDoc(doc(db, "config", "seasons"));
+        setWeekLabels(s.exists() ? (s.data().weekLabels || {}) : {});
+      } catch (err) {
+        console.error("config/seasons load failed", err);
+      }
+    })();
+  }, []);
+  const weekLabelFor = (y, w) => weekLabels[`${y}_${w}`] || `Week ${w}`;
 
   useEffect(() => {
     let cancelled = false;
@@ -4703,7 +4728,16 @@ function OverallLeaderboardPage({ user, isAdmin, setPage }) {
               <div style={{ flex: "0 0 auto", minWidth: isMobile ? 38 : 60, textAlign: "right", fontSize: isMobile ? 11.5 : 13, color: "#9aa4c7", fontWeight: 600, whiteSpace: "nowrap" }}>
                 {p.weeksPlayed} wks
               </div>
-              <div style={{ flex: "0 0 auto", minWidth: isMobile ? 28 : 46, textAlign: "right", fontSize: isMobile ? 12 : 13, color: "#f0b429", fontWeight: 700, whiteSpace: "nowrap" }}>
+              <div
+                onClick={() => { if (p.weeksWon > 0) setSelected(p); }}
+                title={p.weeksWon > 0 ? "See which weeks" : undefined}
+                style={{
+                  flex: "0 0 auto", minWidth: isMobile ? 28 : 46, textAlign: "right", fontSize: isMobile ? 12 : 13,
+                  color: "#f0b429", fontWeight: 700, whiteSpace: "nowrap",
+                  cursor: p.weeksWon > 0 ? "pointer" : "default",
+                  textDecoration: p.weeksWon > 0 ? "underline" : "none", textDecorationStyle: "dotted", textUnderlineOffset: 3,
+                }}
+              >
                 🏆 {p.weeksWon}
               </div>
               <div
@@ -4720,6 +4754,46 @@ function OverallLeaderboardPage({ user, isAdmin, setPage }) {
         </div>
       )}
     </Card>
+
+    {selected && (
+      <ModalOverlay>
+        <Card style={{ padding: isMobile ? 14 : 20 }}>
+          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
+            <div>
+              <h3 style={{ margin: 0, fontSize: isMobile ? 17 : 19 }}>🏆 {selected.name}</h3>
+              <div style={{ marginTop: 4, fontSize: 12.5, color: "#9aa4c7" }}>
+                {selected.weeksWon} week{selected.weeksWon === 1 ? "" : "s"} won
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setSelected(null)}
+              style={{ background: "transparent", border: "1px solid #2a3655", color: "#cfd8f0", borderRadius: 8, width: 30, height: 30, cursor: "pointer", fontSize: 15, lineHeight: 1 }}
+            >
+              ✕
+            </button>
+          </div>
+
+          <div style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 8, maxHeight: "60vh", overflowY: "auto" }}>
+            {selected.wonWeeks.map((w, i) => (
+              <div key={`${w.year}_${w.week}`} style={{ padding: "10px 12px", borderRadius: 10, background: "#0e1730", border: "1px solid #1f2a44" }}>
+                <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
+                  <span style={{ fontWeight: 700, fontSize: isMobile ? 13.5 : 14.5, color: "#eef2ff" }}>{w.year} {weekLabelFor(w.year, w.week)}</span>
+                  {w.coWinners.length > 0 && (
+                    <span style={{ fontSize: 11.5, color: "#f0b429", fontWeight: 600, whiteSpace: "nowrap" }}>
+                      split with {w.coWinners.join(", ")}
+                    </span>
+                  )}
+                </div>
+                {w.winNote && (
+                  <div style={{ marginTop: 3, fontSize: 11.5, color: "#6b7797" }}>{w.winNote}</div>
+                )}
+              </div>
+            ))}
+          </div>
+        </Card>
+      </ModalOverlay>
+    )}
   </Container>);
 }
 
