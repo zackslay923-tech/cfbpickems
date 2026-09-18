@@ -6163,18 +6163,7 @@ function MissingTab({ roster, loaded, notifiedNameKeys, notifiedPlayerIds, submi
                     : p.emailOptOut && <span style={{ marginLeft:6, fontSize:11, color:"#f0b429" }}>(opted out)</span>}
                 </td>
                 <td style={{ padding:"8px 10px" }}>
-                  {(() => {
-                    const digits = String(p.phone || "").replace(/\D/g, "");
-                    if (digits.length < 10) return <span style={{ opacity:.9 }}>{p.phone || "—"}</span>;
-                    const num = digits.length === 10 ? `+1${digits}` : `+${digits}`;
-                    const body = `Hey ${p.firstName || "there"}, reminder to get your CFB Pick'em picks in for Week ${week}! https://cfbpickems.web.app`;
-                    return (
-                      <a href={`sms:${num}?&body=${encodeURIComponent(body)}`} title="Opens your Messages app with a reminder ready to send"
-                         style={{ color:"#6aa2ff", textDecoration:"underline", whiteSpace:"nowrap" }}>
-                        💬 {p.phone}
-                      </a>
-                    );
-                  })()}
+                  <PhoneTextLink phone={p.phone} firstName={p.firstName} week={week} />
                 </td>
                 <td style={{ padding:"8px 10px", opacity:.9 }}>{p.venmo}</td>
               </tr>
@@ -6191,6 +6180,21 @@ function MissingTab({ roster, loaded, notifiedNameKeys, notifiedPlayerIds, submi
 
 // Devices tab: every push-notification device - rename, block, message,
 // tie to a player, or clean up stale ones.
+// Tappable phone number that opens the Messages app with a reminder ready to
+// send. Shows plain text when there's no usable number.
+function PhoneTextLink({ phone, firstName, week }) {
+  const digits = String(phone || "").replace(/\D/g, "");
+  if (digits.length < 10) return <span style={{ opacity:.9 }}>{phone || "—"}</span>;
+  const num = digits.length === 10 ? `+1${digits}` : `+${digits}`;
+  const body = `Hey ${firstName || "there"}, reminder to get your CFB Pick'em picks in${hasWeekValue(week) ? ` for Week ${week}` : " this week"}! https://cfbpickems.web.app`;
+  return (
+    <a href={`sms:${num}?&body=${encodeURIComponent(body)}`} title="Opens your Messages app with a reminder ready to send"
+       style={{ color:"#6aa2ff", textDecoration:"underline", whiteSpace:"nowrap" }}>
+      💬 {phone}
+    </a>
+  );
+}
+
 function DevicesTab({ pushDevices, roster, rosterOptions, assignDeviceToPlayer, submittedRoots, setMsg, isMobile }) {
   const deviceBtnHalf = isMobile ? { flexBasis: "calc(50% - 4px)" } : undefined;
 
@@ -6237,7 +6241,7 @@ function DevicesTab({ pushDevices, roster, rosterOptions, assignDeviceToPlayer, 
   // week - matched the same way notified-matching works (assignedPlayerId
   // first, else by name), then checked against the shared submittedRoots
   // set, instead of a separate per-week token/name query.
-  const deviceSubmitted = (d) => {
+  const deviceRow = (d) => {
     let row = null;
     if (d.assignedPlayerId) row = roster.rows.find(r => r.playerId === d.assignedPlayerId);
     if (!row && d.name) {
@@ -6245,6 +6249,10 @@ function DevicesTab({ pushDevices, roster, rosterOptions, assignDeviceToPlayer, 
       const nk = personKey({ firstName: parts[0], lastName: parts.slice(1).join(" ") });
       if (nk) row = roster.rows.find(r => (r.aliasKeys || []).includes(nk));
     }
+    return row;
+  };
+  const deviceSubmitted = (d) => {
+    const row = deviceRow(d);
     if (!row) return false;
     return [...row.dsuRoots].some(root => submittedRoots.has(root));
   };
@@ -6361,6 +6369,14 @@ function DevicesTab({ pushDevices, roster, rosterOptions, assignDeviceToPlayer, 
                         {d.isAdmin === true && <StatusBadge tone="primary">Admin</StatusBadge>}
                       </div>
                     )}
+                    {(() => {
+                      const person = deviceRow(d);
+                      return person?.phone ? (
+                        <div style={{ fontSize:13, marginTop:2 }}>
+                          <PhoneTextLink phone={person.phone} firstName={person.firstName} />
+                        </div>
+                      ) : null;
+                    })()}
                     <div style={{ fontSize:11, color:"#9aa4c7", fontFamily:"monospace" }}>{d.token.slice(0, 24)}&hellip;</div>
                     <div style={{ fontSize:11, color:"#9aa4c7" }}>
                       {d.device ? `${d.device} · ` : ""}Registered: {d.createdAt?.toDate ? d.createdAt.toDate().toLocaleString("en-US", { month:"short", day:"numeric", hour:"numeric", minute:"2-digit" }) : "unknown"}
