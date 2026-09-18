@@ -49,11 +49,11 @@ import React, { useEffect, useState, useRef , useMemo } from "react";
 import TeamLogo from "./components/TeamLogo";
 import Scorebug from "./components/Scorebug"; // SCOREBUG import
 import useScoreboard from "./lib/useScoreboard";
-import AdminPicksPage from "./components/AdminPicksPage";
 import BulkImportPicksPreview from "./components/BulkImportPicksPreview";
-import { db, googleLogin, logout, onAuth, enablePushNotifications } from "./firebase";
+import { db, storage, googleLogin, logout, onAuth, enablePushNotifications } from "./firebase";
 
-import { onSnapshot, collection, doc, documentId, getDoc, getDocs, setDoc, addDoc, deleteDoc, serverTimestamp, writeBatch, query, where , runTransaction } from "firebase/firestore";
+import { onSnapshot, collection, doc, documentId, getDoc, getDocs, setDoc, addDoc, updateDoc, deleteDoc, serverTimestamp, Timestamp, writeBatch, query, where, orderBy, runTransaction, arrayUnion, arrayRemove } from "firebase/firestore";
+import { ref as storageRef, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 
 
 /* === Fit font helper (for header + winners) === */
@@ -180,6 +180,70 @@ function LoadingGate({ ready, children, label = "Loading…" }) {
 }
 function Header({ user, isAdmin, setPage }) {
   const isMobile = useIsMobile();
+  const [chatOpen, setChatOpen] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  // One-time "new feature" banner, shown to every device (not just mobile,
+  // unlike the install/notification prompts below) the first time the app
+  // loads after this shipped. Previously announced weekly chat; now
+  // repurposed for the new partial-slate submission option - a fresh
+  // localStorage key so it reaches everyone again, including people who
+  // already dismissed the chat announcement.
+  const [showAnnounceBanner, setShowAnnounceBanner] = useState(() => {
+    if (typeof window === "undefined") return false;
+    try { return localStorage.getItem("partialSlateAnnounceDismissedForever") !== "1"; } catch (e) { return false; }
+  });
+  function dismissAnnounceBanner() {
+    try { localStorage.setItem("partialSlateAnnounceDismissedForever", "1"); } catch (e) {}
+    setShowAnnounceBanner(false);
+  }
+  // Dynamic day/time for the banner's copy below - computed live from the
+  // real schedule (the same "later day-group's earliest kickoff" PicksPage
+  // uses for its own partial-slate deadline) so it can't go stale the way a
+  // hardcoded time would the moment a game gets added or pulled from the
+  // slate. Only subscribes while the banner is still showing - no point
+  // keeping listeners open for everyone who's already dismissed it.
+  const [bannerLive, setBannerLive] = useState({ year: null, week: null });
+  useEffect(() => {
+    if (!showAnnounceBanner) return;
+    const unsub = onSnapshot(doc(db, "config", "live"), (s) => {
+      const d = s.data() || {};
+      setBannerLive({ year: Number(d.year), week: Number(d.week) });
+    });
+    return () => unsub();
+  }, [showAnnounceBanner]);
+  const [bannerGames, setBannerGames] = useState([]);
+  useEffect(() => {
+    if (!showAnnounceBanner) return;
+    const { year, week } = bannerLive;
+    if (!Number.isFinite(year) || !Number.isFinite(week)) { setBannerGames([]); return; }
+    const unsub = onSnapshot(
+      query(collection(db, "games"), where("year", "==", year), where("week", "==", week)),
+      (snap) => setBannerGames(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
+      () => setBannerGames([])
+    );
+    return () => unsub();
+  }, [showAnnounceBanner, bannerLive.year, bannerLive.week]);
+  const bannerSchedule = useMemo(() => {
+    const needsIncludedFlag = bannerGames.some(g => Object.prototype.hasOwnProperty.call(g, "included"));
+    const list = needsIncludedFlag ? bannerGames.filter(g => !!g.included) : bannerGames;
+    const groups = groupGamesByDate(list, { timeZone: "America/New_York" });
+    if (groups.length < 2) return null; // nothing later this week to describe
+    const laterDates = groups.slice(1).flatMap(grp => grp.items)
+      .map(g => kickoffDate(g))
+      .filter(d => d instanceof Date && !isNaN(d))
+      .sort((a, b) => a - b);
+    const earliestLater = laterDates[0];
+    if (!earliestLater) return null;
+    const firstDate = kickoffDate(groups[0]?.items?.[0]);
+    const dayFmt = new Intl.DateTimeFormat("en-US", { weekday: "long", timeZone: "America/New_York" });
+    const timeFmt = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/New_York" });
+    const fmtTime = (d) => timeFmt.format(d).toLowerCase().replace(/\s/g, "").replace(":00", "");
+    return {
+      firstDay: (firstDate instanceof Date && !isNaN(firstDate)) ? dayFmt.format(firstDate) : "kickoff",
+      laterDay: dayFmt.format(earliestLater),
+      laterTime: fmtTime(earliestLater),
+    };
+  }, [bannerGames]);
   const onIOS = isIOSDevice();
   const onAndroid = isAndroidDevice();
   const showIOSSteps = onIOS || !onAndroid;
@@ -306,46 +370,112 @@ function Header({ user, isAdmin, setPage }) {
     enablePushNotifications({ isAdmin }).catch(() => {});
   }, [notifState, isAdmin]);
 
+  // Same link set either way - inline on desktop, collapsed into the
+  // hamburger dropdown on mobile - so there's one definition to keep in sync
+  // instead of two copies of every onClick. linkStyle differs per context
+  // (compact inline links on desktop vs. full-width tappable rows in the
+  // mobile dropdown) since both reuse this same function.
+  const renderNavLinks = (linkStyle) => (
+    <>
+      <a href="#" style={linkStyle} onClick={(e)=>{e.preventDefault(); history.pushState(null, "", "/picks"); setPage("picks");}}>Picks</a>
+      <a href="#" style={linkStyle} onClick={(e)=>{e.preventDefault(); history.pushState(null, "", "/leader"); setPage("leader");}}>Leaderboard</a>
+      <a href="#" style={linkStyle} onClick={(e)=>{e.preventDefault(); history.pushState(null, "", "/myseason"); setPage("myseason");}}>My Season</a>
+      <a href="#" style={linkStyle} onClick={(e)=>{e.preventDefault(); history.pushState(null, "", "/overall"); setPage("overall");}}>Overall</a>
+      {isAdmin && <a href="#" style={linkStyle} onClick={(e)=>{e.preventDefault(); history.pushState(null, "", "/admin"); setPage("admin");}}>Admin</a>}
+      {isMobile && !isStandaloneMode() && (
+        <a href="#" style={linkStyle} onClick={(e)=>{e.preventDefault(); setShowInstallModal(true);}} title="Add to home screen" aria-label="Add to home screen">📲 Add to home screen</a>
+      )}
+      {isMobile && notifState !== "on" && (
+        <a href="#" style={linkStyle} onClick={(e)=>{e.preventDefault(); setShowNotifModal(true);}} title="Enable notifications" aria-label="Enable notifications">🔔 Enable notifications</a>
+      )}
+      {isMobile && notifState === "on" && (
+        <a href="#" style={linkStyle} onClick={async (e)=>{e.preventDefault();
+          let t = null; try { t = localStorage.getItem("pushToken"); } catch (err) {}
+          if (t) {
+            alert(`Notifications are ON for this device.\n\nDevice ID: ${t.slice(0, 24)}…\n\nShow this to Zack so he can match it in Manage Devices and label it as yours.`);
+            return;
+          }
+          // No token cached - retry registration right now, out loud this
+          // time, so a real failure (unsupported browser, iOS without
+          // home-screen install, etc.) is visible instead of silently
+          // swallowed like the background self-heal attempt.
+          try {
+            const token = await enablePushNotifications({ isAdmin });
+            alert(`Notifications are ON for this device.\n\nDevice ID: ${token.slice(0, 24)}…\n\nShow this to Zack so he can match it in Manage Devices and label it as yours.`);
+          } catch (err) {
+            alert("Still couldn't register this device for notifications.\n\nReason: " + ((err && err.message) ? err.message : String(err)) + "\n\nIf you're on an iPhone, this usually means the app needs to be added to your home screen first (Share > Add to Home Screen), then opened from there.");
+          }
+        }} title="Notifications are on — tap to see your device ID" aria-label="Notification status">🔔✅ Notifications on</a>
+      )}
+      {user && <a href="#" style={linkStyle} onClick={(e)=>{e.preventDefault(); logout();}}>Sign out</a>}
+    </>
+  );
+
   return (
     <>
-    <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", rowGap: 8, marginBottom: 16 }}>
-      <h1 style={{ margin: 0, fontSize: 20, userSelect:"none" }} onClick={handleLogoTap}>CFB Pick'em</h1>
-      <nav style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        <a href="#" onClick={(e)=>{e.preventDefault();
-
-    history.pushState(null, "", "/picks"); setPage("picks");}}>Picks</a>
-        <a href="#" onClick={(e)=>{e.preventDefault(); history.pushState(null, "", "/leader"); setPage("leader");}}>Leaderboard</a>
-        <a href="#" onClick={(e)=>{e.preventDefault(); history.pushState(null, "", "/myseason"); setPage("myseason");}}>My Season</a>
-        <a href="#" onClick={(e)=>{e.preventDefault(); history.pushState(null, "", "/overall"); setPage("overall");}}>Overall</a>
-        {isAdmin && <a href="#" onClick={(e)=>{e.preventDefault(); history.pushState(null, "", "/admin"); setPage("admin");}}>Admin</a>}
-        {isMobile && !isStandaloneMode() && (
-          <a href="#" onClick={(e)=>{e.preventDefault(); setShowInstallModal(true);}} title="Add to home screen" aria-label="Add to home screen">📲</a>
+    <div style={{
+      display: "flex", flexDirection: "column",
+      position: "sticky", top: 0, zIndex: 50, background: "#0b1220", padding: "10px 0", marginBottom: 16,
+      borderBottom: "1px solid #1f2a44",
+    }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <Row style={{ gap: 10, alignItems: "center" }}>
+          <h1 style={{ margin: 0, fontSize: 20, userSelect:"none" }} onClick={handleLogoTap}>CFB Pick'em</h1>
+          <WeekChat isAdmin={isAdmin} open={chatOpen} onOpenChange={setChatOpen} />
+        </Row>
+        {isMobile ? (
+          <button
+            type="button"
+            onClick={() => setMobileMenuOpen(v => !v)}
+            aria-label="Menu"
+            aria-expanded={mobileMenuOpen}
+            style={{ background: "transparent", border: "none", color: "#eef2ff", fontSize: 22, cursor: "pointer", padding: 4, lineHeight: 1 }}
+          >
+            {mobileMenuOpen ? "✕" : "☰"}
+          </button>
+        ) : (
+          <nav style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {renderNavLinks()}
+          </nav>
         )}
-        {isMobile && notifState !== "on" && (
-          <a href="#" onClick={(e)=>{e.preventDefault(); setShowNotifModal(true);}} title="Enable notifications" aria-label="Enable notifications">🔔</a>
-        )}
-        {isMobile && notifState === "on" && (
-          <a href="#" onClick={async (e)=>{e.preventDefault();
-            let t = null; try { t = localStorage.getItem("pushToken"); } catch (err) {}
-            if (t) {
-              alert(`Notifications are ON for this device.\n\nDevice ID: ${t.slice(0, 24)}…\n\nShow this to Zack so he can match it in Manage Devices and label it as yours.`);
-              return;
-            }
-            // No token cached - retry registration right now, out loud this
-            // time, so a real failure (unsupported browser, iOS without
-            // home-screen install, etc.) is visible instead of silently
-            // swallowed like the background self-heal attempt.
-            try {
-              const token = await enablePushNotifications({ isAdmin });
-              alert(`Notifications are ON for this device.\n\nDevice ID: ${token.slice(0, 24)}…\n\nShow this to Zack so he can match it in Manage Devices and label it as yours.`);
-            } catch (err) {
-              alert("Still couldn't register this device for notifications.\n\nReason: " + ((err && err.message) ? err.message : String(err)) + "\n\nIf you're on an iPhone, this usually means the app needs to be added to your home screen first (Share > Add to Home Screen), then opened from there.");
-            }
-          }} title="Notifications are on — tap to see your device ID" aria-label="Notification status">🔔✅</a>
-        )}
-        {user && <a href="#" onClick={(e)=>{e.preventDefault(); logout();}}>Sign out</a>}
-      </nav>
+      </div>
+      {isMobile && mobileMenuOpen && (
+        <nav
+          onClick={() => setMobileMenuOpen(false)}
+          style={{
+            display: "flex", flexDirection: "column", gap: 2, marginTop: 10, paddingTop: 10, borderTop: "1px solid #1f2a44",
+          }}
+        >
+          {renderNavLinks({ padding: "10px 4px", fontSize: 15, borderRadius: 8, display: "block" })}
+        </nav>
+      )}
     </div>
+    {showAnnounceBanner && (
+      <div style={{
+        display:"flex", alignItems:"flex-start", justifyContent:"space-between", gap:10,
+        background:"#1c2b52", border:"1px solid #2a4fb8", borderRadius:10,
+        padding:"9px 12px", marginBottom:14, fontSize:13, color:"#eef2ff", lineHeight:1.45
+      }}>
+        <div>
+          <div>
+            <b>⏳ New this week</b> — {bannerSchedule ? `${bannerSchedule.laterDay}'s` : "later"} picks stay editable until{" "}
+            {bannerSchedule ? `${bannerSchedule.laterTime} on ${bannerSchedule.laterDay}` : "their kickoff"}, even after new submissions lock at{" "}
+            {bannerSchedule ? `${bannerSchedule.firstDay}'s` : "the first"} kickoff.
+          </div>
+          <div style={{ marginTop:8 }}>
+            <b>Can't finish by {bannerSchedule ? bannerSchedule.firstDay : "then"}?</b> Opt into a Partial Slate to submit{" "}
+            {bannerSchedule ? `${bannerSchedule.firstDay}'s` : "those"} picks now and fill in {bannerSchedule ? `${bannerSchedule.laterDay}'s` : "the rest"} later.
+          </div>
+        </div>
+        <button
+          onClick={dismissAnnounceBanner}
+          aria-label="Dismiss"
+          style={{ background:"transparent", border:"none", color:"#cfd8f0", cursor:"pointer", fontSize:16, flexShrink:0, padding:2, lineHeight:1 }}
+        >
+          ✕
+        </button>
+      </div>
+    )}
     {showWhatsNewModal && (
       <div style={{
         position:"fixed", inset:0, zIndex:100, background:"rgba(4,7,15,.72)",
@@ -479,10 +609,16 @@ function Header({ user, isAdmin, setPage }) {
     </>
   );
 }
-function Field({ label, children }) {
-  return <label style={{ display: "flex", flexDirection: "column", gap: 8, fontSize: 14 }}>{label}{children}</label>;
+function Field({ label, children, style }) {
+  return <label style={{ display: "flex", flexDirection: "column", gap: 8, fontSize: 14, ...style }}>{label}{children}</label>;
 }
-const inputStyle = { background:"#0c1426", color:"#fff", border:"1px solid #1f2a44", padding:"10px 12px", borderRadius:10 };
+// fontSize:16 isn't styling preference - below 16px, iOS Safari auto-zooms
+// the page in when a text input is focused (its heuristic for "this text
+// would be too small to read once the keyboard covers half the screen").
+// Individual inputs below still override this smaller where that zoom
+// doesn't apply (admin-only compact fields), but this is the shared default
+// so no new input silently reintroduces the zoom.
+const inputStyle = { background:"#0c1426", color:"#fff", border:"1px solid #1f2a44", padding:"10px 12px", borderRadius:10, fontSize:16 };
 
 // --- Admin UI helpers: consistent button semantics + section grouping ---
 const ADMIN_TONES = {
@@ -533,6 +669,69 @@ function StatusBadge({ tone = "neutral", children, style }) {
     }}>
       {children}
     </span>
+  );
+}
+
+// iPhone-Settings-style on/off row: label (+ optional description) on the
+// left, a sliding switch on the right, the whole row tappable. Replaces the
+// old pattern of two same-purpose buttons (or one button whose label swaps
+// "Lock"/"Unlock") plus a separate status badge - the switch position IS the
+// status, so nothing else has to restate it.
+function AdminToggleRow({ label, description, checked, onChange, disabled, divider = true }) {
+  return (
+    <div
+      role="switch"
+      aria-checked={!!checked}
+      aria-disabled={!!disabled}
+      tabIndex={disabled ? -1 : 0}
+      onClick={() => { if (!disabled) onChange(!checked); }}
+      onKeyDown={(e) => { if (!disabled && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); onChange(!checked); } }}
+      style={{
+        display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16,
+        padding: "10px 2px", cursor: disabled ? "default" : "pointer",
+        opacity: disabled ? 0.5 : 1,
+        borderTop: divider ? "1px solid #1f2a44" : "none",
+      }}
+    >
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: 14, fontWeight: 600, color: "#eef2ff" }}>{label}</div>
+        {description && <div style={{ fontSize: 12.5, color: "#9aa4c7", marginTop: 2, lineHeight: 1.35 }}>{description}</div>}
+      </div>
+      <span
+        style={{
+          flexShrink: 0, position: "relative", width: 46, height: 27, borderRadius: 999,
+          background: checked ? "#30d158" : "#3a4568",
+          transition: "background 150ms ease",
+        }}
+      >
+        <span style={{
+          position: "absolute", top: 2, left: checked ? 21 : 2, width: 23, height: 23, borderRadius: "50%",
+          background: "#fff", boxShadow: "0 1px 3px rgba(0,0,0,.4)", transition: "left 150ms ease",
+        }} />
+      </span>
+    </div>
+  );
+}
+
+// Same row layout as AdminToggleRow (label + description on the left,
+// divider on top) but for a one-shot action instead of a persistent on/off
+// setting - the right side is whatever control(s) the caller passes in
+// (typically a button, sometimes a couple of inputs) rather than a switch.
+function AdminActionRow({ label, description, divider = true, children }) {
+  return (
+    <div style={{
+      display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16,
+      padding: "10px 2px", flexWrap: "wrap",
+      borderTop: divider ? "1px solid #1f2a44" : "none",
+    }}>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: 14, fontWeight: 600, color: "#eef2ff" }}>{label}</div>
+        {description && <div style={{ fontSize: 12.5, color: "#9aa4c7", marginTop: 2, lineHeight: 1.35 }}>{description}</div>}
+      </div>
+      <div style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 8 }}>
+        {children}
+      </div>
+    </div>
   );
 }
 
@@ -725,6 +924,54 @@ async function getWeekResultsMap(year, week, games) {
 function picksDocId(year, week, email) {
   return `${year}_W${week}_${(email||"").toLowerCase()}`.replace(/[^\w\-@.]+/g, "_");
 }
+
+// ---------- Partial-slate submissions ----------
+// Any submission (partial or a normal complete one) can keep being edited,
+// game by game, right up until each game's own kickoff - editDeadline (the
+// earliest kickoff among a week's later day(s)) is what lets that continue
+// past the pool-wide picksLocked flip at the very first kickoff of the week.
+// A player can separately opt into submitting just the first day's games and
+// finishing the rest later (see PicksPage's partialOptIn) - whether such a
+// doc still "counts" is always derived from games+picks rather than stored:
+// a doc is either complete (scores/counts like any normal submission) or,
+// once editDeadline has passed still incomplete, forfeited (excluded
+// everywhere, same as never having submitted - no pot credit, no $5 owed).
+// Only ever forfeited if it was explicitly opted partial - a normal
+// submission is always required to be complete up front, so it never has
+// anything to forfeit.
+function requiredGameIdsFor(games) {
+  const list = Array.isArray(games) ? games : [];
+  const needIncludedFlag = list.some(g => Object.prototype.hasOwnProperty.call(g, "included"));
+  return (needIncludedFlag ? list.filter(g => !!g.included) : list).map(g => g.id);
+}
+function isPickDocComplete(games, picksDoc) {
+  const list = Array.isArray(games) ? games : [];
+  const byId = new Map(list.map(g => [g.id, g]));
+  const picksOk = requiredGameIdsFor(games).every(id => {
+    const g = byId.get(id);
+    const v = picksDoc?.picks?.[id];
+    return !!g && (v === g.home || v === g.away);
+  });
+  if (!picksOk) return false;
+  const gd = list.find(g => g && g.gameday);
+  if (!gd) return true;
+  const tb = picksDoc?.tiebreaker;
+  return !!tb && tb.gameId === gd.id && typeof tb.total === "number";
+}
+function editDeadlineMs(picksDoc) {
+  const dl = picksDoc?.editDeadline;
+  if (!dl) return null;
+  if (typeof dl.toMillis === "function") return dl.toMillis();
+  if (typeof dl.seconds === "number") return dl.seconds * 1000;
+  const d = new Date(dl);
+  return isNaN(d) ? null : d.getTime();
+}
+function isForfeitedPick(games, picksDoc) {
+  if (!picksDoc || picksDoc.partial !== true) return false;
+  const ms = editDeadlineMs(picksDoc);
+  if (ms == null || Date.now() < ms) return false;
+  return !isPickDocComplete(games, picksDoc);
+}
 async function getPicksForWeek(year, week) {
   const y = Number(year), w = Number(week);
   // Try numeric fields first
@@ -761,7 +1008,11 @@ async function computeWeekStandings(year, week) {
   ]);
   const r = { ...(rFromWeek || {}), ...(rFromGames || {}) };
 
-  const rows = picks.map(p => {
+  // A partial-slate submission that's still incomplete past its own deadline
+  // is forfeited - excluded from standings entirely, same as a no-show.
+  const activePicks = picks.filter(p => !isForfeitedPick(g, p));
+
+  const rows = activePicks.map(p => {
     let correct = 0;
     for (const id of ids) {
       const w = r[id]?.winner;
@@ -775,6 +1026,7 @@ async function computeWeekStandings(year, week) {
       email: p.email, venmo: p.venmo || "",
       points: correct, picks: p.picks || {},
       tb: (tbVal === null || tbVal === "" ? null : Number(tbVal)),
+      partial: p.partial === true,
     };
   }).sort((a,b)=> (b.points - a.points) || a.name.localeCompare(b.name));
 
@@ -1108,7 +1360,7 @@ function PicksPage({ user, isAdmin, setPage }) {
 
   // Poll answers are only kept locally (state + localStorage) as someone
   // fills out the form - they're not uploaded to Firestore until the actual
-  // picks submission goes through (see ConfirmPage), so a vote is always
+  // picks submission goes through (see onSubmitPicks), so a vote is always
   // tied to the name on that submission and never uploaded without one.
   const voteTf = (choice) => {
     setTfChoice(choice);
@@ -1189,7 +1441,8 @@ useEffect(() => {
     try {
       if (hasWeekValue(year) && hasWeekValue(week)) {
         const arr = await getPicksForWeek(year, week);
-        setPickCount(Array.isArray(arr) ? arr.length : 0);
+        const counted = Array.isArray(arr) ? arr.filter(p => !isForfeitedPick(games, p)) : [];
+        setPickCount(counted.length);
       } else {
         setPickCount(0);
       }
@@ -1197,7 +1450,7 @@ useEffect(() => {
       setPickCount(0);
     }
   })();
-}, [year, week]);
+}, [year, week, games]);
 // INITIAL_LIVE_AUTOLOAD: on first mount, load games for the live week (config/live)
   useEffect(() => {
         try {
@@ -1359,6 +1612,53 @@ useEffect(() => {
     arr.sort((a,b) => a.d - b.d);
     return arr[0]?.g || null;
   }, [displayGames]);
+
+  // --- Partial-slate submissions ---
+  // Chronological (not GameDay-reordered) date groups, used to define what
+  // counts as "the first day's games" (required up front) vs. everything
+  // later (deferrable under the partial opt-in below).
+  const rawDateGroups = useMemo(
+    () => groupGamesByDate(games || [], { timeZone: "America/New_York" }),
+    [games]
+  );
+  const firstGroupIds = useMemo(
+    () => new Set((rawDateGroups[0]?.items || []).map(g => g.id)),
+    [rawDateGroups]
+  );
+  const laterGroups = useMemo(() => rawDateGroups.slice(1), [rawDateGroups]);
+  const laterGroupEarliestGame = useMemo(() => {
+    const arr = laterGroups.flatMap(grp => grp.items)
+      .map(g => ({ g, d: kickoffDate(g) }))
+      .filter(x => x.d instanceof Date && !isNaN(x.d));
+    arr.sort((a, b) => a.d - b.d);
+    return arr[0]?.g || null;
+  }, [laterGroups]);
+  // Re-checked periodically so "already started" locks update live without
+  // requiring a page refresh.
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNowTick(Date.now()), 30000);
+    return () => clearInterval(t);
+  }, []);
+  // A game is "started" the moment its own DAY'S first kickoff happens - all
+  // of Friday's games lock together at Friday's first kickoff, not each one
+  // individually at its own time.
+  const gameGroupStartMs = useMemo(() => buildGameGroupStartMap(games), [games]);
+  const gameHasStarted = (g) => {
+    const ms = gameGroupStartMs.get(g.id);
+    return ms != null && ms <= nowTick;
+  };
+  const firstGroupStartMs = rawDateGroups[0]?.items?.[0] ? gameGroupStartMs.get(rawDateGroups[0].items[0].id) : null;
+  const firstGroupStarted = firstGroupStartMs != null && nowTick >= firstGroupStartMs;
+  const [partialOptIn, setPartialOptIn] = useState(false);
+  // Set from an already-loaded doc (auto-load-by-email or loadByCode) so
+  // onSubmitPicks knows whether this edit is still inside its editDeadline,
+  // even though the pool-wide picksLocked flag has already flipped true.
+  // editDeadline applies to ANY submission with later-group games (not just
+  // partial ones) - `partial` here only matters for whether the next save
+  // is still allowed to leave later games unpicked without failing
+  // validation, and for forfeiture risk.
+  const [loadedPartial, setLoadedPartial] = useState(null); // { partial, editDeadline } | null
   // Mobile-only layout flag for small view tweaks
   const [isMobile, setIsMobile] = useState(() => (typeof window !== "undefined" ? window.innerWidth <= 560 : false));
   useEffect(() => {
@@ -1374,6 +1674,12 @@ const [code, setCode] = useState("");
   const [loadLastName, setLoadLastName] = useState("");
   const [editing, setEditing] = useState(false);
   const [showLoad, setShowLoad] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const loadedEditDeadlineMs = loadedPartial ? editDeadlineMs(loadedPartial) : null;
+  const partialEditAllowed = editing
+    && loadedEditDeadlineMs != null && nowTick < loadedEditDeadlineMs;
+  const partialWindowExpired = editing
+    && loadedEditDeadlineMs != null && nowTick >= loadedEditDeadlineMs;
 
   // --- Autosave picks-in-progress to localStorage, so closing the tab or
   // losing connection mid-fill doesn't lose everything already selected.
@@ -1420,8 +1726,12 @@ const [code, setCode] = useState("");
         setForm({ firstName: d.firstName||"", lastName: d.lastName||"", email: (d.email || "").toLowerCase(), phone: d.phone || "", venmo: d.venmo || "" });
         setPicks(d.picks || {});
         setTiebreaker(d.tiebreaker ? { gameId: d.tiebreaker.gameId || null, total: String(d.tiebreaker.total ?? "") } : { gameId: null, total: "" });
+        setLoadedPartial({ partial: d.partial === true, editDeadline: d.editDeadline || null });
+        setPartialOptIn(d.partial === true);
       } else {
         setPicks({}); setTiebreaker({ gameId: null, total: "" });
+        setLoadedPartial(null);
+        setPartialOptIn(false);
       }
     }
     setGamesLoaded(true);
@@ -1442,10 +1752,22 @@ const [code, setCode] = useState("");
   const validatePicks = (opts = {}) => {
     const errs = {};
     const needIncludedFlag = games.some(g => Object.prototype.hasOwnProperty.call(g, "included"));
-    const requiredGames = needIncludedFlag ? games.filter(g => !!g.included) : games;
+    const allRequiredGames = needIncludedFlag ? games.filter(g => !!g.included) : games;
+    // Opted into a partial slate: only the first day's games are required
+    // right now - the rest can be finished later, before laterGroupEarliestGame.
+    const wantsPartial = partialOptIn || loadedPartial?.partial === true;
+    const requiredGames = wantsPartial
+      ? allRequiredGames.filter(g => firstGroupIds.has(g.id))
+      : allRequiredGames;
 
     if (!String(form.firstName || "").trim()) errs.firstName = "First name is required";
     if (!String(form.lastName  || "").trim()) errs.lastName  = "Last name is required";
+    // Blank email used to pass silently through to Firestore (rules never
+    // required it either) - it's what My Season joins "your row" against,
+    // so a blank one broke that week's stats for that person. Confirmed
+    // across 12 real submissions before this check existed.
+    const emailTrim = String(form.email || "").trim();
+    if (!emailTrim || !emailTrim.includes("@")) errs.email = "A valid email is required";
     if (!String(form.phone     || "").trim()) errs.phone     = "Phone is required";
     if (!String(form.venmo     || "").trim()) errs.venmo     = "Venmo is required";
     if (!form.venmoConfirmed) errs.venmoConfirmed = "Please confirm your Venmo is correct";
@@ -1453,7 +1775,9 @@ const [code, setCode] = useState("");
     const missingGames = [];
     for (const g of requiredGames) {
       const pick = picks && picks[g.id];
-      if (!(pick === g.home || pick === g.away)) missingGames.push(g);
+      // A game that's already kicked off can no longer be picked one way or
+      // the other - don't hold up submission over it.
+      if (!(pick === g.home || pick === g.away) && !gameHasStarted(g)) missingGames.push(g);
     }
     if (missingGames.length) {
       errs.picks = missingGames.length + " game" + (missingGames.length>1?"s":"") + " not selected";
@@ -1469,6 +1793,7 @@ const [code, setCode] = useState("");
     const parts = [];
     if (errs.firstName) parts.push("first name");
     if (errs.lastName) parts.push("last name");
+    if (errs.email) parts.push("a valid email");
     if (errs.phone) parts.push("phone");
     if (errs.venmo) parts.push("venmo");
     if (errs.venmoConfirmed) parts.push("venmo confirmation");
@@ -1497,7 +1822,7 @@ const [code, setCode] = useState("");
     return { ok, errors: errs, message, missingGames, focus };
   };
 
-  const isValid = useMemo(function(){ return validatePicks({ silent: true }).ok; }, [form, picks, games, tfChoice, gamesPerWeekChoice, appEnrollChoice]);
+  const isValid = useMemo(function(){ return validatePicks({ silent: true }).ok; }, [form, picks, games, tfChoice, gamesPerWeekChoice, appEnrollChoice, partialOptIn, loadedPartial, nowTick]);
 
     // Keep validation errors updated after a submit attempt
   useEffect(() => {
@@ -1505,35 +1830,160 @@ const [code, setCode] = useState("");
       const r = validatePicks({ silent: true });
       if (typeof setErrors === "function") setErrors(r.errors);
     }
-  }, [form, picks, games, touchedSubmit]);
-const onSubmitPicks = function(e){ e.preventDefault(); if (picksLocked) { if (typeof setMsg==="function") setMsg("Submissions are locked right now."); return; }
-    const result = validatePicks();
-    if (!result.ok) { 
-      if (typeof setMsg === "function") setMsg(result.message || "Please complete all required fields and picks.");
-      if (result.focus) result.focus();
-      return;
-    }
-    // Reuse 6-digit code when editing; otherwise generate
-  const nextCode = (editing && typeof code === "string" && /^\d{6}$/.test(code))
-    ? code
-    : String(Math.floor(100000 + Math.random() * 900000));
-  if (typeof setCode === "function") setCode(nextCode);
+  }, [form, picks, games, touchedSubmit, partialOptIn, loadedPartial, nowTick]);
+// Writes picks straight to Firestore on submit - there used to be an
+// intermediate "Confirm Your Picks" review page in between, but since picks
+// can already be edited later via the code + last name (see loadByCode
+// below), that extra step only added a screen that looked enough like the
+// real receipt to leave people unsure whether they'd actually submitted.
+// One click now goes straight through to the receipt.
+const onSubmitPicks = async function(e){
+  e.preventDefault();
+  if (picksLocked && !partialEditAllowed) {
+    setMsg(partialWindowExpired
+      ? (loadedPartial?.partial === true
+          ? "This slate's edit window has closed - it's being scored as submitted, with any unfinished games counted as missed."
+          : "This slate's edit window has closed.")
+      : "Submissions are locked right now.");
+    return;
+  }
+  const result = validatePicks();
+  if (!result.ok) {
+    setMsg(result.message || "Please complete all required fields and picks.");
+    if (result.focus) result.focus();
+    return;
+  }
+  setSubmitting(true);
+  setMsg("Saving...");
+  try {
+    // Reuse the 6-digit code when editing an existing submission; otherwise generate one.
+    const nextCode = (editing && typeof code === "string" && /^\d{6}$/.test(code))
+      ? code
+      : String(Math.floor(100000 + Math.random() * 900000));
+    setCode(nextCode);
 
-  const p = {
-    year, week,
-    form: { ...form, lastNameLower: (form.lastName || "").toLowerCase().trim() },
-    picks,
-    code: nextCode,
-    editing: !!editing,
-    polls: { tf_games: tfChoice, games_per_week: gamesPerWeekChoice, app_enroll: appEnrollChoice },
-    feedback: featureFeedback
-  };
-  try { if (typeof tiebreaker !== "undefined") { p.tiebreaker = tiebreaker; } localStorage.setItem("pending", JSON.stringify(p)); } catch (_){}
-  try { if (draftKey) localStorage.removeItem(draftKey); } catch (_){}
-if (typeof setPage === "function") setPage("confirm");
-if (typeof window !== "undefined") window.history.pushState(null, "", "/confirm");
-  setMsg("");
-  return; // no write here; Confirm button will write
+    const normEmail = (s) => String(s||"").trim().toLowerCase();
+    const normPhone = (s) => String(s||"").replace(/[^0-9]/g, "");
+    const normVenmo = (s) => String(s||"").trim().toLowerCase().replace(/^@+/, "");
+
+    const id = `${year}_W${week}_${nextCode}`;
+    const gd = games.find(x => x && x.gameday);
+
+    const payload = {
+      id, year, week, code: nextCode,
+      firstName: form.firstName,
+      lastName: form.lastName,
+      lastNameLower: (form.lastName || "").toLowerCase().trim(),
+      phone: form.phone || "",
+      venmo: form.venmo || "",
+      email: (form.email || "").toLowerCase(),
+      venmoConfirmed: !!form.venmoConfirmed,
+      picks,
+      updatedAt: serverTimestamp()
+    };
+    // editDeadline lets ANY submission (partial or a normal complete one)
+    // keep being edited past the pool-wide lock, up until the later day's
+    // games start - set once and carried forward unchanged after that.
+    // partial is separate: only set on the opt-in path, since that's what
+    // grants leaving later games unpicked for now (and puts the doc at risk
+    // of forfeiture if still incomplete once editDeadline passes).
+    const wantsPartialSubmit = partialOptIn || loadedPartial?.partial === true;
+    if (laterGroupEarliestGame) {
+      payload.editDeadline = loadedPartial?.editDeadline
+        || Timestamp.fromDate(kickoffDate(laterGroupEarliestGame));
+      if (wantsPartialSubmit) payload.partial = true;
+    }
+    // If this browser has notifications enabled, tag the submission with its
+    // push token so reminder notifications can skip devices that already submitted.
+    try {
+      const pushToken = localStorage.getItem("pushToken");
+      if (pushToken) {
+        payload.pushToken = pushToken;
+        setDoc(doc(db, "pushTokens", pushToken), { name: `${form.firstName || ""} ${form.lastName || ""}`.trim() }, { merge: true }).catch(()=>{});
+      }
+    } catch (e) {}
+
+    // If GameDay itself falls in a later, deferred group, a partial submitter
+    // isn't required to have a tiebreaker guess yet either - same as any
+    // other later-group game, it's due when they come back to finish up.
+    const wantsPartialSubmit0 = partialOptIn || loadedPartial?.partial === true;
+    const gdDeferred = gd && wantsPartialSubmit0 && !firstGroupIds.has(gd.id);
+    if (gd) {
+      const tbTotal = tiebreaker && tiebreaker.total !== "" ? Number(tiebreaker.total) : NaN;
+      if (Number.isNaN(tbTotal)) {
+        if (!gdDeferred) { setMsg("Enter total points for the College GameDay tiebreaker."); setSubmitting(false); return; }
+      } else {
+        payload.tiebreaker = { gameId: gd.id, total: tbTotal };
+      }
+    }
+
+    try {
+      await runTransaction(db, async (tx) => {
+        const locks = [];
+        const eKey = normEmail(form.email);
+        const pKey = normPhone(form.phone);
+        const vKey = normVenmo(form.venmo);
+        if (eKey) locks.push({ ref: doc(db, "keys", `${year}_W${week}_email_${eKey}`), type: "email", value: eKey });
+        if (pKey) locks.push({ ref: doc(db, "keys", `${year}_W${week}_phone_${pKey}`), type: "phone", value: pKey });
+        if (vKey) locks.push({ ref: doc(db, "keys", `${year}_W${week}_venmo_${vKey}`), type: "venmo", value: vKey });
+
+        // If any lock exists and points to a different submission, block
+        for (const l of locks) {
+          const s = await tx.get(l.ref);
+          const existing = s.exists() ? s.data() : null;
+          if (existing && existing.picksId !== id) {
+            throw new Error("DUPLICATE_LOCK");
+          }
+        }
+
+        // Create/update locks for this submission, then write the picks
+        for (const l of locks) {
+          tx.set(l.ref, { year, week, type: l.type, value: l.value, picksId: id, code: nextCode, createdAt: serverTimestamp() }, { merge: true });
+        }
+        tx.set(doc(db, "picks", id), payload, { merge: true });
+      });
+    } catch (e2) {
+      const em = String((e2 && e2.message) || e2 || "");
+      if (em === "DUPLICATE_LOCK") {
+        setMsg("this email/number/venmo is already associated with a submission, if you feel this was reached in error contact zslay@live.com");
+        setSubmitting(false);
+        return;
+      }
+      throw e2;
+    }
+
+    // Poll answers and the feedback note are only uploaded now, at the
+    // moment picks actually go through, tied to the name on this
+    // submission - not live as someone clicks through the survey. Best
+    // effort: never blocks the actual pick submission if this fails.
+    try {
+      if (pollVoterId) {
+        const nameFields = { firstName: form.firstName || "", lastName: form.lastName || "" };
+        const pollAnswers = { tf_games: tfChoice, games_per_week: gamesPerWeekChoice, app_enroll: appEnrollChoice };
+        const writes = [];
+        for (const pollId of ["tf_games", "games_per_week", "app_enroll"]) {
+          const choice = pollAnswers[pollId];
+          if (!choice) continue;
+          writes.push(setDoc(doc(db, "pollVotes", `${pollId}__${pollVoterId}`), { pollId, choice, ...nameFields, updatedAt: serverTimestamp() }, { merge: true }).catch(()=>{}));
+        }
+        const feedbackText = (featureFeedback || "").trim();
+        if (feedbackText) {
+          writes.push(setDoc(doc(db, "feedback", pollVoterId), { text: feedbackText, ...nameFields, updatedAt: serverTimestamp() }, { merge: true }).catch(()=>{}));
+        }
+        await Promise.all(writes);
+      }
+    } catch (e3) {}
+
+    try { if (draftKey) localStorage.removeItem(draftKey); } catch (_) {}
+    localStorage.setItem("receipt", JSON.stringify({ year, week, code: nextCode, form, picks, tiebreaker: payload.tiebreaker || null }));
+    setMsg("");
+    setPage("receipt");
+    window.history.pushState(null, "", "/receipt");
+  } catch (e) {
+    setMsg("Save failed: " + (e && e.message ? e.message : e));
+  } finally {
+    setSubmitting(false);
+  }
 };
   async function loadByCode() {
     setMsg("");
@@ -1555,12 +2005,15 @@ if (typeof window !== "undefined") window.history.pushState(null, "", "/confirm"
         ...f,
         firstName: d.firstName || "",
         lastName: d.lastName || "",
+        email: d.email || "",
         phone: d.phone || "", venmo: d.venmo || ""
       }));
       setPicks(d.picks || {});
         setTiebreaker(d.tiebreaker ? { gameId: d.tiebreaker.gameId || null, total: String(d.tiebreaker.total ?? "") } : { gameId: null, total: "" });
       setCode(c);
       setEditing(true);
+      setLoadedPartial({ partial: d.partial === true, editDeadline: d.editDeadline || null });
+      setPartialOptIn(d.partial === true);
       setMsg("Loaded. Editing code " + c + ".");
     } catch (e) {
       const m = (e && e.message) ? String(e.message) : String(e);
@@ -1571,7 +2024,7 @@ if (typeof window !== "undefined") window.history.pushState(null, "", "/confirm"
   const clearWeekIfNoPicks = async () => {
     try {
       const Y = Number(year), W = Number(week);
-      setMsg(`Checking picks for ${Y} / W${W}ï¿½`);
+      setMsg(`Checking picks for ${Y} / W${W}…`);
 
       // Check both numeric-typed and string-typed year/week (defensive for any older docs)
       const qNum = query(collection(db, "picks"), where("year","==", Y), where("week","==", W));
@@ -1704,6 +2157,8 @@ if (typeof window !== "undefined") window.history.pushState(null, "", "/confirm"
             setLoadLastName("");
             setShowLoad(false);
             setMsg("");
+            setLoadedPartial(null);
+            setPartialOptIn(false);
           }}
         >Clear</button>
       </div>
@@ -1723,7 +2178,26 @@ if (typeof window !== "undefined") window.history.pushState(null, "", "/confirm"
     background: picksLocked ? "#ef4444" : "#22c55e" 
   }} />
   <span>{picksLocked ? "Submissions CLOSED" : "Submissions OPEN"}</span>
+  {picksLocked && partialEditAllowed && (
+    <StatusBadge tone="primary" style={{ marginLeft:2 }}>⏳ You can still edit later games</StatusBadge>
+  )}
 </div>
+{picksLocked && partialEditAllowed && (
+  <div style={{ marginTop:-4, marginBottom:10, fontSize:12.5, color:"#9aa4c7" }}>
+    {rawDateGroups[0]?.header || "The first day's"} games are locked, but you can still edit games below before{" "}
+    {laterGroupEarliestGame ? kickoffLabel(laterGroupEarliestGame, { timeZone: "America/New_York" }) : "the next kickoff"}.
+  </div>
+)}
+{picksLocked && partialWindowExpired && (
+  <div style={{ display:"flex", gap:8, alignItems:"flex-start", marginTop:-4, marginBottom:10, padding:"8px 12px", borderRadius:8, background:"rgba(240,180,41,0.12)", border:"1px solid rgba(240,180,41,0.4)", fontSize:13, color:"#f0d9a8" }}>
+    <span aria-hidden="true">⏰</span>
+    <span>
+      {loadedPartial?.partial === true
+        ? "This slate's edit window has closed and it's being scored as submitted — any remaining games are counted as missed."
+        : "This slate's edit window has closed."}
+    </span>
+  </div>
+)}
 {picksLocked && (
   <button
     type="button"
@@ -1740,20 +2214,38 @@ if (typeof window !== "undefined") window.history.pushState(null, "", "/confirm"
 )}
 <form onSubmit={onSubmitPicks} style={{ marginTop: 12 }}>
           <Row style={{ marginBottom: 14 }}>
-  <Field label="First name"><input style={inputStyle} name="firstName" value={form.firstName} onChange={e=>setForm({...form, firstName:e.target.value})} onBlur={autofillFromHistory} required/></Field>
-  <Field label="Last name"><input style={inputStyle} name="lastName" value={form.lastName} onChange={e=>setForm({...form, lastName:e.target.value})} onBlur={autofillFromHistory} required/></Field>
+  <Field style={{ flex: 1 }} label="First name"><input style={{ ...inputStyle, width: "100%" }} name="firstName" value={form.firstName} onChange={e=>setForm({...form, firstName:e.target.value})} onBlur={autofillFromHistory} required/></Field>
+  <Field style={{ flex: 1 }} label="Last name"><input style={{ ...inputStyle, width: "100%" }} name="lastName" value={form.lastName} onChange={e=>setForm({...form, lastName:e.target.value})} onBlur={autofillFromHistory} required/></Field>
 </Row>
-          <Row style={{ marginBottom: 14 }}>
-            <Field label="Email">
-  <input style={inputStyle} name="email" value={form.email || ""} onChange={e=>setForm({...form, email:e.target.value})} placeholder="you@example.com"/>
-</Field>
-            <Field label="Phone">
-              <input style={inputStyle} name="phone" value={form.phone} onChange={e=>setForm({...form, phone:e.target.value})} placeholder="555-555-5555"/>
-            </Field>
-            <Field label="Venmo">
-              <input style={inputStyle} name="venmo" value={form.venmo} onChange={e=>setForm({...form, venmo:e.target.value})} placeholder="@username"/>
-            </Field>
-          </Row>
+          {isMobile ? (
+            <>
+              <Row style={{ marginBottom: 14 }}>
+                <Field style={{ flex: 1 }} label="Email">
+                  <input style={{ ...inputStyle, width: "100%" }} type="email" name="email" value={form.email || ""} onChange={e=>setForm({...form, email:e.target.value})} placeholder="you@example.com" required/>
+                </Field>
+              </Row>
+              <Row style={{ marginBottom: 14 }}>
+                <Field style={{ flex: 1 }} label="Phone">
+                  <input style={{ ...inputStyle, width: "100%" }} name="phone" value={form.phone} onChange={e=>setForm({...form, phone:e.target.value})} placeholder="555-555-5555"/>
+                </Field>
+                <Field style={{ flex: 1 }} label="Venmo">
+                  <input style={{ ...inputStyle, width: "100%" }} name="venmo" value={form.venmo} onChange={e=>setForm({...form, venmo:e.target.value})} placeholder="@username"/>
+                </Field>
+              </Row>
+            </>
+          ) : (
+            <Row style={{ marginBottom: 14 }}>
+              <Field style={{ flex: 1 }} label="Email">
+                <input style={{ ...inputStyle, width: "100%" }} type="email" name="email" value={form.email || ""} onChange={e=>setForm({...form, email:e.target.value})} placeholder="you@example.com" required/>
+              </Field>
+              <Field style={{ flex: 1 }} label="Phone">
+                <input style={{ ...inputStyle, width: "100%" }} name="phone" value={form.phone} onChange={e=>setForm({...form, phone:e.target.value})} placeholder="555-555-5555"/>
+              </Field>
+              <Field style={{ flex: 1 }} label="Venmo">
+                <input style={{ ...inputStyle, width: "100%" }} name="venmo" value={form.venmo} onChange={e=>setForm({...form, venmo:e.target.value})} placeholder="@username"/>
+              </Field>
+            </Row>
+          )}
 
           {showSlowLoadHint && games.length === 0 && (
             <div style={{
@@ -1766,29 +2258,58 @@ if (typeof window !== "undefined") window.history.pushState(null, "", "/confirm"
               </a>
             </div>
           )}
+          {laterGroups.length > 0 && !firstGroupStarted && !partialWindowExpired && (
+            <div style={{ margin:"4px 0 18px", padding:"4px 14px", borderRadius:14, background:"linear-gradient(180deg,#131c33,#0f1729)", border:"1px solid #26335a" }}>
+              <AdminToggleRow
+                label="⏳ Submit a partial slate"
+                description={
+                  <>
+                    Just lock in {rawDateGroups[0]?.header || "the first day's"} games now — come back with your code to finish
+                    the rest before {laterGroupEarliestGame ? kickoffLabel(laterGroupEarliestGame, { timeZone: "America/New_York" }) : "the next kickoff"}.
+                  </>
+                }
+                checked={partialOptIn}
+                onChange={setPartialOptIn}
+                divider={false}
+              />
+              {partialOptIn && (
+                <div style={{ display:"flex", gap:8, alignItems:"flex-start", margin:"0 0 12px", padding:"8px 10px", borderRadius:10, background:"rgba(240,89,107,0.12)", border:"1px solid rgba(240,89,107,0.4)" }}>
+                  <span aria-hidden="true">⚠️</span>
+                  <span style={{ fontSize:12.5, color:"#f5b6be", lineHeight:1.4 }}>
+                    If it isn't finished in time, this week's entry won't count — and you won't owe the $5.
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
           <div style={{ margintop:-4, display:"flex", flexDirection:"column", alignItems:"center" }}>
             {pickGroups.map(grp => (
               <section key={grp.key} style={{ margin: "24px 0 6px", width: "100%" }}>
                 <div style={{ fontWeight:700, fontSize:16, opacity:.85, margin:"12px 0 8px" }}>{grp.header}</div>
-                {grp.items.map(g => (
+                {grp.items.map(g => { const started = gameHasStarted(g); return (
 
-              <div key={g.id} data-game-id={g.id} style={{ position:"relative",  border:"1px dashed #1f2a44", padding:12, borderRadius:12, margin:"10px auto", maxWidth: 720, width:"100%", marginBottom: 0 }}>
+              <div key={g.id} data-game-id={g.id} style={{ position:"relative",  border:"1px dashed #1f2a44", padding:12, borderRadius:12, margin:"10px auto", maxWidth: 720, width:"100%", marginBottom: 0, opacity: started ? 0.6 : 1 }}>
           {g.gameday && (
   <>
     <img src="/logos/collegegameday.png" alt="College GameDay" style={{ position:"absolute", top:6, left:6, width:badgeSize, height:badgeSize, opacity:0.95, pointerEvents:"none" }} />
     <img src="/logos/collegegameday.png" alt="" aria-hidden="true" style={{ position:"absolute", top:badgeTop, right:badgeRight, width:badgeSize, height:badgeSize, opacity:0.95, pointerEvents:"none" }} />
   </>
 )}
+          {started && (
+            <StatusBadge tone="warning" style={{ position:"absolute", top:8, right:8 }}>
+              🔒 Locked
+            </StatusBadge>
+          )}
                 <div style={{ order:1, flex:1 }} />
                                     <Row role="radiogroup" style={{ display:"grid", gridTemplateColumns:"1fr auto 1fr", gap: 16, justifyItems:"center", alignItems:"center", justifyContent:"center" }} aria-label={'Pick winner for ' + teamLabel(g.away, g.awayRank) + ' at ' + teamLabel(g.home, g.homeRank)}>
-                    <label role="radio" aria-checked={(picks[g.id]===g.away)} onClick={() => setPicks({ ...picks, [g.id]: g.away })} tabIndex={0} onKeyDown={(e)=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); setPicks({...picks, [g.id]: g.away}); }}} style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:12, justifySelf:"end" }}>
-                      <input type="radio" style={{position:"absolute",opacity:0,width:0,height:0}} name={g.id} checked={picks[g.id]===g.away} onChange={()=>setPicks({...picks, [g.id]: g.away})}/>
+                    <label role="radio" aria-checked={(picks[g.id]===g.away)} aria-disabled={started} onClick={() => { if (!started) setPicks({ ...picks, [g.id]: g.away }); }} tabIndex={0} onKeyDown={(e)=>{ if(!started && (e.key==="Enter"||e.key===" ")){ e.preventDefault(); setPicks({...picks, [g.id]: g.away}); }}} style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:12, justifySelf:"end", cursor: started ? "not-allowed" : "pointer" }}>
+                      <input type="radio" disabled={started} style={{position:"absolute",opacity:0,width:0,height:0}} name={g.id} checked={picks[g.id]===g.away} onChange={()=>{ if (!started) setPicks({...picks, [g.id]: g.away}); }}/>
                       <div className="logoBox" style={{ width:96, height:96, outline: (picks[g.id]===g.away) ? "4px solid #3b82f6" : undefined, outlineOffset:2, borderRadius:12, display:"flex", alignItems:"center", justifyContent:"center" }}><TeamLogo school={g.away} size={96}/></div>
                       <div style={{ width:96, textAlign:"center", fontWeight:700, fontSize:13, lineHeight:1.15, whiteSpace:"normal", overflowWrap:"anywhere" }}>{teamLabelNoMascot(g.away, g.awayRank)}</div>
                     </label><div aria-hidden="true" style={{ gridColumn:"2", alignSelf:"center", justifySelf:"center", fontWeight:800, color:"#fff", fontSize:28, lineHeight:"1", margin:"0 6px", pointerEvents:"none" }}>@</div>
 
-                    <label role="radio" aria-checked={(picks[g.id]===g.home)} onClick={() => setPicks({ ...picks, [g.id]: g.home })} tabIndex={0} onKeyDown={(e)=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); setPicks({...picks, [g.id]: g.home}); }}} style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:12, justifySelf:"start" }}>
-                      <input type="radio" style={{position:"absolute",opacity:0,width:0,height:0}} name={g.id} checked={picks[g.id]===g.home} onChange={()=>setPicks({...picks, [g.id]: g.home})}/>
+                    <label role="radio" aria-checked={(picks[g.id]===g.home)} aria-disabled={started} onClick={() => { if (!started) setPicks({ ...picks, [g.id]: g.home }); }} tabIndex={0} onKeyDown={(e)=>{ if(!started && (e.key==="Enter"||e.key===" ")){ e.preventDefault(); setPicks({...picks, [g.id]: g.home}); }}} style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:12, justifySelf:"start", cursor: started ? "not-allowed" : "pointer" }}>
+                      <input type="radio" disabled={started} style={{position:"absolute",opacity:0,width:0,height:0}} name={g.id} checked={picks[g.id]===g.home} onChange={()=>{ if (!started) setPicks({...picks, [g.id]: g.home}); }}/>
                       <div className="logoBox" style={{ width:96, height:96, outline: (picks[g.id]===g.home) ? "4px solid #3b82f6" : undefined, outlineOffset:2, borderRadius:12, display:"flex", alignItems:"center", justifyContent:"center" }}><TeamLogo school={g.home} size={96}/></div>
                       <div style={{ width:96, textAlign:"center", fontWeight:700, fontSize:13, lineHeight:1.15, whiteSpace:"normal", overflowWrap:"anywhere" }}>{teamLabelNoMascot(g.home, g.homeRank)}</div>
                     </label>
@@ -1817,8 +2338,8 @@ if (typeof window !== "undefined") window.history.pushState(null, "", "/confirm"
                     </div>
                   )}
               </div>
-            
-                ))}
+
+                ); })}
               </section>
             ))}
           </div>
@@ -1928,28 +2449,33 @@ if (typeof window !== "undefined") window.history.pushState(null, "", "/confirm"
 
           <Row style={{ justifyContent: "flex-end", marginTop: 12 }}><div style={{ marginRight:"auto", display:"flex", alignItems:"center", gap:12 }}><input type="checkbox" aria-label="venmo" checked={form.venmoConfirmed} onChange={e=>setForm({...form, venmoConfirmed:e.target.checked})} /><span style={{ fontSize:12 }}>By checking this box, I confirm I have sent $5 to @ZackSlay on Venmo</span></div>
             <div style={{color:"#c0392b",fontSize:12,margin:"8px 0"}} role="alert">{touchedSubmit && !isValid && (errors.picks || "Please complete all required fields and picks.")}</div>
-<button type="submit" disabled={!isValid || picksLocked}>Submit / Update Picks</button>
+<button type="submit" disabled={!isValid || (picksLocked && !partialEditAllowed) || submitting}>{submitting ? "Saving…" : "Submit / Update Picks"}</button>
           <div style={{ color:'#9aa4c7', margintop:-4, fontSize:13 }}>{msg}</div>
           </Row>
         </form>
 
       {showRules && (
-  <div style={{position:"fixed", inset:0, background:"rgba(0,0,0,.6)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:9999}}>
-    <div style={{ background:"#121a2b", border:"1px solid #1f2a44", borderRadius:16, padding:16, maxWidth:720, width:"90%", boxShadow:"0 10px 24px rgba(0,0,0,.35)" }}>
-      <h3 style={{ marginTop:0, marginBottom:8 }}>Rules</h3>
-      <div style={{ lineHeight: 1.6 }}>
+  <div style={{position:"fixed", inset:0, background:"rgba(0,0,0,.6)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:9999, padding:16, boxSizing:"border-box"}}>
+    <div style={{ background:"#121a2b", border:"1px solid #1f2a44", borderRadius:16, padding:16, maxWidth:720, width:"90%", maxHeight:"85vh", boxShadow:"0 10px 24px rgba(0,0,0,.35)", display:"flex", flexDirection:"column" }}>
+      <h3 style={{ marginTop:0, marginBottom:8, flexShrink:0 }}>Rules</h3>
+      <div style={{ lineHeight: 1.6, overflowY:"auto", minHeight:0, fontSize:13 }}>
   <h4 style={{ marginTop: 0 }}>Welcome to the 2026 Season!</h4>
   <ul style={{ paddingLeft: "1.25rem", margin: 0 }}>
     <li><strong>Weekly Picks:</strong> Each week you'll pick winners from a curated slate — marquee matchups, AP Top 25 games, all Florida FBS teams, plus a few randoms to keep it interesting.</li>
     <li><strong>Tiebreaker:</strong> Closest to the actual total combined points (over or under) wins. If still tied, the pot is split.</li>
     <li><strong>One Entry:</strong> Only one form per person per week. Need to change a pick before the deadline? Click <em>Edit here</em> and enter your code.</li>
     <li><strong>Canceled/Postponed Games:</strong> If a listed game is canceled or postponed and not completed within the scoring window, it's a <em>push</em> (no points awarded).</li>
-    <li><strong>Deadline:</strong> Picks lock at <strong>kickoff of the first game</strong> on the slate.</li>
+    <li><strong>Deadline:</strong> New submissions lock at <strong>kickoff of the first game</strong> on the slate. After that, each day's games lock
+      together at that day's own first kickoff — so with your code, you can keep editing a later day's games right up until that day's first kickoff
+      {laterGroupEarliestGame ? <> (this week, that's <strong>{kickoffLabel(laterGroupEarliestGame, { timeZone: "America/New_York" })}</strong> for the last day's games)</> : null}.
+      Can't finish everything before the first kickoff? Check the Partial Slate box to submit what you have now and fill in the rest later with your code —
+      if it's still unfinished once its deadline passes, that entry doesn't count for the pot and you won't owe the $5.
+    </li>
     <li><strong>Payment:</strong> Venmo <strong>$5</strong> each week to <strong>@ZackSlay</strong> (Zack Slay).</li>
     <li><strong>Payout:</strong> <strong>Winner-take-all.</strong> The highest score wins the entire pot. If there's a tie on points, the tiebreaker decides; if still tied, the pot is split.</li>
   </ul>
 </div>
-      <div style={{ display:"flex", justifyContent:"flex-end", marginTop:16 }}>
+      <div style={{ display:"flex", justifyContent:"flex-end", marginTop:16, flexShrink:0 }}>
         <button type="button" onClick={()=>setShowRules(false)}>Close</button>
       </div>
     </div>
@@ -1964,6 +2490,49 @@ if (typeof window !== "undefined") window.history.pushState(null, "", "/confirm"
 // -------- LEADERBOARD (sticky first two columns, logos in headers + winners row) --------
 function LeaderboardPage({ user, isAdmin, setPage }) {  // DEV: CFBD diagnostics — verify token retrieval/log (no CFBD API calls)
   const isMobile = useIsMobile();
+
+  // One-time mobile-only popup pointing people at the chat panel's
+  // notification opt-in (see ChatThreadBody/enableChatNotifications) -
+  // desktop already has chat visible/obvious enough not to need this nudge.
+  // Skips itself (and marks dismissed) if this device already opted in some
+  // other way (e.g. toggled it on directly in the chat panel) before ever
+  // seeing this popup.
+  const [showChatNotifPopup, setShowChatNotifPopup] = useState(() => {
+    if (typeof window === "undefined" || !isMobile) return false;
+    try { return localStorage.getItem("chatNotifPopupDismissedForever") !== "1"; } catch (e) { return false; }
+  });
+  useEffect(() => {
+    if (!showChatNotifPopup) return;
+    let token = null;
+    try { token = localStorage.getItem("pushToken"); } catch (e) {}
+    if (!token) return;
+    (async () => {
+      try {
+        const snap = await getDoc(doc(db, "pushTokens", token));
+        if ((snap.data() || {}).chatNotifsEnabled === true) {
+          try { localStorage.setItem("chatNotifPopupDismissedForever", "1"); } catch (e) {}
+          setShowChatNotifPopup(false);
+        }
+      } catch (e) {}
+    })();
+    /* eslint-disable-next-line */
+  }, []);
+  const [chatNotifPopupBusy, setChatNotifPopupBusy] = useState(false);
+  function dismissChatNotifPopup() {
+    try { localStorage.setItem("chatNotifPopupDismissedForever", "1"); } catch (e) {}
+    setShowChatNotifPopup(false);
+  }
+  async function handleEnableChatNotifFromPopup() {
+    setChatNotifPopupBusy(true);
+    try {
+      await enableChatNotifications(isAdmin);
+      dismissChatNotifPopup();
+    } catch (e) {
+      alert((e && e.message) ? e.message : "Couldn't enable notifications.");
+    } finally {
+      setChatNotifPopupBusy(false);
+    }
+  }
   useEffect(() => { if (!isAdmin) return; if (import.meta && import.meta.env && import.meta.env.DEV) {
       getCfbdKey()
         .then(k => console.debug("[cfbd:diag] token present:", !!k))
@@ -2216,7 +2785,8 @@ useEffect(() => {
       if (hasWeekValue(year) && hasWeekValue(week)) {
         const arr = await getPicksForWeek(year, week);
         if (seq !== pickCountSeqRef.current) return;
-        setPickCount(Array.isArray(arr) ? arr.length : 0);
+        const counted = Array.isArray(arr) ? arr.filter(p => !isForfeitedPick(games, p)) : [];
+        setPickCount(counted.length);
       } else {
         setPickCount(0);
       }
@@ -2225,7 +2795,7 @@ useEffect(() => {
       setPickCount(0);
     }
   })();
-}, [year, week]);
+}, [year, week, games]);
   // A separate INITIAL_LIVE_AUTOLOAD effect used to live here, with its own
   // independent config/live subscription that set year/week AND called
   // setGames() directly - duplicating what initFromLiveRef above already
@@ -2241,6 +2811,10 @@ useEffect(() => {
   // Put College GameDay at the end of the list (Leaderboard)
   const gameday = (Array.isArray(games) ? games.find(x => x && x.gameday) : null);
   const displayGames = gameday ? [...games.filter(x => x && x.id !== gameday.id), gameday] : games;
+  // A whole day's games reveal together the moment that day's first game
+  // kicks off - e.g. all Friday picks become visible at Friday's first
+  // kickoff, not staggered by each game's own time.
+  const gameGroupStartMap = useMemo(() => buildGameGroupStartMap(games), [games]);
   const [results, setResults] = useState({});
   // Auto-winner detection now runs server-side in the publishLiveMap Cloud
   // Function, so it works regardless of whether an admin has this page open.
@@ -2248,6 +2822,43 @@ useEffect(() => {
   // Only true once loadAll() below has computed real standings for the
   // currently selected week - gated behind LoadingGate until this settles.
   const [boardLoaded, setBoardLoaded] = useState(false);
+
+  // Computed once and dropped into both of this page's return branches below
+  // (the locked/minimal view and the full board) rather than duplicated -
+  // they're two separate early returns, not one shared render path. Gated on
+  // boardLoaded so it never stacks on top of the loading state.
+  const chatNotifPopupEl = showChatNotifPopup && boardLoaded && (
+    <div style={{
+      position:"fixed", inset:0, zIndex:100, background:"rgba(4,7,15,.72)",
+      display:"flex", alignItems:"center", justifyContent:"center", padding:16
+    }}>
+      <div style={{
+        background:"#121a2b", border:"1px solid #1f2a44", borderRadius:16,
+        padding:"22px 24px", maxWidth:360, width:"100%", boxShadow:"0 20px 60px rgba(0,0,0,.5)"
+      }}>
+        <div style={{ fontSize:28, marginBottom:8 }}>💬</div>
+        <h3 style={{ margin:"0 0 8px", fontSize:17, color:"#eef2ff" }}>Get notified when people chat?</h3>
+        <p style={{ margin:"0 0 16px", fontSize:14, color:"#9aa4c7", lineHeight:1.5 }}>
+          Turn on push notifications for new chat messages - not game results or reminders. You can turn this off anytime from the chat panel.
+        </p>
+        <div style={{ display:"flex", gap:10 }}>
+          <button
+            onClick={handleEnableChatNotifFromPopup}
+            disabled={chatNotifPopupBusy}
+            style={{ flex:1, background:"#6aa2ff", color:"#07152b", border:0, padding:"10px 14px", borderRadius:10, fontWeight:600, cursor:"pointer" }}
+          >
+            {chatNotifPopupBusy ? "Enabling…" : "Enable"}
+          </button>
+          <button
+            onClick={dismissChatNotifPopup}
+            style={{ background:"transparent", color:"#9aa4c7", border:"1px solid #2a3655", padding:"10px 14px", borderRadius:10, cursor:"pointer" }}
+          >
+            Not now
+          </button>
+        </div>
+      </div>
+    </div>
+  );
   // Bumped on every loadAll() call; lets a resolved fetch check whether a
   // newer one has since started so it can discard itself instead of
   // overwriting fresher data with stale results that just happened to
@@ -2276,17 +2887,6 @@ useEffect(() => {
     return () => unsub && unsub();
   }, []);
 
-  // Public, names-free poll results (config/pollResults, kept up to date by
-  // the updatePollResults Cloud Function). Shown once the poll has wrapped
-  // (picks locked) - admins can preview it any time before that.
-  const [pollResults, setPollResults] = useState(null);
-  useEffect(() => {
-    const unsub = onSnapshot(doc(db, "config", "pollResults"), (s) => {
-      setPollResults(s.exists() ? s.data() : null);
-    });
-    return () => unsub();
-  }, []);
-  const [showPollResultsModal, setShowPollResultsModal] = useState(false);
 
   // Years dropdown: which seasons have anything to show (current + any
   // imported history), and any special label a week goes by (e.g. bowls/
@@ -2438,12 +3038,6 @@ useEffect(() => {
     });
     return () => unsub();
   }, []);
-  // Poll results follow the same lock/unlock as the leaderboard itself, and
-  // (like the survey itself, see showSeasonSurvey in PicksPage) only ever
-  // pertained to Week 1 - stop surfacing them to non-admins on any leaderboard
-  // week besides Week 1, regardless of which week is currently live.
-  const showPollResults = isAdmin || (!lbLocked && Number(week) === 1);
-
   // These two refs back scheduleScrollSync(), used further down by the
   // sticky-column scroll-sync logic - they have to be declared here,
   // unconditionally, rather than down where they're used, because the
@@ -2461,7 +3055,7 @@ useEffect(() => {
   const clearWeekIfNoPicks = async () => {
     try {
       const Y = Number(year), W = Number(week);
-      setMsg(`Checking picks for ${Y} / W${W}ï¿½`);
+      setMsg(`Checking picks for ${Y} / W${W}…`);
 
       // Check both numeric-typed and string-typed year/week (defensive for any older docs)
       const qNum = query(collection(db, "picks"), where("year","==", Y), where("week","==", W));
@@ -2499,6 +3093,7 @@ useEffect(() => {
 
   return (<Container maxWidth={1200}>
         <Header user={user} isAdmin={isAdmin} setPage={setPage} />
+        {chatNotifPopupEl}
         <Card>
           <Row style={{ justifyContent:"space-between", alignItems:"flex-start" }}>
             <h2 style={{ margin: 0 }}>CFB Pick'Ems {weekLabelFor(year, week)}</h2>
@@ -2770,7 +3365,7 @@ useEffect(() => {
   const clearWeekIfNoPicks = async () => {
     try {
       const Y = Number(year), W = Number(week);
-      setMsg(`Checking picks for ${Y} / W${W}ï¿½`);
+      setMsg(`Checking picks for ${Y} / W${W}…`);
 
       // Check both numeric-typed and string-typed year/week (defensive for any older docs)
       const qNum = query(collection(db, "picks"), where("year","==", Y), where("week","==", W));
@@ -2808,14 +3403,12 @@ useEffect(() => {
 
   return (<Container maxWidth={1200}>
       <Header user={user} isAdmin={isAdmin} setPage={setPage} />
+      {chatNotifPopupEl}
       <LoadingGate ready={boardLoaded}>
       <Card>
         <Row style={{ justifyContent:"space-between", alignItems:"flex-end" }}>
           <h2 style={{ margin: 0 }}>CFB Pick'Ems {weekLabelFor(year, week)}</h2>
           <Row style={{ gap:8, alignItems:"flex-end" }}>
-            {showPollResults && pollResults && (
-              <button type="button" onClick={()=>setShowPollResultsModal(true)}>Poll Results</button>
-            )}
             {yearsAvailable.length > 1 && (
               <Field label="Season">
                 <select value={(year ?? '')} onChange={e => handleYearChange(Number(e.target.value))} style={inputStyle}>
@@ -2853,39 +3446,6 @@ useEffect(() => {
             </Field>
           </Row>
         </Row>
-        {showPollResultsModal && pollResults && (
-          <div style={{position:"fixed", inset:0, background:"rgba(0,0,0,.6)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:9999}} onClick={()=>setShowPollResultsModal(false)}>
-            <div style={{ background:"#121a2b", border:"1px solid #1f2a44", borderRadius:16, padding:16, maxWidth:420, width:"90%", boxShadow:"0 10px 24px rgba(0,0,0,.35)" }} onClick={e=>e.stopPropagation()}>
-              <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:12 }}>
-                <h3 style={{ margin:0, fontSize:16 }}>Poll Results</h3>
-                {lbLocked && isAdmin && <span style={{ fontSize:11, color:"#f0b429" }}>Preview</span>}
-              </div>
-              {[
-                { pollId: "tf_games", question: "First game of the week?", note: "Going forward, we'll start picks on Friday night, unless there's a can't-miss game on Thursday.", order: ["Thursday", "Friday", "Saturday", "No preference"] },
-                { pollId: "games_per_week", question: "Games per week?", note: "We'll aim for 30-35 games, pulling out games with significantly high spreads and favoring more competitive matchups, even if it isn't a marquee game.", order: ["Significantly fewer (around 20 games)", "Fewer (around 30 games)", "Keep the same", "More (around 50 games)", "Significantly more (around 60 games)"] },
-              ].map(({ pollId, question, note, order }) => {
-                const data = pollResults[pollId] || { counts: {}, voters: 0 };
-                const answered = order.filter(opt => data.counts[opt] > 0);
-                return (
-                  <div key={pollId} style={{ marginBottom:16 }}>
-                    <div style={{ fontWeight:600, marginBottom:6, fontSize:14 }}>{question}</div>
-                    {answered.length === 0 && <div style={{ fontSize:13, opacity:.6 }}>No votes yet.</div>}
-                    {answered.map(opt => (
-                      <div key={opt} style={{ display:"flex", justifyContent:"space-between", fontSize:13, padding:"3px 0" }}>
-                        <span>{opt}</span>
-                        <span style={{ opacity:.75 }}>{data.counts[opt]}</span>
-                      </div>
-                    ))}
-                    <div style={{ fontSize:12, marginTop:8, padding:"8px 10px", borderRadius:8, background:"rgba(240,180,41,0.1)", border:"1px solid rgba(240,180,41,0.35)", color:"#f0b429" }}>{note}</div>
-                  </div>
-                );
-              })}
-              <div style={{ display:"flex", justifyContent:"flex-end", marginTop:8 }}>
-                <button type="button" onClick={()=>setShowPollResultsModal(false)}>Close</button>
-              </div>
-            </div>
-          </div>
-        )}
         {isMobile && (
           <div style={{ fontSize:11, color:"#9aa4c7", margin:"6px 2px 0", textAlign:"center" }}>
             &harr; Swipe the table to see more games
@@ -3139,12 +3699,23 @@ while (i < seq.length) {
                   {displayGames.map(g => {
                     const canSeePicks = lbPicksPublic || isAdmin || !isLiveWeek;
                     const choice = p.picks?.[g.id];
-                    const label = !canSeePicks ? "🔒" :
+                    // Even once the board is public, a whole day's picks stay
+                    // hidden until that day's first kickoff happens (all
+                    // Friday games reveal together at Friday's first kickoff,
+                    // all Saturday games at Saturday's) - otherwise anyone
+                    // still able to edit a later day's games (with their
+                    // code) could see the field's picks for it before
+                    // locking theirs in. Admins and non-live (past) weeks
+                    // always see everything.
+                    const groupStartMs = gameGroupStartMap.get(g.id);
+                    const gameStarted = groupStartMs != null && groupStartMs <= Date.now();
+                    const revealed = canSeePicks && (isAdmin || !isLiveWeek || gameStarted);
+                    const label = !revealed ? "🔒" :
                       choice === g.home ? teamLabel(g.home, g.homeRank) :
                       choice === g.away ? teamLabel(g.away, g.awayRank) :
                       (choice || "-");
                     return (
-                      <td key={g.id} data-game-id={g.id} style={{ ...pickCellStyle(g.id, canSeePicks ? choice : null), width: 140, minwidth: 140 }}><div style={{display:"flex",justifyContent:"center"}}>{label}</div></td>
+                      <td key={g.id} data-game-id={g.id} style={{ ...pickCellStyle(g.id, revealed ? choice : null), width: 140, minwidth: 140 }}><div style={{display:"flex",justifyContent:"center"}}>{label}</div></td>
                     );
                   })}
                 {gameday ? (
@@ -3205,6 +3776,28 @@ const kickoffDate = (g) => {
   return d && isFinite(d.getTime()) ? d : null;
 };
 
+// Maps each game's id to the earliest kickoff among every game in its own
+// calendar-date group (America/New_York) - e.g. every Friday game maps to
+// Friday's own first kickoff, every Saturday game to Saturday's first
+// kickoff. Used to lock/reveal a whole day's games together rather than
+// each game individually by its own kickoff - "all Friday games lock the
+// moment the first Friday game kicks off," not staggered by each game's
+// own time. Shared by PicksPage (per-game edit lock) and LeaderboardPage
+// (per-game reveal).
+function buildGameGroupStartMap(games) {
+  const groups = groupGamesByDate(Array.isArray(games) ? games : [], { timeZone: "America/New_York" });
+  const map = new Map();
+  for (const grp of groups) {
+    const times = grp.items
+      .map(g => kickoffDate(g))
+      .filter(d => d instanceof Date && !isNaN(d))
+      .map(d => d.getTime());
+    const earliest = times.length ? Math.min(...times) : null;
+    for (const g of grp.items) map.set(g.id, earliest);
+  }
+  return map;
+}
+
 const kickoffLabel = (g, opts = {}) => {
   const d = kickoffDate(g);
   if (!d) return "TBD";
@@ -3235,12 +3828,884 @@ const kickoffLabel = (g, opts = {}) => {
 
 const isKickoffTbd = (g) => !kickoffDate(g);
 
+/* === Weekly chat === */
+
+// Builds the "known participant" roster used by chat's email-verification
+// step, keeping every email ever seen per person (not collapsed to one) so
+// a typed email can be checked against anything that person has ever
+// submitted picks with. Uses the same buildRoster identity resolution as
+// Player Profiles/Who Hasn't Submitted/My Season, so a rename or merge made
+// there shows up in the chat name picker too - the display name is the
+// player's edited name when they've been claimed, or the same "most
+// recently submitted" name buildRoster shows everywhere else.
+async function buildChatRoster() {
+  const [picksSnap, playersSnap] = await Promise.all([
+    getDocs(collection(db, "picks")),
+    getDocs(collection(db, "players")),
+  ]);
+  const allPicks = []; picksSnap.forEach(d => allPicks.push(d.data()));
+  const players = []; playersSnap.forEach(d => players.push({ id: d.id, ...d.data() }));
+
+  const rosterData = buildRoster(allPicks, players);
+  const roster = [];
+  for (const row of rosterData.rows) {
+    const displayName = `${row.firstName || ""} ${row.lastName || ""}`.trim();
+    if (!displayName) continue;
+    const emails = new Set();
+    for (const p of docsForRosterRow(rosterData, row)) {
+      const email = String(p.email || "").trim().toLowerCase();
+      if (email) emails.add(email);
+    }
+    if (row.email) emails.add(String(row.email).trim().toLowerCase());
+    roster.push({ displayName, emails });
+  }
+  roster.sort((a, b) => a.displayName.localeCompare(b.displayName));
+  return roster;
+}
+
+// First-run identity setup for a device with no known name yet (no linked
+// push-token name). Picking a name from the roster and matching its email
+// marks the device "verified"; typing an unrecognized name (a brand-new
+// participant) still works, just without the verified badge. Either way,
+// once chatDevices/{deviceId} is created the device is stuck with that name
+// - see firestore.rules - so this only ever runs once per device.
+function ChatIdentitySetup({ deviceId, onDone }) {
+  const isMobile = useIsMobile();
+  const [roster, setRoster] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    buildChatRoster().then(r => { if (!cancelled) setRoster(r); }).catch(() => { if (!cancelled) setRoster([]); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [newPersonMode, setNewPersonMode] = useState(false);
+
+  const matched = useMemo(() => {
+    if (!roster) return null;
+    const nl = name.trim().toLowerCase();
+    if (!nl) return null;
+    return roster.find(r => r.displayName.toLowerCase() === nl) || null;
+  }, [roster, name]);
+
+  const claim = async (finalName, verified) => {
+    setSaving(true);
+    setError("");
+    try {
+      const payload = { name: finalName, verified: !!verified, linkedFromPushToken: false, createdAt: serverTimestamp() };
+      await setDoc(doc(db, "chatDevices", deviceId), payload);
+      onDone(payload);
+    } catch (e) {
+      setError(e?.message || "Couldn't save - try again.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const submit = async () => {
+    const nm = name.trim();
+    if (!nm) { setError("Enter a name."); return; }
+    if (newPersonMode || !matched) { await claim(nm, false); return; }
+    const el = email.trim().toLowerCase();
+    if (!el) { setError("Enter the email you used for picks to verify it's you."); return; }
+    if (matched.emails.has(el)) {
+      await claim(matched.displayName, true);
+    } else {
+      setError(`That email doesn't match what's on file for ${matched.displayName}. Double-check it, or use "This isn't me" below.`);
+    }
+  };
+
+  return (
+    <>
+      <div style={{ fontSize: 13, color: "#9aa4c7", marginBottom: 10 }}>
+        Pick your name, then verify it's you with the email you've used for picks. Once set, this device can't post under a different name.
+      </div>
+      <Field label="Your name">
+        <input
+          style={{ ...inputStyle, fontSize: 16 }}
+          list="chat-roster-names"
+          value={name}
+          onChange={e => { setName(e.target.value); setError(""); setNewPersonMode(false); }}
+          placeholder="Start typing your name…"
+          autoFocus={!isMobile}
+        />
+        <datalist id="chat-roster-names">
+          {(roster || []).map(r => <option key={r.displayName} value={r.displayName} />)}
+        </datalist>
+      </Field>
+      {matched && !newPersonMode && (
+        <Field label="Email used for picks">
+          <input
+            style={{ ...inputStyle, fontSize: 16 }}
+            type="email"
+            value={email}
+            onChange={e => { setEmail(e.target.value); setError(""); }}
+            placeholder="you@example.com"
+          />
+        </Field>
+      )}
+      {error && <div style={{ color: "#ff6b6b", fontSize: 13, marginBottom: 8 }}>{error}</div>}
+      <Row>
+        <button style={adminBtn("primary")} disabled={saving || !name.trim()} onClick={submit}>
+          {saving ? "Saving…" : "Join chat"}
+        </button>
+        {matched && !newPersonMode && (
+          <button style={adminBtn("neutral")} onClick={() => setNewPersonMode(true)}>This isn't me</button>
+        )}
+      </Row>
+    </>
+  );
+}
+
+// Deterministic per-name color/initials so the same person always renders
+// the same avatar across a session, without storing a color anywhere.
+function chatAvatarColor(name) {
+  let hash = 0;
+  const s = String(name || "");
+  for (let i = 0; i < s.length; i++) hash = (hash * 31 + s.charCodeAt(i)) >>> 0;
+  return `hsl(${hash % 360}, 55%, 42%)`;
+}
+function chatInitials(name) {
+  const parts = String(name || "").trim().split(/\s+/);
+  return ((parts[0]?.[0] || "") + (parts[1]?.[0] || "")).toUpperCase() || "?";
+}
+function chatTimeLabel(ts) {
+  const d = ts?.toDate ? ts.toDate() : null;
+  return d ? d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "";
+}
+
+const QUICK_REACTIONS = ["👍", "❤️", "😂", "🔥", "😮", "😢"];
+
+// Downscales/recompresses a chosen photo before upload - a raw phone photo
+// can be 5-10MB+, which is slow to upload and wasteful to store for
+// something shown at bubble size in a chat thread. imageOrientation:
+// "from-image" bakes in EXIF rotation so the canvas output looks right
+// without needing to read/apply EXIF tags manually.
+async function compressImageForChat(file, maxDim = 1600, quality = 0.82) {
+  let bitmap;
+  try {
+    bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
+  } catch (e) {
+    bitmap = await createImageBitmap(file);
+  }
+  let { width, height } = bitmap;
+  if (width > maxDim || height > maxDim) {
+    const scale = maxDim / Math.max(width, height);
+    width = Math.round(width * scale);
+    height = Math.round(height * scale);
+  }
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(bitmap, 0, 0, width, height);
+  const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", quality));
+  if (!blob) throw new Error("Could not process that image.");
+  return blob;
+}
+
+// Chat is one continuous thread, not scoped per week - this fixed key is
+// the subcollection parent doc id everywhere (client and functions/index.js
+// server-side banners) instead of `${year}_${week}`.
+const CHAT_THREAD_KEY = "general";
+
+// Shared by the chat panel's own toggle (ChatThreadBody) and the one-time
+// mobile popup on the Leaderboard (LeaderboardPage) - registers this device
+// for push (permission prompt + token, if it doesn't already have one) and
+// tags the resulting token as opted into chat notifications. Returns the
+// token so the caller can keep it around (e.g. to subscribe to its doc).
+async function enableChatNotifications(isAdmin) {
+  let token = null;
+  try { token = localStorage.getItem("pushToken"); } catch (e) {}
+  if (!token) token = await enablePushNotifications({ isAdmin });
+  await setDoc(doc(db, "pushTokens", token), { chatNotifsEnabled: true }, { merge: true });
+  return token;
+}
+
+function ChatThreadBody({ deviceId, identity, isAdmin, fillHeight }) {
+  const isMobile = useIsMobile();
+  const [messages, setMessages] = useState([]);
+  const [text, setText] = useState("");
+  const [sending, setSending] = useState(false);
+  const [uploadingImage, setUploadingImage] = useState(false);
+  const [lightboxUrl, setLightboxUrl] = useState(null);
+  const bottomRef = useRef(null);
+  const fileInputRef = useRef(null);
+
+  // Opt-in push notifications for new chat messages - available to anyone
+  // in the pool, deliberately separate from the admin-controlled reminder
+  // notifications (which stay opt-out by default) and never fired for
+  // system banners (see sendChatNotification in functions/index.js, gated
+  // on chatNotifsEnabled living on this device's own pushTokens doc). If
+  // this device has never enabled push at all, turning this on runs through
+  // the same enablePushNotifications flow used elsewhere (permission prompt
+  // + token registration) before tagging that new token as opted in.
+  const [pushToken, setPushToken] = useState(() => {
+    try { return localStorage.getItem("pushToken"); } catch { return null; }
+  });
+  const [chatNotifsEnabled, setChatNotifsEnabled] = useState(false);
+  const [notifBusy, setNotifBusy] = useState(false);
+  useEffect(() => {
+    if (!pushToken) { setChatNotifsEnabled(false); return; }
+    const unsub = onSnapshot(doc(db, "pushTokens", pushToken), s => {
+      setChatNotifsEnabled(!!(s.data() || {}).chatNotifsEnabled);
+    });
+    return () => unsub();
+  }, [pushToken]);
+  const toggleChatNotifs = async (next) => {
+    setNotifBusy(true);
+    try {
+      if (next) {
+        const token = await enableChatNotifications(isAdmin);
+        setPushToken(token);
+      } else if (pushToken) {
+        await setDoc(doc(db, "pushTokens", pushToken), { chatNotifsEnabled: false }, { merge: true });
+      }
+    } catch (e) {
+      alert(e?.message || "Couldn't update notification settings.");
+    } finally {
+      setNotifBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    const q = query(collection(db, "chatMessages", CHAT_THREAD_KEY, "messages"), orderBy("createdAt", "asc"));
+    const unsub = onSnapshot(q, snap => setMessages(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+    return () => unsub();
+  }, []);
+
+  useEffect(() => { bottomRef.current?.scrollIntoView({ block: "nearest" }); }, [messages.length]);
+
+  // Consecutive messages from the same sender are grouped into one visual
+  // "run" - only the first bubble gets the name+avatar, only the last gets
+  // the timestamp and the tucked-in tail corner, same as a real chat app.
+  // A system banner (posted server-side by a Cloud Function when an
+  // automation fires - picks locking, a game going final, etc; see
+  // postChatBanner in functions/index.js) always stands alone, never grouped
+  // into a run with the real messages next to it.
+  // "Mine" (and grouping consecutive bubbles together) is keyed by name, not
+  // deviceId - the same locked name can legitimately post from more than one
+  // device (phone + computer), and those should still read as "me" and
+  // group together, not show up as if a different person sent them.
+  const grouped = useMemo(() => messages.map((m, i) => ({
+    ...m,
+    mine: m.name === identity.name,
+    isFirstInRun: i === 0 || messages[i - 1].name !== m.name || messages[i - 1].system || m.system,
+    isLastInRun: i === messages.length - 1 || messages[i + 1].name !== m.name || messages[i + 1].system || m.system,
+  })), [messages, identity.name]);
+
+  const send = async () => {
+    const t = text.trim();
+    if (!t) return;
+    setSending(true);
+    try {
+      await addDoc(collection(db, "chatMessages", CHAT_THREAD_KEY, "messages"), {
+        deviceId, name: identity.name, verified: !!identity.verified, text: t, createdAt: serverTimestamp(),
+      });
+      setText("");
+    } catch (e) {
+      alert(e?.message || "Couldn't send - try again.");
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const pickImage = () => fileInputRef.current?.click();
+
+  const sendImage = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow picking the same file again later
+    if (!file) return;
+    if (!file.type.startsWith("image/")) { alert("Please choose an image file."); return; }
+    setUploadingImage(true);
+    try {
+      const blob = await compressImageForChat(file);
+      const path = `chatImages/${deviceId}_${Date.now()}.jpg`;
+      const objRef = storageRef(storage, path);
+      await uploadBytes(objRef, blob, { contentType: "image/jpeg" });
+      const url = await getDownloadURL(objRef);
+      await addDoc(collection(db, "chatMessages", CHAT_THREAD_KEY, "messages"), {
+        deviceId, name: identity.name, verified: !!identity.verified,
+        imageUrl: url, storagePath: path, createdAt: serverTimestamp(),
+      });
+    } catch (err) {
+      alert(err?.message || "Couldn't send that photo - try again.");
+    } finally {
+      setUploadingImage(false);
+    }
+  };
+
+  const remove = async (id) => {
+    if (!confirm("Delete this message?")) return;
+    try {
+      const msg = messages.find(mm => mm.id === id);
+      await deleteDoc(doc(db, "chatMessages", CHAT_THREAD_KEY, "messages", id));
+      if (msg?.storagePath) deleteObject(storageRef(storage, msg.storagePath)).catch(() => {});
+    } catch (e) { alert(e?.message || "Couldn't delete."); }
+  };
+
+  // Reactions key off name (not deviceId), same reasoning as "mine" above -
+  // reacting from your phone should show as already-reacted on your
+  // computer too. Uses arrayUnion/arrayRemove (not a read-modify-write) so
+  // two people reacting to the same message at the same time can't clobber
+  // each other.
+  const [openReactionPicker, setOpenReactionPicker] = useState(null);
+  const [showCustomEmojiInput, setShowCustomEmojiInput] = useState(false);
+  const [customEmojiText, setCustomEmojiText] = useState("");
+  const closePicker = () => { setOpenReactionPicker(null); setShowCustomEmojiInput(false); setCustomEmojiText(""); };
+  // Signal-style split: the 🙂+ button + quick picker below is how you add
+  // your own reaction (tap an emoji); tapping the badge that sits on the
+  // message itself only ever shows who reacted - it never toggles anything,
+  // so there's no ambiguity between "I want to see who reacted" and "I want
+  // to react/un-react". Removing your own reaction happens from inside that
+  // same breakdown view instead.
+  const [reactionDetailMsgId, setReactionDetailMsgId] = useState(null);
+  const toggleReaction = async (msgId, emoji) => {
+    const e = String(emoji || "").trim();
+    if (!e) return;
+    const msg = messages.find(mm => mm.id === msgId);
+    const already = (msg?.reactions?.[e] || []).includes(identity.name);
+    closePicker();
+    try {
+      await updateDoc(doc(db, "chatMessages", CHAT_THREAD_KEY, "messages", msgId), {
+        [`reactions.${e}`]: already ? arrayRemove(identity.name) : arrayUnion(identity.name),
+      });
+    } catch (err) {
+      alert(err?.message || "Couldn't react - try again.");
+    }
+  };
+
+  const Wrapper = fillHeight ? "div" : React.Fragment;
+  const wrapperProps = fillHeight ? { style: { display: "flex", flexDirection: "column", flex: 1, minHeight: 0 } } : {};
+
+  return (
+    <Wrapper {...wrapperProps}>
+      <div style={{ flexShrink: 0, borderBottom: "1px solid #1f2a44", marginBottom: 8 }}>
+        <AdminToggleRow
+          divider={false}
+          label="🔔 Notify me when people chat"
+          description="Just new messages - not game results or reminders."
+          checked={chatNotifsEnabled}
+          onChange={toggleChatNotifs}
+          disabled={notifBusy}
+        />
+      </div>
+      <div style={fillHeight
+        ? { flex: 1, minHeight: 0, overflowY: "auto", overscrollBehavior: "contain", display: "flex", flexDirection: "column", justifyContent: "flex-end", gap: 2, marginBottom: 10, paddingRight: 4 }
+        : { maxHeight: "48vh", overflowY: "auto", overscrollBehavior: "contain", display: "flex", flexDirection: "column", gap: 2, marginBottom: 10, paddingRight: 4 }}>
+        {grouped.length === 0 && <div style={{ fontSize: 13, color: "#9aa4c7" }}>No messages yet — say something!</div>}
+        {grouped.map(m => {
+          if (m.system && m.kind === "game-final") {
+            return (
+              <div key={m.id} style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 6, margin: "10px 0" }}>
+                <div
+                  onClick={e => { if (isAdmin && e.detail === 3) remove(m.id); }}
+                  title={isAdmin ? "Triple-click to delete" : undefined}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 8, background: "#141a30", border: "1px solid #2a3655",
+                    borderRadius: 14, padding: "8px 14px",
+                  }}>
+                  <div style={{ fontSize: 9, fontWeight: 700, color: "#6b7797", letterSpacing: 0.5 }}>FINAL</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <TeamLogo school={m.away} size={22} />
+                    <span style={{ fontSize: 13, fontWeight: m.winner === m.away ? 700 : 400, color: m.winner === m.away ? "#fff" : "#8590b0" }}>{m.awayPoints}</span>
+                  </div>
+                  <span style={{ fontSize: 11, color: "#5b6a8f" }}>@</span>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <span style={{ fontSize: 13, fontWeight: m.winner === m.home ? 700 : 400, color: m.winner === m.home ? "#fff" : "#8590b0" }}>{m.homePoints}</span>
+                    <TeamLogo school={m.home} size={22} />
+                  </div>
+                </div>
+              </div>
+            );
+          }
+          if (m.system) {
+            return (
+              <div key={m.id} style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 6, margin: "10px 0" }}>
+                <div
+                  onClick={e => { if (isAdmin && e.detail === 3) remove(m.id); }}
+                  title={isAdmin ? "Triple-click to delete" : undefined}
+                  style={{
+                    background: "#141a30", border: "1px solid #2a3655", color: "#9aa4c7",
+                    fontSize: 11.5, fontWeight: 600, padding: "5px 12px", borderRadius: 999, textAlign: "center",
+                  }}>
+                  {m.text}
+                </div>
+              </div>
+            );
+          }
+          const color = chatAvatarColor(m.name);
+          const side = m.mine ? "Right" : "Left";
+          return (
+            <div key={m.id} style={{ display: "flex", flexDirection: m.mine ? "row-reverse" : "row", alignItems: "flex-end", gap: 6, marginTop: m.isFirstInRun ? 10 : 2 }}>
+              {!m.mine && (
+                <div style={{
+                  width: 26, height: 26, borderRadius: "50%", flexShrink: 0, marginBottom: 2,
+                  display: "grid", placeItems: "center", fontSize: 10, fontWeight: 700, color: "#fff",
+                  background: color, visibility: m.isFirstInRun ? "visible" : "hidden",
+                }}>
+                  {chatInitials(m.name)}
+                </div>
+              )}
+              <div style={{ display: "flex", flexDirection: "column", alignItems: m.mine ? "flex-end" : "flex-start", maxWidth: "76%" }}>
+                {m.isFirstInRun && !m.mine && (
+                  <div style={{ fontSize: 11.5, fontWeight: 700, color, margin: "0 4px 2px" }}>
+                    {m.name}{m.verified && <span title="Verified" style={{ marginLeft: 3 }}>✓</span>}
+                  </div>
+                )}
+                {(() => {
+                  const reactionEntries = Object.entries(m.reactions || {}).filter(([, names]) => names?.length > 0);
+                  const totalReactions = reactionEntries.reduce((sum, [, names]) => sum + names.length, 0);
+                  return (
+                <div style={{ display: "flex", alignItems: "flex-end", gap: 6, marginBottom: totalReactions > 0 ? 10 : 0 }}>
+                  <div style={{ position: "relative" }}>
+                    <div
+                      onClick={e => { if (isAdmin && e.detail === 3) remove(m.id); }}
+                      title={isAdmin ? "Triple-click to delete" : undefined}
+                      style={{
+                        background: m.mine ? "#2a4fb8" : "#1c2544",
+                        color: "#fff",
+                        padding: m.imageUrl ? 4 : "8px 12px",
+                        borderRadius: 16,
+                        [`borderTop${side}Radius`]: m.isFirstInRun ? 16 : 6,
+                        [`borderBottom${side}Radius`]: m.isLastInRun ? 4 : 16,
+                        fontSize: 13.5,
+                        whiteSpace: "pre-wrap",
+                        wordBreak: "break-word",
+                        maxWidth: m.imageUrl ? 220 : undefined,
+                      }}>
+                      {m.imageUrl && (
+                        <img
+                          src={m.imageUrl}
+                          alt="Shared photo"
+                          onClick={e => { e.stopPropagation(); setLightboxUrl(m.imageUrl); }}
+                          style={{ display: "block", maxWidth: "100%", maxHeight: 260, borderRadius: 12, cursor: "zoom-in" }}
+                        />
+                      )}
+                      {m.text && <div style={{ padding: m.imageUrl ? "6px 4px 2px" : 0 }}>{m.text}</div>}
+                    </div>
+                    {totalReactions > 0 && (
+                      // Sits tucked into the bottom corner of the bubble
+                      // itself, overlapping it, same as Signal/iMessage -
+                      // not a separate row of pills floating below.
+                      <button
+                        onClick={() => setReactionDetailMsgId(m.id)}
+                        style={{
+                          position: "absolute", bottom: isMobile ? -10 : -16, right: -4,
+                          display: "flex", alignItems: "center", gap: 2,
+                          background: "#141a30", border: "2px solid #0e1424", borderRadius: 999,
+                          padding: "2px 6px", fontSize: 11.5, cursor: "pointer",
+                          boxShadow: "0 1px 4px rgba(0,0,0,.4)", color: "#eef2ff",
+                        }}
+                      >
+                        {reactionEntries.slice(0, 3).map(([emoji]) => <span key={emoji}>{emoji}</span>)}
+                        <span>{totalReactions}</span>
+                      </button>
+                    )}
+                  </div>
+                  <button
+                    onClick={() => openReactionPicker === m.id ? closePicker() : (setOpenReactionPicker(m.id), setShowCustomEmojiInput(false))}
+                    title="React"
+                    style={{ background: "transparent", border: "none", cursor: "pointer", fontSize: 13, padding: 2, flexShrink: 0, opacity: 0.4, filter: "grayscale(1)" }}
+                  >
+                    🙂+
+                  </button>
+                </div>
+                  );
+                })()}
+                {openReactionPicker === m.id && (
+                  // Inline, not absolutely positioned - the message list
+                  // scrolls with overflow:auto, which would clip a floating
+                  // popover near the bottom of the visible area.
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 4 }}>
+                    <div style={{
+                      display: "flex", gap: 2, background: "#1c2544", border: "1px solid #2a3655", borderRadius: 12, padding: 4,
+                    }}>
+                      {QUICK_REACTIONS.map(e => (
+                        <button key={e} onClick={() => toggleReaction(m.id, e)} style={{ background: "transparent", border: "none", fontSize: 17, cursor: "pointer", padding: "3px 5px", borderRadius: 6 }}>
+                          {e}
+                        </button>
+                      ))}
+                      <button
+                        onClick={() => setShowCustomEmojiInput(v => !v)}
+                        title="Any emoji"
+                        style={{ background: showCustomEmojiInput ? "#2a3655" : "transparent", border: "none", color: "#cfd8f0", cursor: "pointer", fontSize: 15, fontWeight: 700, padding: "3px 8px", borderRadius: 6 }}
+                      >
+                        +
+                      </button>
+                    </div>
+                    {showCustomEmojiInput && (
+                      <div style={{ display: "flex", gap: 4 }}>
+                        <input
+                          style={{ ...inputStyle, width: 90, fontSize: 16, padding: "6px 8px" }}
+                          value={customEmojiText}
+                          onChange={e => setCustomEmojiText(e.target.value)}
+                          onKeyDown={e => { if (e.key === "Enter") toggleReaction(m.id, customEmojiText); }}
+                          placeholder="Any emoji…"
+                          maxLength={8}
+                          autoFocus
+                        />
+                        <button
+                          onClick={() => toggleReaction(m.id, customEmojiText)}
+                          disabled={!customEmojiText.trim()}
+                          style={{ ...adminBtn("primary"), padding: "6px 10px", fontSize: 13 }}
+                        >
+                          React
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {m.isLastInRun && chatTimeLabel(m.createdAt) && (
+                  <div style={{ fontSize: 10, color: "#5b6a8f", margin: "2px 4px 0" }}>{chatTimeLabel(m.createdAt)}</div>
+                )}
+              </div>
+            </div>
+          );
+        })}
+        <div ref={bottomRef} />
+      </div>
+      <div style={{ fontSize: 11, color: "#6b7797", margin: "0 2px 6px" }}>
+        Chatting as {identity.name}{uploadingImage ? " — uploading photo…" : ""}
+      </div>
+      <Row>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          style={{ display: "none" }}
+          onChange={sendImage}
+        />
+        <button
+          type="button"
+          onClick={pickImage}
+          disabled={uploadingImage}
+          title="Send a photo"
+          style={{ background: "transparent", border: "1px solid #2a3655", borderRadius: 10, padding: "8px 10px", cursor: "pointer", fontSize: 16, color: "#cfd8f0", flexShrink: 0, opacity: uploadingImage ? 0.6 : 1 }}
+        >
+          📷
+        </button>
+        <input
+          style={{ ...inputStyle, flex: 1, fontSize: 16 }}
+          value={text}
+          onChange={e => setText(e.target.value)}
+          onKeyDown={e => { if (e.key === "Enter") send(); }}
+          onFocus={() => {
+            // Tapping in re-scrolls to the latest message, same as any chat
+            // app - otherwise the keyboard sliding up can leave the last
+            // message hidden behind it. Delayed a beat for the keyboard's
+            // open animation (and the visualViewport resize above) to
+            // actually finish shrinking the sheet first.
+            setTimeout(() => bottomRef.current?.scrollIntoView({ block: "end" }), 300);
+          }}
+          placeholder="Type a message…"
+          maxLength={500}
+          autoFocus={!isMobile}
+        />
+        <button style={adminBtn("primary")} disabled={sending || !text.trim()} onClick={send}>Send</button>
+      </Row>
+      {reactionDetailMsgId && (() => {
+        const msg = messages.find(mm => mm.id === reactionDetailMsgId);
+        const entries = Object.entries(msg?.reactions || {}).filter(([, names]) => names?.length > 0);
+        if (!entries.length) return null;
+        return (
+          <ModalOverlay>
+            <Card style={{ padding: 18, width: "min(320px, 90vw)", margin: "0 auto" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+                <h3 style={{ margin: 0, fontSize: 16 }}>Reactions</h3>
+                <button
+                  onClick={() => setReactionDetailMsgId(null)}
+                  style={{ background: "transparent", border: "none", color: "#cfd8f0", cursor: "pointer", fontSize: 18, padding: 4, lineHeight: 1 }}
+                >
+                  ✕
+                </button>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 14, maxHeight: "50vh", overflowY: "auto" }}>
+                {entries.map(([emoji, names]) => (
+                  <div key={emoji}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: "#9aa4c7", marginBottom: 6 }}>{emoji} {names.length}</div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                      {names.map(n => (
+                        <div key={n} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 14, color: "#eef2ff" }}>
+                          <span>{n}</span>
+                          {n === identity.name && (
+                            <button
+                              onClick={() => { toggleReaction(reactionDetailMsgId, emoji); setReactionDetailMsgId(null); }}
+                              style={{ background: "transparent", border: "none", color: "#f0596b", cursor: "pointer", fontSize: 12, fontWeight: 600 }}
+                            >
+                              Remove
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          </ModalOverlay>
+        );
+      })()}
+      {lightboxUrl && (
+        <div
+          onClick={() => setLightboxUrl(null)}
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.85)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20, cursor: "zoom-out" }}
+        >
+          <img src={lightboxUrl} alt="Shared photo" style={{ maxWidth: "100%", maxHeight: "100%", borderRadius: 8 }} />
+        </div>
+      )}
+    </Wrapper>
+  );
+}
+
+// A 💬 icon near the top of the Header that pops open one continuous chat
+// thread (not scoped per week - see CHAT_THREAD_KEY) in a modal. Identity
+// resolution (device -> name) runs as soon as the icon mounts, not on open,
+// so a returning device's badge count is accurate and opening the modal
+// never has to wait on it. Reuses the push-notification token as the device
+// id when one exists (so a device already known by name via pushTokens
+// never has to ask again - see ChatIdentitySetup), otherwise a random id
+// stashed in localStorage. Either way, once chatDevices/{deviceId} exists,
+// this device is permanently locked to that name (admin can unlock).
+function WeekChat({ isAdmin, open: openProp, onOpenChange }) {
+  const isMobile = useIsMobile();
+  // Optionally controlled from outside (Header uses this so the "new chat
+  // feature" announcement modal's CTA can open the same chat modal) - falls
+  // back to its own state when no parent wants to control it.
+  const [openState, setOpenState] = useState(false);
+  const open = openProp !== undefined ? openProp : openState;
+  const setOpen = onOpenChange || setOpenState;
+
+  // Lock background scroll while chat is open. overflow:hidden alone isn't
+  // enough on iOS Safari - it ignores that for touch-driven scrolling, so a
+  // drag on the message list still scrolls the page underneath. Pinning the
+  // body itself with position:fixed (restoring the exact scroll offset on
+  // close) is the reliable cross-browser fix.
+  useEffect(() => {
+    if (!open) return;
+    const scrollY = window.scrollY;
+    const prev = {
+      position: document.body.style.position,
+      top: document.body.style.top,
+      left: document.body.style.left,
+      right: document.body.style.right,
+      width: document.body.style.width,
+      overflow: document.body.style.overflow,
+      overscrollBehavior: document.body.style.overscrollBehavior,
+      htmlOverflow: document.documentElement.style.overflow,
+    };
+    document.body.style.position = "fixed";
+    document.body.style.top = `-${scrollY}px`;
+    document.body.style.left = "0";
+    document.body.style.right = "0";
+    document.body.style.width = "100%";
+    document.body.style.overflow = "hidden";
+    document.body.style.overscrollBehavior = "none";
+    // Some iOS Safari versions still scroll-chain to <html> once <body> is
+    // taken out of the normal flow by position:fixed - belt-and-suspenders.
+    document.documentElement.style.overflow = "hidden";
+    return () => {
+      document.body.style.position = prev.position;
+      document.body.style.top = prev.top;
+      document.body.style.left = prev.left;
+      document.body.style.right = prev.right;
+      document.body.style.width = prev.width;
+      document.body.style.overflow = prev.overflow;
+      document.body.style.overscrollBehavior = prev.overscrollBehavior;
+      document.documentElement.style.overflow = prev.htmlOverflow;
+      window.scrollTo(0, scrollY);
+    };
+  }, [open]);
+
+  // Reserve space for the on-screen keyboard inside the mobile full-screen
+  // sheet, WITHOUT resizing the sheet's own fixed box. An earlier version
+  // resized the whole box to visualViewport.height, but that resize lags a
+  // frame or two behind iOS's own keyboard animation, so the real page
+  // flashed into view underneath for a moment - which read as "the page
+  // scrolls" when tapping the input. Padding the bottom of an
+  // always-full-height box instead only reflows the *inside* (the message
+  // list's flex:1 area shrinks, the input row stays glued above the
+  // padding) - the box itself never moves or resizes, so there's nothing
+  // to visibly lag. window.innerHeight (the layout viewport) stays fixed
+  // across the keyboard opening, so the gap between it and the shrunken/
+  // panned visual viewport is exactly the keyboard's on-screen height.
+  const mobileSheetRef = useRef(null);
+  useEffect(() => {
+    if (!open || !isMobile) return;
+    const vv = window.visualViewport;
+    const el = mobileSheetRef.current;
+    if (!vv || !el) return;
+    const update = () => {
+      const kb = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+      el.style.paddingBottom = kb + "px";
+    };
+    update();
+    vv.addEventListener("resize", update);
+    vv.addEventListener("scroll", update);
+    return () => {
+      vv.removeEventListener("resize", update);
+      vv.removeEventListener("scroll", update);
+      el.style.paddingBottom = "";
+    };
+  }, [open, isMobile]);
+  const [count, setCount] = useState(0);
+  const [deviceId, setDeviceId] = useState(null);
+  const [identity, setIdentity] = useState(undefined); // undefined = loading, null = needs setup
+
+  useEffect(() => {
+    let pushToken = null;
+    try { pushToken = localStorage.getItem("pushToken"); } catch {}
+    let id = pushToken;
+    if (!id) {
+      try { id = localStorage.getItem("chatDeviceId"); } catch {}
+      if (!id) {
+        id = "c" + Math.random().toString(36).slice(2) + Date.now().toString(36);
+        try { localStorage.setItem("chatDeviceId", id); } catch {}
+      }
+    }
+    setDeviceId(id);
+  }, []);
+
+  useEffect(() => {
+    if (!deviceId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const snap = await getDoc(doc(db, "chatDevices", deviceId));
+        if (cancelled) return;
+        if (snap.exists()) { setIdentity(snap.data()); return; }
+
+        let pushToken = null;
+        try { pushToken = localStorage.getItem("pushToken"); } catch {}
+        if (pushToken && pushToken === deviceId) {
+          const pt = await getDoc(doc(db, "pushTokens", pushToken));
+          const nm = (pt.exists() ? (pt.data().name || "") : "").trim();
+          if (nm) {
+            const payload = { name: nm, verified: true, linkedFromPushToken: true, createdAt: serverTimestamp() };
+            await setDoc(doc(db, "chatDevices", deviceId), payload);
+            if (!cancelled) setIdentity(payload);
+            return;
+          }
+        }
+        if (!cancelled) setIdentity(null);
+      } catch (e) {
+        if (!cancelled) setIdentity(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [deviceId]);
+
+  // Unread count, not total count - a device's "seen" watermark is the
+  // createdAt of the newest message it's had the modal open for. A ref (not
+  // state) on purpose: it needs to advance on every snapshot while open
+  // without retriggering this effect each time, which state would do.
+  const lastSeenAtRef = useRef(0);
+  useEffect(() => {
+    try { lastSeenAtRef.current = Number(localStorage.getItem("chatLastSeenAt")) || 0; } catch {}
+  }, []);
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "chatMessages", CHAT_THREAD_KEY, "messages"), snap => {
+      let latest = lastSeenAtRef.current;
+      let unread = 0;
+      snap.forEach(d => {
+        const ts = d.data().createdAt?.toMillis ? d.data().createdAt.toMillis() : Date.now();
+        if (ts > latest) latest = ts;
+        if (ts > lastSeenAtRef.current) unread++;
+      });
+      if (open) {
+        // Actively viewing - advance the watermark to the newest message
+        // seen so far instead of letting unread pile up while it's open.
+        lastSeenAtRef.current = latest;
+        try { localStorage.setItem("chatLastSeenAt", String(latest)); } catch {}
+        setCount(0);
+      } else {
+        setCount(unread);
+      }
+    }, () => setCount(0));
+    return () => unsub();
+  }, [open]);
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        title="Chat"
+        aria-label="Open chat"
+        style={{
+          position: "relative", background: "transparent", border: "none", color: "#eef2ff", padding: 4,
+          fontSize: 19, cursor: "pointer", display: "grid", placeItems: "center", lineHeight: 1,
+        }}
+      >
+        💬
+        {count > 0 && (
+          <span style={{
+            position: "absolute", top: -6, right: -6, minWidth: 16, height: 16, padding: "0 3px", borderRadius: 8,
+            background: "#2a4fb8", color: "#fff", fontSize: 10, fontWeight: 700, display: "grid", placeItems: "center", lineHeight: 1,
+          }}>
+            {count > 99 ? "99+" : count}
+          </span>
+        )}
+      </button>
+      {open && isMobile && (
+        // Full-screen sheet on mobile instead of the generic centered
+        // ModalOverlay - that dialog treatment left a large dead gray gap
+        // below the input on small screens. zIndex is deliberately below
+        // ModalOverlay's (1000) so the Reactions breakdown popup, which is
+        // still ModalOverlay-based inside ChatThreadBody, reliably stacks
+        // above this sheet.
+        <div ref={mobileSheetRef} style={{
+          position: "fixed", top: 0, left: 0, right: 0, height: "100dvh", zIndex: 900, background: "#0b1220",
+          display: "flex", flexDirection: "column",
+        }}>
+          <div style={{
+            flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "space-between",
+            gap: 10, padding: "14px 16px", borderBottom: "1px solid #1f2a44",
+          }}>
+            <h3 style={{ margin: 0, fontSize: 18 }}>💬 Chat</h3>
+            <button
+              type="button"
+              onClick={() => setOpen(false)}
+              style={{ background: "transparent", border: "none", color: "#cfd8f0", cursor: "pointer", fontSize: 20, lineHeight: 1, padding: 4 }}
+            >
+              ✕
+            </button>
+          </div>
+          <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden", padding: "10px 16px" }}>
+            {identity === undefined || !deviceId ? null :
+              identity === null ? <ChatIdentitySetup deviceId={deviceId} onDone={setIdentity} /> :
+              <ChatThreadBody deviceId={deviceId} identity={identity} isAdmin={isAdmin} fillHeight />}
+          </div>
+        </div>
+      )}
+      {open && !isMobile && (
+        <ModalOverlay>
+          <Card style={{ padding: 20 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 14 }}>
+              <h3 style={{ margin: 0, fontSize: 18 }}>💬 Chat</h3>
+              <button
+                type="button"
+                onClick={() => setOpen(false)}
+                style={{ background: "transparent", border: "none", color: "#cfd8f0", cursor: "pointer", fontSize: 18, lineHeight: 1, padding: 4 }}
+              >
+                ✕
+              </button>
+            </div>
+            {identity === undefined || !deviceId ? null :
+              identity === null ? <ChatIdentitySetup deviceId={deviceId} onDone={setIdentity} /> :
+              <ChatThreadBody deviceId={deviceId} identity={identity} isAdmin={isAdmin} />}
+          </Card>
+        </ModalOverlay>
+      )}
+    </>
+  );
+}
+
 function AdminNotificationsPage({ user, isAdmin, setPage }) {
   const isMobile = useIsMobile();
-  // Per-device action buttons: instead of an unpredictable ragged wrap, lay
-  // them out as a deliberate 2-per-row grid on mobile (still a flex-wrap
-  // container, just with each button's basis pinned to half width).
-  const deviceBtnHalf = isMobile ? { flexBasis: "calc(50% - 4px)" } : undefined;
   const [msg, setMsg] = useState("");
   const [live, setLive] = useState({ year: null, week: null });
   useEffect(() => {
@@ -3272,151 +4737,6 @@ function AdminNotificationsPage({ user, isAdmin, setPage }) {
       setMsg("Failed to save: " + (e?.message || String(e)));
     }
   }
-
-  const [pushDevices, setPushDevices] = useState([]);
-  useEffect(() => {
-    const unsub = onSnapshot(collection(db, "pushTokens"), (snap) => {
-      const rows = [];
-      snap.forEach(d => rows.push({ token: d.id, ...d.data() }));
-      rows.sort((a, b) => {
-        const byName = (a.name || "").localeCompare(b.name || "");
-        if (byName) return byName;
-        // Unnamed devices: newest first, so a recent reinstall is easy to spot.
-        const aMs = a.createdAt?.toMillis ? a.createdAt.toMillis() : 0;
-        const bMs = b.createdAt?.toMillis ? b.createdAt.toMillis() : 0;
-        return bMs - aMs;
-      });
-      setPushDevices(rows);
-    }, () => setPushDevices([]));
-    return () => unsub();
-  }, []);
-  async function toggleDeviceBlocked(token, blocked) {
-    try {
-      await setDoc(doc(db, "pushTokens", token), { blocked }, { merge: true });
-    } catch (e) {
-      setMsg("Failed to update device: " + (e?.message || String(e)));
-    }
-  }
-  // Manual override for the auto-retag (which only fires when the same
-  // device is both signed in as admin and has notifications on) - lets an
-  // admin tag their own device directly when that didn't happen on its own.
-  async function toggleDeviceAdmin(token, isAdmin) {
-    try {
-      await setDoc(doc(db, "pushTokens", token), { isAdmin }, { merge: true });
-    } catch (e) {
-      setMsg("Failed to update device: " + (e?.message || String(e)));
-    }
-  }
-  // Permanent removal - for old reinstall tokens etc. that stay technically
-  // valid to FCM (so the dry-run cleanup won't ever flag them) but are known
-  // by a human to be dead weight.
-  async function deleteDevice(token, label) {
-    if (!window.confirm(`Permanently remove ${label || "this device"}? This can't be undone.`)) return;
-    try {
-      await deleteDoc(doc(db, "pushTokens", token));
-    } catch (e) {
-      setMsg("Failed to remove device: " + (e?.message || String(e)));
-    }
-  }
-  const [editingDeviceToken, setEditingDeviceToken] = useState(null);
-  const [deviceNameDraft, setDeviceNameDraft] = useState("");
-  async function saveDeviceName(token) {
-    try {
-      await setDoc(doc(db, "pushTokens", token), { name: deviceNameDraft.trim() }, { merge: true });
-      setEditingDeviceToken(null);
-    } catch (e) {
-      setMsg("Failed to rename device: " + (e?.message || String(e)));
-    }
-  }
-
-  // Which devices have a picks submission on file for the current live week.
-  // Prefer the exact push-token tag on the picks doc, but that's only there
-  // if notifications were already enabled *before* they submitted - most
-  // people submitted first and enabled notifications after (especially
-  // anyone who hit the pushTokens registration bug), so fall back to
-  // matching by name against who actually submitted this week.
-  const [submittedTokens, setSubmittedTokens] = useState(new Set());
-  const [submittedNameKeys, setSubmittedNameKeys] = useState(new Set());
-  const deviceNameKey = (name) => {
-    const parts = (name || "").trim().split(/\s+/).filter(Boolean);
-    if (!parts.length) return null;
-    return personKey({ firstName: parts[0], lastName: parts.slice(1).join(" ") });
-  };
-  useEffect(() => {
-    if (!hasWeekValue(year) || !hasWeekValue(week)) { setSubmittedTokens(new Set()); setSubmittedNameKeys(new Set()); return; }
-    const unsub = onSnapshot(
-      query(collection(db, "picks"), where("year", "==", Number(year)), where("week", "==", Number(week))),
-      (snap) => {
-        const tokens = new Set();
-        const nameKeys = new Set();
-        snap.forEach(d => {
-          const p = d.data();
-          const t = p?.pushToken; if (t) tokens.add(t);
-          const nk = personKey(p); if (nk) nameKeys.add(nk);
-        });
-        setSubmittedTokens(tokens);
-        setSubmittedNameKeys(nameKeys);
-      },
-      () => { setSubmittedTokens(new Set()); setSubmittedNameKeys(new Set()); }
-    );
-    return () => unsub();
-  }, [year, week]);
-
-  // Per-device targeted notification (vs. the broadcast "Send a Notification"
-  // below) - same notificationOutbox trigger, but tagged with a targetToken
-  // so the Cloud Function delivers to just that one device.
-  const [messagingToken, setMessagingToken] = useState(null);
-  const [messageTitleDraft, setMessageTitleDraft] = useState("");
-  const [messageBodyDraft, setMessageBodyDraft] = useState("");
-  const [sendingMessage, setSendingMessage] = useState(false);
-  async function sendTargetedMessage(token) {
-    const title = messageTitleDraft.trim();
-    if (!title) { setMsg("Enter a title before sending."); return; }
-    setSendingMessage(true);
-    try {
-      await addDoc(collection(db, "notificationOutbox"), {
-        title, body: messageBodyDraft.trim(), targetToken: token, createdAt: serverTimestamp()
-      });
-      setMsg("Notification sent to that device.");
-      setMessagingToken(null);
-      setMessageTitleDraft("");
-      setMessageBodyDraft("");
-    } catch (e) {
-      setMsg("Failed to send: " + (e?.message || String(e)));
-    } finally {
-      setSendingMessage(false);
-    }
-  }
-
-  // Stale-device cleanup: dry-run every token (nothing delivered to anyone)
-  // and prune whichever ones FCM reports as no longer registered.
-  const [deviceCleanup, setDeviceCleanup] = useState(null);
-  useEffect(() => {
-    const unsub = onSnapshot(doc(db, "config", "deviceCleanup"), (s) => setDeviceCleanup(s.data() || null));
-    return () => unsub();
-  }, []);
-  const [cleaningDevices, setCleaningDevices] = useState(false);
-  async function cleanupDevicesNow() {
-    setCleaningDevices(true);
-    try {
-      await addDoc(collection(db, "deviceCleanupRequests"), { createdAt: serverTimestamp() });
-      setMsg("Checking all devices for stale registrations…");
-    } catch (e) {
-      setMsg("Failed to start cleanup: " + (e?.message || String(e)));
-      setCleaningDevices(false);
-    }
-  }
-  // The check runs server-side and reports back via config/deviceCleanup, so
-  // clear the "in progress" state once a newer run shows up.
-  const lastCleanupSeenRef = useRef(null);
-  useEffect(() => {
-    if (!deviceCleanup?.lastRunAt) return;
-    const ms = deviceCleanup.lastRunAt?.toMillis ? deviceCleanup.lastRunAt.toMillis() : 0;
-    if (ms !== lastCleanupSeenRef.current) {
-      lastCleanupSeenRef.current = ms;
-      setCleaningDevices(false);
-    }
-  }, [deviceCleanup]);
 
   const [customNotifTitle, setCustomNotifTitle] = useState("");
   const [customNotifBody, setCustomNotifBody] = useState("");
@@ -3491,121 +4811,6 @@ function AdminNotificationsPage({ user, isAdmin, setPage }) {
         })()}
       </AdminSection>
 
-      <AdminSection title="Manage Devices" tone="neutral" right={<StatusBadge tone="neutral">{pushDevices.length} registered</StatusBadge>}>
-        <p style={{ margin:"0 0 12px", fontSize:13, color:"#9aa4c7" }}>
-          Every device that's enabled notifications. Devices are only labeled with a name once that browser submits picks &mdash; otherwise they show as unknown. Blocking a device stops every notification (automated and custom) from reaching it.
-        </p>
-        <Row style={{ marginBottom: 12, alignItems: "center", gap: 10 }}>
-          <button style={adminBtn("neutral")} disabled={cleaningDevices} onClick={cleanupDevicesNow}>
-            {cleaningDevices ? "Checking…" : "Clean Up Devices Now"}
-          </button>
-          {deviceCleanup?.lastRunAt && (
-            <span style={{ fontSize: 12, color: "#9aa4c7" }}>
-              Last check: removed {deviceCleanup.removedCount ?? 0} of {deviceCleanup.checkedCount ?? "?"} device(s)
-            </span>
-          )}
-        </Row>
-        {pushDevices.length === 0 ? (
-          <div style={{ fontSize:13, color:"#9aa4c7" }}>No devices have enabled notifications yet.</div>
-        ) : (
-          <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
-            {pushDevices.map(d => {
-              const blocked = d.blocked === true;
-              const editing = editingDeviceToken === d.token;
-              const messaging = messagingToken === d.token;
-              const submitted = submittedTokens.has(d.token) || (d.name && submittedNameKeys.has(deviceNameKey(d.name)));
-              return (
-                <div key={d.token} style={{ padding:"9px 12px", background:"#0e1730", border:"1px solid #1f2a44", borderRadius:10 }}>
-                  <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:8 }}>
-                    <div>
-                      {editing ? (
-                        <div style={{ display:"flex", gap:6 }}>
-                          <input
-                            style={{ ...inputStyle, padding:"4px 8px", fontSize:13, width:180 }}
-                            placeholder="who's this?"
-                            value={deviceNameDraft}
-                            onChange={e => setDeviceNameDraft(e.target.value)}
-                            onKeyDown={e => { if (e.key === "Enter") saveDeviceName(d.token); }}
-                            autoFocus
-                          />
-                          <button style={{ ...adminBtn("success"), padding:"4px 8px", fontSize:12 }} onClick={() => saveDeviceName(d.token)}>Save</button>
-                          <button style={{ ...adminBtn("neutral"), padding:"4px 8px", fontSize:12 }} onClick={() => setEditingDeviceToken(null)}>Cancel</button>
-                        </div>
-                      ) : (
-                        <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-                          <div style={{ fontWeight:600, fontSize:14 }}>{d.name || "Unknown device"}</div>
-                          {d.name && (
-                            <StatusBadge tone={submitted ? "success" : "warning"}>
-                              {submitted ? "Submitted" : "Not Submitted"}
-                            </StatusBadge>
-                          )}
-                          {d.isAdmin === true && <StatusBadge tone="primary">Admin</StatusBadge>}
-                        </div>
-                      )}
-                      <div style={{ fontSize:11, color:"#9aa4c7", fontFamily:"monospace" }}>{d.token.slice(0, 24)}&hellip;</div>
-                      <div style={{ fontSize:11, color:"#9aa4c7" }}>
-                        {d.device ? `${d.device} · ` : ""}Registered: {d.createdAt?.toDate ? d.createdAt.toDate().toLocaleString("en-US", { month:"short", day:"numeric", hour:"numeric", minute:"2-digit" }) : "unknown"}
-                      </div>
-                    </div>
-                    <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
-                      <div style={isMobile ? { flexBasis: "100%" } : undefined}>
-                        <StatusBadge tone={blocked ? "danger" : "success"}>{blocked ? "Blocked" : "Active"}</StatusBadge>
-                      </div>
-                      {!editing && !messaging && (
-                        <button style={adminBtn("success", deviceBtnHalf)} onClick={() => { setEditingDeviceToken(d.token); setDeviceNameDraft(d.name || ""); }}>
-                          Rename
-                        </button>
-                      )}
-                      {!editing && !messaging && (
-                        <button style={adminBtn(d.isAdmin === true ? "neutral" : "purple", deviceBtnHalf)} onClick={() => toggleDeviceAdmin(d.token, d.isAdmin !== true)}>
-                          {d.isAdmin === true ? "Unmark Admin" : "Mark as Admin"}
-                        </button>
-                      )}
-                      {!editing && !messaging && (
-                        <button style={adminBtn("primary", deviceBtnHalf)} onClick={() => { setMessagingToken(d.token); setMessageTitleDraft(""); setMessageBodyDraft(""); }}>
-                          Message
-                        </button>
-                      )}
-                      <button style={adminBtn(blocked ? "primary" : "warning", deviceBtnHalf)} onClick={() => toggleDeviceBlocked(d.token, !blocked)}>
-                        {blocked ? "Unblock" : "Block"}
-                      </button>
-                      {!editing && !messaging && (
-                        <button style={adminBtn("danger", deviceBtnHalf)} title="Permanently remove this device (e.g. an old reinstall)" onClick={() => deleteDevice(d.token, d.name)}>
-                          Delete
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                  {messaging && (
-                    <div style={{ marginTop:10, paddingTop:10, borderTop:"1px solid #1f2a44", display:"flex", flexDirection:"column", gap:8 }}>
-                      <input
-                        style={inputStyle}
-                        placeholder="Title"
-                        value={messageTitleDraft}
-                        onChange={e => setMessageTitleDraft(e.target.value)}
-                        autoFocus
-                      />
-                      <input
-                        style={inputStyle}
-                        placeholder="Message (optional)"
-                        value={messageBodyDraft}
-                        onChange={e => setMessageBodyDraft(e.target.value)}
-                      />
-                      <Row style={isMobile ? { flexDirection: "column", alignItems: "stretch" } : undefined}>
-                        <button style={adminBtn("primary")} disabled={sendingMessage} onClick={() => sendTargetedMessage(d.token)}>
-                          {sendingMessage ? "Sending…" : `Send to ${d.name || "this device"}`}
-                        </button>
-                        <button style={adminBtn("neutral")} onClick={() => setMessagingToken(null)}>Cancel</button>
-                      </Row>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </AdminSection>
-
       <AdminSection title="Send a Notification" tone="success">
         <p style={{ margin:"0 0 10px", fontSize:13, color:"#9aa4c7" }}>
           Sends a push notification to everyone who's enabled notifications &mdash; use this for anything the automatic ones don't cover (deadline changes, reminders, etc).
@@ -3670,6 +4875,24 @@ function AdminPaymentsPage({ user, isAdmin, setPage }) {
     return () => unsub();
   }, [year, week]);
 
+  // Needed to tell a forfeited partial slate (still incomplete past its own
+  // deadline) apart from a normal complete submission - see isForfeitedPick.
+  const [weekGames, setWeekGames] = useState([]);
+  useEffect(() => {
+    if (!hasWeekValue(year) || !hasWeekValue(week)) { setWeekGames([]); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        let gs = await listGames({ year: Number(year), week: Number(week), includedOnly: true });
+        if (!Array.isArray(gs) || gs.length === 0) gs = await listGames({ year: Number(year), week: Number(week), includedOnly: false });
+        if (!cancelled) setWeekGames(gs || []);
+      } catch (e) {
+        if (!cancelled) setWeekGames([]);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [year, week]);
+
   const [qtext, setQtext] = useState("");
   const filtered = useMemo(() => {
     const t = qtext.trim().toLowerCase();
@@ -3680,7 +4903,8 @@ function AdminPaymentsPage({ user, isAdmin, setPage }) {
     });
   }, [rows, qtext]);
 
-  const paidCount = rows.filter(p => p.paid === true).length;
+  const owedRows = rows.filter(p => !isForfeitedPick(weekGames, p));
+  const paidCount = owedRows.filter(p => p.paid === true).length;
 
   async function togglePaid(p) {
     try {
@@ -3705,11 +4929,11 @@ function AdminPaymentsPage({ user, isAdmin, setPage }) {
       </Row>
 
       <div style={{ marginTop:14, display:"flex", gap:8, flexWrap:"wrap" }}>
-        <StatusBadge tone={paidCount === rows.length && rows.length > 0 ? "success" : "primary"}>
-          {paidCount} / {rows.length} paid
+        <StatusBadge tone={paidCount === owedRows.length && owedRows.length > 0 ? "success" : "primary"}>
+          {paidCount} / {owedRows.length} paid
         </StatusBadge>
         <StatusBadge tone="neutral">
-          ${paidCount * ENTRY_FEE} / ${rows.length * ENTRY_FEE} collected
+          ${paidCount * ENTRY_FEE} / ${owedRows.length * ENTRY_FEE} collected
         </StatusBadge>
       </div>
 
@@ -3727,14 +4951,24 @@ function AdminPaymentsPage({ user, isAdmin, setPage }) {
           <tbody>
             {filtered.map(p => {
               const name = `${p.firstName || ""} ${p.lastName || ""}`.trim() || p.email || "(no name)";
+              const forfeited = isForfeitedPick(weekGames, p);
               return (
-                <tr key={p.id} style={{ borderBottom:"1px solid #1f2a44" }}>
-                  <td style={{ padding:"8px 10px" }}>{name}</td>
+                <tr key={p.id} style={{ borderBottom:"1px solid #1f2a44", opacity: forfeited ? 0.65 : 1 }}>
+                  <td style={{ padding:"8px 10px" }}>
+                    {name}
+                    {p.partial === true && !forfeited && (
+                      <StatusBadge tone="primary" style={{ marginLeft:8, fontSize:10.5, padding:"2px 8px" }}>⏳ Partial</StatusBadge>
+                    )}
+                  </td>
                   <td style={{ padding:"8px 10px", opacity:.9 }}>{p.code}</td>
                   <td style={{ padding:"8px 10px", opacity:.9 }}>{p.venmo}</td>
-                  <td style={{ padding:"8px 10px", opacity:.9 }}>${ENTRY_FEE}</td>
+                  <td style={{ padding:"8px 10px", opacity:.9 }}>
+                    {forfeited ? <StatusBadge tone="danger">Forfeited</StatusBadge> : `$${ENTRY_FEE}`}
+                  </td>
                   <td style={{ padding:"8px 10px" }}>
-                    <input type="checkbox" checked={p.paid === true} onChange={()=>togglePaid(p)} style={{ width:18, height:18, cursor:"pointer" }} />
+                    {forfeited
+                      ? <span style={{ fontSize:12, opacity:.75 }}>—</span>
+                      : <input type="checkbox" checked={p.paid === true} onChange={()=>togglePaid(p)} style={{ width:18, height:18, cursor:"pointer" }} />}
                   </td>
                 </tr>
               );
@@ -3774,6 +5008,14 @@ function venmoKeyOf(p) {
   if (!v || /\s/.test(v) || VENMO_JUNK.has(v)) return null; // not a real handle
   return `v:${v}`;
 }
+// A stable email should union with name/Venmo just like they union with each
+// other - someone who submits once as "chris" and again as "chris k" (a
+// changed last name field, different Venmo note that week) is still the same
+// person if both submissions carry the same email address.
+function emailKeyOf(p) {
+  const e = String(p.email || "").trim().toLowerCase();
+  return e && e.includes("@") ? `e:${e}` : null;
+}
 // Simple union-find: two picks docs count as the same person if they share
 // either a normalized name or a normalized Venmo username, so a typo'd or
 // nicknamed name still gets matched via a consistent Venmo.
@@ -3794,13 +5036,277 @@ function makeDSU() {
   return { find, union };
 }
 
-function AdminMissingPicksPage({ user, isAdmin, setPage }) {
+// Builds the "who's ever played" roster from raw `picks` docs (clustered by
+// name/Venmo/email, same as above), then overlays any `players` doc whose
+// aliasKeys match a doc in that cluster - a persistent, admin-editable
+// identity that survives reloads and DSU-root drift, unlike a raw cluster
+// key. A cluster with no matching player doc falls back to plain picks-
+// derived display (unclaimed/auto-detected) so nothing regresses for anyone
+// the admin hasn't touched yet. `players` with zero picks history at all
+// (pure invitees, or someone merged/renamed who hasn't submitted since)
+// still get a row - clustering alone never produces one for them. Shared by
+// every tab of PlayerManagementPage so there's one identity resolver, not
+// several copies that can drift apart.
+function buildRoster(picksDocs, players) {
+  const dsu = makeDSU();
+  const docs = [];
+  for (const p of picksDocs) {
+    const nk = personKey(p);
+    const vk = venmoKeyOf(p);
+    const ek = emailKeyOf(p);
+    if (!nk && !vk) continue;
+    if (nk && vk) dsu.union(nk, vk);
+    if (ek) dsu.union(nk || vk, ek);
+    docs.push({ p, key: nk || vk, nk, vk, ek });
+  }
+
+  const keyToPlayerId = new Map();
+  for (const pl of players) for (const k of pl.aliasKeys || []) keyToPlayerId.set(k, pl.id);
+
+  const byRoot = new Map();
+  for (const rec of docs) {
+    const root = dsu.find(rec.key);
+    let slot = byRoot.get(root);
+    if (!slot) { slot = { playerId: null, latest: null, _ms: -Infinity, keys: new Set() }; byRoot.set(root, slot); }
+    const ms = rec.p.updatedAt?.toMillis ? rec.p.updatedAt.toMillis() : (rec.p.createdAt?.toMillis ? rec.p.createdAt.toMillis() : 0);
+    if (ms >= slot._ms) { slot.latest = rec.p; slot._ms = ms; }
+    if (rec.nk) slot.keys.add(rec.nk);
+    if (rec.vk) slot.keys.add(rec.vk);
+    if (rec.ek) slot.keys.add(rec.ek);
+    if (!slot.playerId) slot.playerId = keyToPlayerId.get(rec.nk) || keyToPlayerId.get(rec.vk) || keyToPlayerId.get(rec.ek) || null;
+  }
+
+  // A merged player's aliasKeys can span multiple ORIGINAL auto-detected
+  // clusters (that's the entire point of merging two people the automatic
+  // name/Venmo/email matching couldn't tell were the same) - group those
+  // roots by the identity they resolve to (the player id when claimed, else
+  // the root itself) before building rows, so a merge collapses into one
+  // row instead of one row per contributing cluster.
+  const groups = new Map();
+  for (const [root, slot] of byRoot) {
+    const groupKey = slot.playerId || root;
+    let g = groups.get(groupKey);
+    if (!g) { g = { playerId: slot.playerId, dsuRoots: new Set(), keys: new Set(), latest: slot.latest, _ms: slot._ms }; groups.set(groupKey, g); }
+    g.dsuRoots.add(root);
+    for (const k of slot.keys) g.keys.add(k);
+    if (slot._ms >= g._ms) { g.latest = slot.latest; g._ms = slot._ms; }
+  }
+
+  const rows = [];
+  const usedPlayerIds = new Set();
+  for (const g of groups.values()) {
+    const pl = g.playerId ? players.find(x => x.id === g.playerId) : null;
+    if (pl) {
+      usedPlayerIds.add(pl.id);
+      // A player doc field that's blank (e.g. one migrated from an old
+      // "opt out" entry that was never actually edited with a name/contact
+      // info) falls back to what's on the picks docs themselves, rather
+      // than blanking out real, already-known info.
+      const latest = g.latest || {};
+      rows.push({
+        rowId: pl.id, playerId: pl.id, dsuRoots: g.dsuRoots,
+        firstName: pl.firstName || latest.firstName, lastName: pl.lastName || latest.lastName,
+        phone: pl.phone || latest.phone, venmo: pl.venmo || latest.venmo, email: pl.email || latest.email || "",
+        emailOptOut: !!pl.emailOptOut,
+        // The player doc's own stored aliasKeys can be incomplete - e.g.
+        // one migrated from an old contacts override only captured that
+        // doc's own fields, not every name/Venmo/email variant across the
+        // person's actual picks history. Enrich with everything their
+        // matched picks cluster(s) show (g.keys) so matching (a push-
+        // notification device registered under a slightly different
+        // spelling, say) doesn't silently miss just because the stored
+        // field was never backfilled.
+        aliasKeys: [...new Set([...(pl.aliasKeys || []), ...g.keys])],
+      });
+    } else {
+      const { firstName, lastName, phone, venmo, email } = g.latest;
+      rows.push({ rowId: [...g.dsuRoots][0], playerId: null, dsuRoots: g.dsuRoots, firstName, lastName, phone, venmo, email: email || "", emailOptOut: false, aliasKeys: [...g.keys] });
+    }
+  }
+  for (const pl of players) {
+    if (usedPlayerIds.has(pl.id)) continue;
+    rows.push({ rowId: pl.id, playerId: pl.id, dsuRoots: new Set(), firstName: pl.firstName, lastName: pl.lastName, phone: pl.phone, venmo: pl.venmo, email: pl.email, emailOptOut: !!pl.emailOptOut, aliasKeys: pl.aliasKeys || [] });
+  }
+
+  return { rows, dsu, docs };
+}
+
+// Every raw picks doc (from buildRoster's `docs`) that belongs to a given
+// roster row. A claimed row's docs are whichever ones carry one of its
+// aliasKeys - the merged identity, which the automatic name/Venmo/email
+// clustering alone might not know is the same person (that's the whole
+// point of a manual merge). An unclaimed row's docs are just its DSU
+// cluster. Shared by findMySeason, computeAllTimePercentiles, and
+// buildChatRoster so a Player Profiles rename/merge/opt-out is reflected
+// everywhere identity comes up, not just Who Hasn't Submitted.
+function docsForRosterRow(roster, row) {
+  return roster.docs.filter(rec =>
+    row.playerId
+      ? (rec.nk && row.aliasKeys.includes(rec.nk)) || (rec.vk && row.aliasKeys.includes(rec.vk)) || (rec.ek && row.aliasKeys.includes(rec.ek))
+      : row.dsuRoots.has(roster.dsu.find(rec.key))
+  ).map(rec => rec.p);
+}
+
+// Live `players` collection - the persistent roster PlayerManagementPage's
+// Roster tab edits, and buildRoster() overlays onto the raw picks-derived
+// clusters.
+function usePlayers(isAdmin) {
+  const [players, setPlayers] = useState([]);
+  useEffect(() => {
+    if (!isAdmin) return;
+    const unsub = onSnapshot(collection(db, "players"), (snap) => {
+      const list = [];
+      snap.forEach(d => list.push({ id: d.id, ...d.data() }));
+      setPlayers(list);
+    });
+    return () => unsub();
+  }, [isAdmin]);
+  return players;
+}
+
+// Merges 2+ roster rows (from buildRoster) into one persistent `players`
+// doc: unions every alias key so future picks docs under any of the merged
+// identities still resolve to it, keeps opted-out if any merged row was,
+// and reuses the first already-persisted player id as the survivor
+// (deleting any other real player docs among the selection) so an existing
+// profile's id - and anything that might reference it later - doesn't churn
+// on every merge.
+async function mergeRosterRows(selectedRows, finalFields) {
+  const aliasKeys = [...new Set(selectedRows.flatMap(r => r.aliasKeys || []))];
+  // Deduped - a row that already spans multiple original clusters (e.g.
+  // re-selecting an already-merged person alongside someone else) would
+  // otherwise list its own survivor id again in toDelete and delete itself
+  // right after being written to.
+  const existingPlayerIds = [...new Set(selectedRows.map(r => r.playerId).filter(Boolean))];
+  const survivorId = existingPlayerIds[0] || null;
+  const toDelete = existingPlayerIds.slice(1);
+  const emailOptOut = selectedRows.some(r => r.emailOptOut);
+  if (survivorId) {
+    await setDoc(doc(db, "players", survivorId), { ...finalFields, aliasKeys, emailOptOut, updatedAt: serverTimestamp() }, { merge: true });
+  } else {
+    await setDoc(doc(collection(db, "players")), { ...finalFields, aliasKeys, emailOptOut, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
+  }
+  await Promise.all(toDelete.map(id => deleteDoc(doc(db, "players", id))));
+}
+
+// Saves an edit to a roster row - updates its player doc if it already has
+// one, or creates one (lazily claiming the auto-detected cluster, seeded
+// with every alias key observed in it) the first time an admin touches a
+// row that was still purely picks-derived.
+async function savePlayerEdit(row, fields) {
+  if (row.playerId) {
+    await setDoc(doc(db, "players", row.playerId), { ...fields, updatedAt: serverTimestamp() }, { merge: true });
+  } else {
+    // emailOptOut defaults false but a caller (e.g. opting out an unclaimed
+    // row for the first time) can still pass it explicitly - spread order
+    // makes the default lose to anything the caller actually specifies.
+    await setDoc(doc(collection(db, "players")), { emailOptOut: false, ...fields, aliasKeys: row.aliasKeys, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
+  }
+}
+
+// One-time conversion of the legacy `contacts` + `unassignedContacts`
+// collections into `players` docs, so existing name overrides, opted-out
+// people, and promoted invitees aren't lost when this page replaces them.
+// Evaluates each person's old per-week optedOutWeeks map as of the current
+// live week to pick a starting value for the new global emailOptOut switch.
+// Runs once, gated by config/app.playersMigratedV1, triggered by an admin
+// clicking the button in their own signed-in session (not run from here -
+// see PlayerManagementPage's Roster tab).
+async function migrateLegacyContactsToPlayers() {
+  const [contactsSnap, unassignedSnap, liveSnap] = await Promise.all([
+    getDocs(collection(db, "contacts")),
+    getDocs(collection(db, "unassignedContacts")),
+    getDoc(doc(db, "config", "live")),
+  ]);
+  const live = liveSnap.exists() ? liveSnap.data() : {};
+  const weekOrdinal = (y, w) => Number(y) * 100 + Number(w);
+  const resolveOptedOutAsOfNow = (optedOutWeeks) => {
+    if (!optedOutWeeks || !hasWeekValue(live.year) || !hasWeekValue(live.week)) return false;
+    const targetOrd = weekOrdinal(live.year, live.week);
+    let best = false, bestOrd = -Infinity;
+    for (const k of Object.keys(optedOutWeeks)) {
+      const m = /^(\d+)_(\d+)$/.exec(k);
+      if (!m) continue;
+      const ord = weekOrdinal(m[1], m[2]);
+      if (ord <= targetOrd && ord > bestOrd) { bestOrd = ord; best = !!optedOutWeeks[k]; }
+    }
+    return best;
+  };
+
+  const batch = writeBatch(db);
+  let count = 0;
+  contactsSnap.forEach(d => {
+    const v = d.data() || {};
+    const aliasKeys = [d.id, personKey({ firstName: v.firstName, lastName: v.lastName }), venmoKeyOf({ venmo: v.venmo }), emailKeyOf({ email: v.email })].filter(Boolean);
+    batch.set(doc(collection(db, "players")), {
+      firstName: v.firstName || "", lastName: v.lastName || "", phone: v.phone || "", venmo: v.venmo || "", email: v.email || "",
+      aliasKeys: [...new Set(aliasKeys)],
+      emailOptOut: resolveOptedOutAsOfNow(v.optedOutWeeks),
+      createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+    });
+    count++;
+  });
+  unassignedSnap.forEach(d => {
+    const v = d.data() || {};
+    const parts = (v.name || "").trim().split(/\s+/).filter(Boolean);
+    const firstName = parts[0] || "", lastName = parts.slice(1).join(" ");
+    const email = v.email || d.id;
+    const aliasKeys = [emailKeyOf({ email }), personKey({ firstName, lastName }), venmoKeyOf({ venmo: v.venmo })].filter(Boolean);
+    batch.set(doc(collection(db, "players")), {
+      firstName, lastName, phone: v.phone || "", venmo: v.venmo || "", email,
+      aliasKeys: [...new Set(aliasKeys)],
+      emailOptOut: resolveOptedOutAsOfNow(v.optedOutWeeks),
+      createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+    });
+    count++;
+  });
+  // Well within the 500-op batch limit at this roster's current size (~90
+  // people combined) - not worth chunking for a one-time admin action.
+  await batch.commit();
+  await setDoc(doc(db, "config", "app"), { playersMigratedV1: true }, { merge: true });
+  return count;
+}
+
+// The Player Management hub: everything about a *person* in one place,
+// instead of scattered across "Who Hasn't Submitted", "Player Profiles", and
+// two sections buried in Manage Notifications (Manage Devices, Chat Names).
+// All four tabs share ONE picks+players load and ONE buildRoster() result
+// (computed here, passed down as props) instead of each independently
+// re-subscribing and re-deriving the same roster, which is what the four
+// separate pages used to do.
+function PlayerManagementPage({ user, isAdmin, setPage, initialTab = "roster" }) {
   const isMobile = useIsMobile();
+  const [tab, setTab] = useState(initialTab);
+  const [msg, setMsg] = useState("");
+
   const [live, setLive] = useState({ year: null, week: null });
   useEffect(() => {
     const unsub = onSnapshot(doc(db, "config", "live"), (s) => setLive(s.data() || {}));
     return () => unsub();
   }, []);
+
+  // Everyone who has ever submitted picks, any year/week - the roster every
+  // tab below checks against, since the app has no separate participant
+  // list. Names/contact info/opt-out come from `players` (see buildRoster)
+  // wherever an admin has edited or merged that person; unedited people
+  // fall back to raw picks data.
+  const [picksDocs, setPicksDocs] = useState(null);
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "picks"), (snap) => {
+      const arr = [];
+      snap.forEach(d => arr.push(d.data()));
+      setPicksDocs(arr);
+    });
+    return () => unsub();
+  }, []);
+  const players = usePlayers(isAdmin);
+  const roster = useMemo(() => buildRoster(picksDocs || [], players), [picksDocs, players]);
+  const loaded = picksDocs !== null;
+
+  // Shared Year/Week - drives the Submitted status on the Roster tab, the
+  // whole comparison on Who's Missing, and the Submitted badge on Devices.
+  // Defaults to the live week once, then is independently adjustable so an
+  // admin can check a past week without losing their place.
   const [year, setYear] = useState(new Date().getFullYear());
   const [week, setWeek] = useState(null);
   const syncedRef = useRef(false);
@@ -3811,9 +5317,749 @@ function AdminMissingPicksPage({ user, isAdmin, setPage }) {
       syncedRef.current = true;
     }
   }, [live]);
+  const submittedRoots = useMemo(() => {
+    const s = new Set();
+    if (!hasWeekValue(year) || !hasWeekValue(week)) return s;
+    for (const rec of roster.docs) {
+      if (Number(rec.p.year) === Number(year) && Number(rec.p.week) === Number(week)) {
+        s.add(roster.dsu.find(rec.key));
+      }
+    }
+    return s;
+  }, [roster, year, week]);
 
-  // This week's earliest kickoff, so email drafts can quote the real
-  // submission deadline instead of a hardcoded date.
+  // Push-notification devices - feeds the Devices tab's list *and* the
+  // notified-vs-email signal every tab uses (Roster's Notify column, Who's
+  // Missing's auto-exclusion). One subscription instead of the two (a
+  // device list, plus a separate name-key set) the old separate pages each
+  // kept.
+  const [pushDevices, setPushDevices] = useState([]);
+  const [notifiedNameKeys, setNotifiedNameKeys] = useState(new Set());
+  const [notifiedPlayerIds, setNotifiedPlayerIds] = useState(new Set());
+  useEffect(() => {
+    if (!isAdmin) return;
+    const unsub = onSnapshot(collection(db, "pushTokens"), (snap) => {
+      const rows = [];
+      const keys = new Set();
+      const playerIds = new Set();
+      snap.forEach(d => {
+        const v = d.data() || {};
+        rows.push({ token: d.id, ...v });
+        if (v.blocked) return;
+        const k = personKey({ firstName: (v.name || "").trim().split(/\s+/)[0], lastName: (v.name || "").trim().split(/\s+/).slice(1).join(" ") });
+        if (k) keys.add(k);
+        if (v.assignedPlayerId) playerIds.add(v.assignedPlayerId);
+      });
+      rows.sort((a, b) => {
+        const byName = (a.name || "").localeCompare(b.name || "");
+        if (byName) return byName;
+        const aMs = a.createdAt?.toMillis ? a.createdAt.toMillis() : 0;
+        const bMs = b.createdAt?.toMillis ? b.createdAt.toMillis() : 0;
+        return bMs - aMs;
+      });
+      setPushDevices(rows);
+      setNotifiedNameKeys(keys);
+      setNotifiedPlayerIds(playerIds);
+    }, () => setPushDevices([]));
+    return () => unsub();
+  }, [isAdmin]);
+
+  const [chatDevices, setChatDevices] = useState([]);
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "chatDevices"), (snap) => {
+      const rows = [];
+      snap.forEach(d => rows.push({ id: d.id, ...d.data() }));
+      rows.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+      setChatDevices(rows);
+    }, () => setChatDevices([]));
+    return () => unsub();
+  }, []);
+
+  const rosterOptions = useMemo(() =>
+    [...roster.rows]
+      .sort((a, b) => `${a.firstName || ""} ${a.lastName || ""}`.localeCompare(`${b.firstName || ""} ${b.lastName || ""}`))
+      .map(r => ({ rowId: r.rowId, playerId: r.playerId, aliasKeys: r.aliasKeys, label: `${r.firstName || ""} ${r.lastName || ""}`.trim() || r.email || "(unnamed)" })),
+    [roster]
+  );
+  // Lets an admin explicitly tie a device to a specific player - a direct,
+  // permanent link that doesn't depend on name-matching at all, so it can't
+  // be broken by a future rename and can't collide with someone else who
+  // happens to share a name. Assigning to a row with no player doc yet
+  // (still just an auto-detected picks cluster) claims it first, same
+  // lazy-claim pattern as editing/opting-out an unclaimed row.
+  async function assignDeviceToPlayer(token, rowId) {
+    if (!rowId) {
+      try { await setDoc(doc(db, "pushTokens", token), { assignedPlayerId: null }, { merge: true }); }
+      catch (e) { setMsg("Failed to unassign device: " + (e?.message || String(e))); }
+      return;
+    }
+    const row = roster.rows.find(r => r.rowId === rowId);
+    if (!row) return;
+    try {
+      let playerId = row.playerId;
+      if (!playerId) {
+        const ref = doc(collection(db, "players"));
+        await setDoc(ref, {
+          firstName: row.firstName || "", lastName: row.lastName || "", phone: row.phone || "", venmo: row.venmo || "", email: row.email || "",
+          aliasKeys: row.aliasKeys, emailOptOut: false, createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+        });
+        playerId = ref.id;
+      }
+      await setDoc(doc(db, "pushTokens", token), { assignedPlayerId: playerId }, { merge: true });
+    } catch (e) {
+      setMsg("Failed to assign device: " + (e?.message || String(e)));
+    }
+  }
+
+  const TABS = [
+    ["picks", "Picks"],
+    ["roster", "Roster"],
+    ["missing", "Who's Missing"],
+    ["devices", "Devices"],
+    ["chat", "Chat"],
+  ];
+
+  return (<Container maxWidth={1200} padding={isMobile ? 12 : 24}>
+    <Header user={user} isAdmin={isAdmin} setPage={setPage} />
+    <Card style={{ maxWidth: 1200, padding: isMobile ? 12 : 16 }}>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:10 }}>
+        <h2 style={{ margin:0 }}>Player Management</h2>
+        <button style={adminBtn("neutral")} onClick={() => { window.history.pushState(null, "", "/admin"); setPage("admin"); }}>&larr; Back to Admin</button>
+      </div>
+      <p style={{ margin:"10px 0 0", fontSize:13, color:"#9aa4c7" }}>
+        Everyone who's ever played or been invited - browse a week's submissions, edit names, merge duplicates, check who's missing, and manage their devices and chat identity, all in one place.
+      </p>
+      {msg && (
+        <div style={{ marginTop:12, padding:"8px 12px", borderRadius:10, background:"rgba(106,162,255,.1)", border:"1px solid rgba(106,162,255,.3)", color:"#cfe0ff", fontSize:13 }}>{msg}</div>
+      )}
+
+      <Row style={{ marginTop:16, gap:16, alignItems:"flex-end", flexWrap:"wrap" }}>
+        <Row style={{ gap:8 }}>
+          {TABS.map(([key, label]) => (
+            <button key={key} style={adminBtn(tab === key ? "primary" : "neutral")} onClick={() => setTab(key)}>{label}</button>
+          ))}
+        </Row>
+        {tab !== "chat" && (
+          <>
+            <Field label="Year"><input style={{...inputStyle, width:"6rem"}} type="number" value={year ?? ""} onChange={e=>setYear(Number(e.target.value))} /></Field>
+            <Field label="Week"><input style={{...inputStyle, width:"4rem"}} type="number" value={week ?? ""} onChange={e=>setWeek(Number(e.target.value))} /></Field>
+          </>
+        )}
+      </Row>
+    </Card>
+
+    {tab === "picks" && (
+      <PicksTab year={year} week={week} isMobile={isMobile} />
+    )}
+    {tab === "roster" && (
+      <RosterTab roster={roster} loaded={loaded} notifiedNameKeys={notifiedNameKeys} notifiedPlayerIds={notifiedPlayerIds} submittedRoots={submittedRoots} year={year} week={week} isMobile={isMobile} />
+    )}
+    {tab === "missing" && (
+      <MissingTab roster={roster} loaded={loaded} notifiedNameKeys={notifiedNameKeys} notifiedPlayerIds={notifiedPlayerIds} submittedRoots={submittedRoots} year={year} week={week} isMobile={isMobile} />
+    )}
+    {tab === "devices" && (
+      <DevicesTab pushDevices={pushDevices} roster={roster} rosterOptions={rosterOptions} assignDeviceToPlayer={assignDeviceToPlayer} submittedRoots={submittedRoots} setMsg={setMsg} isMobile={isMobile} />
+    )}
+    {tab === "chat" && (
+      <ChatTab chatDevices={chatDevices} setMsg={setMsg} />
+    )}
+  </Container>);
+}
+
+function formatPickTs(ts) {
+  try {
+    if (!ts) return "";
+    const d = ts.toDate ? ts.toDate() : (typeof ts.seconds === "number" ? new Date(ts.seconds * 1000) : new Date(ts));
+    if (!(d instanceof Date) || isNaN(+d)) return "";
+    return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", hour12: true, timeZone: "America/New_York" }).format(d);
+  } catch { return ""; }
+}
+
+// Picks tab: live view of every picks submission for the shared Year/Week -
+// inspect the full detail (including the raw picks object) or delete one.
+// Deleting is only offered while that week's leaderboard is still locked;
+// once it's live, real picks are permanently immutable, even for admins -
+// see firestore.rules' picks delete rule.
+function PicksTab({ year, week, isMobile }) {
+  const [rows, setRows] = useState([]);
+  const [msg, setMsg] = useState("");
+  useEffect(() => {
+    if (!hasWeekValue(year) || !hasWeekValue(week)) { setRows([]); setMsg(""); return; }
+    setMsg("Loading picks…");
+    setRows([]);
+    const q = query(collection(db, "picks"), where("year", "==", Number(year)), where("week", "==", Number(week)));
+    const unsub = onSnapshot(q, (snap) => {
+      const all = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      all.sort((a, b) => (a.lastNameLower || "").localeCompare(b.lastNameLower || "") || (a.firstName || "").localeCompare(b.firstName || ""));
+      setRows(all);
+      setMsg(`Showing ${all.length} pick(s) for ${year} / W${week}`);
+    }, (err) => {
+      setMsg(`Error loading picks: ${err?.message || err}`);
+    });
+    return () => unsub();
+  }, [year, week]);
+
+  const [qtext, setQtext] = useState("");
+  const filtered = useMemo(() => {
+    const q = qtext.trim().toLowerCase();
+    if (!q) return rows;
+    return rows.filter(p => {
+      const name = `${p.firstName || ""} ${p.lastName || ""}`.toLowerCase();
+      const phone = (p.phone || "").toLowerCase();
+      const venmo = (p.venmo || "").toLowerCase();
+      const code = (p.code || "").toLowerCase();
+      return name.includes(q) || phone.includes(q) || venmo.includes(q) || code.includes(q);
+    });
+  }, [rows, qtext]);
+
+  const [selected, setSelected] = useState(null);
+  const openPick = (p) => setSelected(p);
+  const closePick = () => setSelected(null);
+
+  const [leaderboardLocked, setLeaderboardLocked] = useState(false);
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, "config", "app"), (s) => {
+      setLeaderboardLocked(!!(s.data() || {}).leaderboardLocked);
+    });
+    return () => unsub();
+  }, []);
+  const canDelete = leaderboardLocked || Number(year) >= 2090;
+
+  async function handleDelete(p) {
+    const name = `${p.firstName || ""} ${p.lastName || ""}`.trim() || p.email || p.code;
+    if (!window.confirm(`Delete the pick for ${name} (code ${p.code})? This cannot be undone.`)) return;
+    try {
+      await deleteDoc(doc(db, "picks", p.id));
+      if (selected?.id === p.id) closePick();
+      setMsg(`Deleted pick for ${name}.`);
+    } catch (e) {
+      setMsg(`Failed to delete: ${e?.message || e}`);
+    }
+  }
+
+  return (
+    <Card style={{ maxWidth: 1200, marginTop: 16, padding: isMobile ? 12 : 16 }}>
+      <p style={{ margin: "0 0 12px", fontSize: 13, color: "#9aa4c7" }}>
+        Live view of every picks submission for the selected Year/Week above. Click a row for full detail. Deleting a pick only works while that week's leaderboard is still locked.
+      </p>
+      <Field label="Filter (name, code, phone, venmo)">
+        <input style={{ ...inputStyle, width: isMobile ? "100%" : "18rem" }} value={qtext} onChange={e => setQtext(e.target.value)} placeholder="Start typing…" />
+      </Field>
+      {msg && <div style={{ marginTop: 10, fontSize: 12, color: "#9aa4c7" }}>{msg}</div>}
+
+      <div style={{ marginTop: 12, overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 760, fontSize: 13 }}>
+          <thead>
+            <tr style={{ textAlign: "left" }}>
+              <th style={{ padding: "8px 10px", borderBottom: "1px solid #1f2a44", position: "sticky", left: 0, background: "#121a2b", zIndex: 1 }}>Name</th>
+              <th style={{ padding: "8px 10px", borderBottom: "1px solid #1f2a44" }}>Code</th>
+              <th style={{ padding: "8px 10px", borderBottom: "1px solid #1f2a44" }}>Phone</th>
+              <th style={{ padding: "8px 10px", borderBottom: "1px solid #1f2a44" }}>Email</th>
+              <th style={{ padding: "8px 10px", borderBottom: "1px solid #1f2a44" }}>Venmo</th>
+              <th style={{ padding: "8px 10px", borderBottom: "1px solid #1f2a44" }}>Confirmed</th>
+              <th style={{ padding: "8px 10px", borderBottom: "1px solid #1f2a44" }}>Picks</th>
+              <th style={{ padding: "8px 10px", borderBottom: "1px solid #1f2a44" }}>Created</th>
+              <th style={{ padding: "8px 10px", borderBottom: "1px solid #1f2a44" }}>Updated</th>
+              <th style={{ padding: "8px 10px", borderBottom: "1px solid #1f2a44" }}></th>
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map((p) => {
+              const name = `${p.firstName || ""} ${p.lastName || ""}`.trim() || p.email || "(no name)";
+              const cnt = p.picks ? Object.keys(p.picks).length : 0;
+              return (
+                <tr key={p.id} style={{ borderBottom: "1px solid #1f2a44", cursor: "pointer" }} onClick={() => openPick(p)}>
+                  <td style={{ padding: "8px 10px", position: "sticky", left: 0, background: "#0e1730", zIndex: 1 }}>{name}</td>
+                  <td style={{ padding: "8px 10px", opacity: .9 }}>{p.code}</td>
+                  <td style={{ padding: "8px 10px", opacity: .9 }}>{p.phone}</td>
+                  <td style={{ padding: "8px 10px", opacity: .9 }}>{p.email || ""}</td>
+                  <td style={{ padding: "8px 10px", opacity: .9 }}>{p.venmo}</td>
+                  <td style={{ padding: "8px 10px" }}>{p.venmoConfirmed ? "Yes" : "No"}</td>
+                  <td style={{ padding: "8px 10px" }}>{cnt}</td>
+                  <td style={{ padding: "8px 10px", opacity: .9 }}>{formatPickTs(p.createdAt)}</td>
+                  <td style={{ padding: "8px 10px", opacity: .9 }}>{formatPickTs(p.updatedAt)}</td>
+                  <td style={{ padding: "8px 10px" }}>
+                    <Row style={{ gap: 6 }}>
+                      <button style={{ ...adminBtn("neutral"), padding: "4px 8px", fontSize: 12 }} onClick={(e) => { e.stopPropagation(); openPick(p); }}>View</button>
+                      {canDelete && (
+                        <button style={{ ...adminBtn("danger"), padding: "4px 8px", fontSize: 12 }} onClick={(e) => { e.stopPropagation(); handleDelete(p); }}>Delete</button>
+                      )}
+                    </Row>
+                  </td>
+                </tr>
+              );
+            })}
+            {filtered.length === 0 && (
+              <tr><td colSpan={10} style={{ padding: "16px 10px", opacity: .7 }}>{hasWeekValue(year) && hasWeekValue(week) ? "No picks for this week yet." : "Pick a Year/Week above."}</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {selected && (
+        <div role="dialog" aria-modal="true"
+          onClick={(e) => { if (e.target === e.currentTarget) closePick(); }}
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 1000, display: "flex", justifyContent: "flex-end" }}>
+          <div style={{ width: "min(520px, 100%)", height: "100%", background: "#0b1220", borderLeft: "1px solid #1f2a44", padding: 16, overflow: "auto" }}>
+            <Row style={{ justifyContent: "space-between" }}>
+              <h3 style={{ margin: 0 }}>Pick — {selected.firstName || ""} {selected.lastName || ""}</h3>
+              <button style={adminBtn("neutral")} onClick={closePick}>Close</button>
+            </Row>
+            <div style={{ height: 12 }} />
+            <Card>
+              <Row style={{ justifyContent: "space-between" }}>
+                <div>
+                  <div style={{ opacity: .8, fontSize: 12 }}>Doc ID</div>
+                  <code style={{ fontSize: 12, userSelect: "all" }}>{selected.id}</code>
+                </div>
+                <div>
+                  <div style={{ opacity: .8, fontSize: 12 }}>Code</div>
+                  <div style={{ fontWeight: 600 }}>{selected.code}</div>
+                </div>
+              </Row>
+              <div style={{ height: 12 }} />
+              <div style={{ opacity: .8, fontSize: 12 }}>Name</div>
+              <div>{(selected.firstName || "") + " " + (selected.lastName || "")}</div>
+              <div style={{ height: 12 }} />
+              <Row style={{ gap: 24, flexWrap: "wrap" }}>
+                <div>
+                  <div style={{ opacity: .8, fontSize: 12 }}>Phone</div>
+                  <div>{selected.phone || ""}</div>
+                </div>
+                <div>
+                  <div style={{ opacity: .8, fontSize: 12 }}>Email</div>
+                  <div>{selected.email || ""}</div>
+                </div>
+                <div>
+                  <div style={{ opacity: .8, fontSize: 12 }}>Venmo</div>
+                  <div>{selected.venmo || ""}</div>
+                </div>
+                <div>
+                  <div style={{ opacity: .8, fontSize: 12 }}>Confirmed</div>
+                  <div>{selected.venmoConfirmed ? "Yes" : "No"}</div>
+                </div>
+              </Row>
+              <div style={{ height: 12 }} />
+              <Row style={{ gap: 24 }}>
+                <div>
+                  <div style={{ opacity: .8, fontSize: 12 }}>Year / Week</div>
+                  <div>{String(selected.year)} / W{String(selected.week)}</div>
+                </div>
+                <div>
+                  <div style={{ opacity: .8, fontSize: 12 }}>Created</div>
+                  <div>{formatPickTs(selected.createdAt)}</div>
+                </div>
+                <div>
+                  <div style={{ opacity: .8, fontSize: 12 }}>Updated</div>
+                  <div>{formatPickTs(selected.updatedAt)}</div>
+                </div>
+              </Row>
+            </Card>
+            <div style={{ height: 12 }} />
+            <Card>
+              <h4 style={{ marginTop: 0 }}>Picks</h4>
+              <div style={{ fontSize: 13, opacity: .9 }}>
+                {selected.picks ? (
+                  <pre style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", background: "transparent", padding: 0, margin: 0 }}>
+{JSON.stringify(selected.picks, null, 2)}
+                  </pre>
+                ) : (
+                  <em>No picks object found.</em>
+                )}
+              </div>
+            </Card>
+            <div style={{ height: 12 }} />
+            <Row style={{ justifyContent: "space-between" }}>
+              <div style={{ opacity: .7, fontSize: 12 }}>
+                {canDelete ? "Deletable while the leaderboard is locked." : "Locked from deletion — the leaderboard is live."}
+              </div>
+              {canDelete && (
+                <button style={adminBtn("danger")} onClick={() => handleDelete(selected)}>Delete Pick</button>
+              )}
+            </Row>
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+// Roster tab: rename anyone (including people who've never been touched
+// before - editing an auto-detected row claims it, see
+// buildRoster/savePlayerEdit), merge duplicate identities the automatic
+// name/Venmo/email matching couldn't catch, toggle email reminders, and
+// invite new people who haven't played yet. Everything here writes to
+// `players`, which every tab (and My Season/Overall Leaderboard/chat)
+// overlays onto the raw picks-derived roster.
+function RosterTab({ roster, loaded, notifiedNameKeys, notifiedPlayerIds, submittedRoots, year, week, isMobile }) {
+  // One-time conversion of the legacy contacts/unassignedContacts data,
+  // gated behind an explicit button (not auto-run) so the migration is
+  // visible and verifiable, and behind a flag so it can't run twice.
+  const [migrated, setMigrated] = useState(undefined); // undefined = loading
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, "config", "app"), (s) => setMigrated(!!(s.data() || {}).playersMigratedV1));
+    return () => unsub();
+  }, []);
+  const [migrating, setMigrating] = useState(false);
+  const runMigration = async () => {
+    setMigrating(true);
+    try {
+      const count = await migrateLegacyContactsToPlayers();
+      alert(`Migrated ${count} legacy contact(s) into Player Profiles.`);
+    } catch (err) {
+      alert("Migration failed: " + (err?.message || String(err)));
+    } finally {
+      setMigrating(false);
+    }
+  };
+
+  const [search, setSearch] = useState("");
+
+  // Which columns to show - Name and the Edit action are always there;
+  // everything else can be hidden to fit the table into less width.
+  // Remembered per-browser so the choice sticks across visits.
+  const [hiddenCols, setHiddenCols] = useState(() => {
+    try { return new Set(JSON.parse(localStorage.getItem("playerProfilesHiddenCols") || "[]")); } catch { return new Set(); }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("playerProfilesHiddenCols", JSON.stringify([...hiddenCols])); } catch {}
+  }, [hiddenCols]);
+  const toggleColVisible = (key) => {
+    setHiddenCols(s => { const next = new Set(s); next.has(key) ? next.delete(key) : next.add(key); return next; });
+  };
+  const [showColumnMenu, setShowColumnMenu] = useState(false);
+  const visibleColumns = HIDEABLE_COLUMNS.filter(c => !hiddenCols.has(c.key));
+
+  // Click a column header to sort by it, click again to flip direction -
+  // defaults to name ascending, same as the old fixed sort.
+  const [sortBy, setSortBy] = useState("name");
+  const [sortDir, setSortDir] = useState("asc");
+  const toggleSort = (col) => {
+    if (sortBy === col) setSortDir(d => d === "asc" ? "desc" : "asc");
+    else { setSortBy(col); setSortDir("asc"); }
+  };
+
+  const filteredRows = useMemo(() => {
+    const withFlags = roster.rows.map(r => {
+      // Checked against every alias the merged identity has ever gone by,
+      // not just its current display name - a rename/merge shouldn't
+      // silently drop a push-notification match that was already working
+      // under an earlier spelling.
+      const nameKey = personKey({ firstName: r.firstName, lastName: r.lastName });
+      const notified = (r.aliasKeys || []).some(k => notifiedNameKeys.has(k)) || !!(nameKey && notifiedNameKeys.has(nameKey)) || (r.playerId && notifiedPlayerIds.has(r.playerId));
+      const submitted = [...r.dsuRoots].some(root => submittedRoots.has(root));
+      return { ...r, notified, submitted };
+    });
+
+    const cmp = (a, b) => {
+      let av, bv;
+      switch (sortBy) {
+        case "email": av = (a.email || "").toLowerCase(); bv = (b.email || "").toLowerCase(); break;
+        case "phone": av = a.phone || ""; bv = b.phone || ""; break;
+        case "venmo": av = (a.venmo || "").toLowerCase(); bv = (b.venmo || "").toLowerCase(); break;
+        case "notify": av = a.notified ? 2 : a.emailOptOut ? 0 : 1; bv = b.notified ? 2 : b.emailOptOut ? 0 : 1; break;
+        case "submitted": av = a.submitted ? 1 : 0; bv = b.submitted ? 1 : 0; break;
+        case "name":
+        default:
+          av = `${a.firstName || ""} ${a.lastName || ""}`.trim().toLowerCase();
+          bv = `${b.firstName || ""} ${b.lastName || ""}`.trim().toLowerCase();
+      }
+      const raw = typeof av === "number" ? av - bv : String(av).localeCompare(String(bv));
+      return sortDir === "asc" ? raw : -raw;
+    };
+    const sorted = withFlags.sort(cmp);
+
+    const q = search.trim().toLowerCase();
+    if (!q) return sorted;
+    return sorted.filter(r =>
+      `${r.firstName} ${r.lastName}`.toLowerCase().includes(q) ||
+      String(r.email || "").toLowerCase().includes(q) ||
+      String(r.venmo || "").toLowerCase().includes(q)
+    );
+  }, [roster, search, notifiedNameKeys, notifiedPlayerIds, submittedRoots, sortBy, sortDir]);
+
+  // Guards every mutating action below against a double-click/double-submit
+  // firing the same write twice (confirmed cause of a real merge bug - two
+  // near-simultaneous clicks created two player docs, one with a botched
+  // alias set, before the first write's result had come back to disable
+  // anything). Buttons that mutate are disabled while this is true.
+  const [busy, setBusy] = useState(false);
+  const runMutation = async (fn) => {
+    if (busy) return;
+    setBusy(true);
+    try { await fn(); } finally { setBusy(false); }
+  };
+
+  const [editingRowId, setEditingRowId] = useState(null);
+  const [editDraft, setEditDraft] = useState({ name: "", phone: "", venmo: "", email: "" });
+  const startEdit = (row) => {
+    setEditingRowId(row.rowId);
+    setEditDraft({ name: `${row.firstName || ""} ${row.lastName || ""}`.trim(), phone: row.phone || "", venmo: row.venmo || "", email: row.email || "" });
+  };
+  const cancelEdit = () => setEditingRowId(null);
+  const saveEdit = (row) => runMutation(async () => {
+    const parts = editDraft.name.trim().split(/\s+/).filter(Boolean);
+    try {
+      await savePlayerEdit(row, {
+        firstName: parts[0] || "", lastName: parts.slice(1).join(" "),
+        phone: editDraft.phone.trim(), venmo: editDraft.venmo.trim(), email: editDraft.email.trim(),
+      });
+      setEditingRowId(null);
+    } catch (err) {
+      alert("Couldn't save changes: " + (err?.message || String(err)));
+    }
+  });
+
+  const toggleEmailOptOut = (row) => runMutation(async () => {
+    try {
+      if (row.playerId) {
+        await setDoc(doc(db, "players", row.playerId), { emailOptOut: !row.emailOptOut, updatedAt: serverTimestamp() }, { merge: true });
+      } else {
+        await savePlayerEdit(row, { firstName: row.firstName || "", lastName: row.lastName || "", phone: row.phone || "", venmo: row.venmo || "", email: row.email || "", emailOptOut: true });
+      }
+    } catch (err) {
+      alert("Couldn't update opt-out: " + (err?.message || String(err)));
+    }
+  });
+
+  // Merge: select 2+ rows, confirm the surviving name/phone/venmo/email in a
+  // small modal (defaults to the first selection's values), then write one
+  // player doc carrying every selected row's alias keys - see
+  // mergeRosterRows for how the survivor is chosen.
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const toggleSelected = (rowId) => {
+    setSelectedIds(s => { const next = new Set(s); next.has(rowId) ? next.delete(rowId) : next.add(rowId); return next; });
+  };
+  const selectedRows = useMemo(() => filteredRows.filter(r => selectedIds.has(r.rowId)), [filteredRows, selectedIds]);
+  const [mergeDraft, setMergeDraft] = useState(null); // { name, phone, venmo, email } | null
+  const openMergeModal = () => {
+    if (selectedRows.length < 2) return;
+    const first = selectedRows[0];
+    setMergeDraft({ name: `${first.firstName || ""} ${first.lastName || ""}`.trim(), phone: first.phone || "", venmo: first.venmo || "", email: first.email || "" });
+  };
+  const confirmMerge = () => runMutation(async () => {
+    const parts = mergeDraft.name.trim().split(/\s+/).filter(Boolean);
+    try {
+      await mergeRosterRows(selectedRows, {
+        firstName: parts[0] || "", lastName: parts.slice(1).join(" "),
+        phone: mergeDraft.phone.trim(), venmo: mergeDraft.venmo.trim(), email: mergeDraft.email.trim(),
+      });
+      setSelectedIds(new Set());
+      setMergeDraft(null);
+    } catch (err) {
+      alert("Couldn't merge: " + (err?.message || String(err)));
+    }
+  });
+
+  // Deletes the player doc itself - only ever offered for rows that have one
+  // (an unclaimed, purely picks-derived row has nothing persisted to
+  // delete). This does NOT touch their actual picks submissions, so someone
+  // who's played before reappears as an unclaimed row afterward, just
+  // without whatever name edit/merge/opt-out was set here; only someone
+  // with zero picks history (a pure invitee) actually disappears from the
+  // roster entirely.
+  const deletePlayer = (row) => runMutation(async () => {
+    if (!row.playerId) return;
+    const label = `${row.firstName || ""} ${row.lastName || ""}`.trim() || row.email || "this player";
+    const warning = row.dsuRoots.size > 0
+      ? `Delete ${label}'s profile? They've submitted picks before, so they'll still show up (under their raw picks info) - this only clears the name edit / merge / opt-out you've set here.`
+      : `Delete ${label}? They have no picks history, so this removes them from the roster entirely.`;
+    if (!window.confirm(warning)) return;
+    try {
+      await deleteDoc(doc(db, "players", row.playerId));
+      setSelectedIds(s => { if (!s.has(row.rowId)) return s; const next = new Set(s); next.delete(row.rowId); return next; });
+    } catch (err) {
+      alert("Couldn't delete: " + (err?.message || String(err)));
+    }
+  });
+
+  // Same paste-emails intake the old Unassigned Emails section had, now
+  // writing straight to `players` instead of a separate collection - there's
+  // no more "promoted" step, everyone here is equally in the roster.
+  const [addDraft, setAddDraft] = useState("");
+  const addPlayers = () => runMutation(async () => {
+    const knownEmails = new Set(roster.rows.map(r => String(r.email || "").trim().toLowerCase()).filter(Boolean));
+    const emails = [...new Set(addDraft.split(/[\s,;]+/).map(s => s.trim().toLowerCase()).filter(s => s && s.includes("@")))]
+      .filter(e => !knownEmails.has(e));
+    if (emails.length === 0) { setAddDraft(""); return; }
+    try {
+      await Promise.all(emails.map(e => setDoc(doc(collection(db, "players")), {
+        firstName: "", lastName: "", phone: "", venmo: "", email: e,
+        aliasKeys: [emailKeyOf({ email: e })].filter(Boolean),
+        emailOptOut: false, createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+      })));
+      setAddDraft("");
+    } catch (err) {
+      alert("Couldn't add: " + (err?.message || String(err)));
+    }
+  });
+
+  // One cell renderer per column key, shared by the header-driven table body
+  // below so hiding a column (see HIDEABLE_COLUMNS/hiddenCols) doesn't need
+  // its own separate branch - the body just skips whatever's not in
+  // visibleColumns.
+  const renderDataCell = (row, colKey) => {
+    switch (colKey) {
+      case "name": return `${row.firstName || ""} ${row.lastName || ""}`.trim() || "—";
+      case "email": return row.email || "—";
+      case "phone": return row.phone || "—";
+      case "venmo": return row.venmo || "—";
+      case "notify": return row.notified ? (
+        <StatusBadge tone="neutral">📱 Phone</StatusBadge>
+      ) : (
+        <button
+          style={{ ...adminBtn(row.emailOptOut ? "neutral" : "success"), padding:"4px 8px", fontSize:12 }}
+          title={row.emailOptOut ? "Excluded from email reminders — click to opt back in" : "Currently receives email reminders — click to opt out"}
+          onClick={() => toggleEmailOptOut(row)}
+          disabled={busy}
+        >
+          {row.emailOptOut ? "Opted out" : "✉️ Email"}
+        </button>
+      );
+      case "submitted": return hasWeekValue(year) && hasWeekValue(week) ? (
+        row.submitted ? <StatusBadge tone="success">✓ Submitted</StatusBadge> : <span style={{ opacity:.4, fontSize:12 }}>—</span>
+      ) : null;
+      default: return null;
+    }
+  };
+  const renderEditCell = (colKey) => {
+    switch (colKey) {
+      case "name": return <input style={{ ...inputStyle, padding:"4px 8px", fontSize:12, width:140 }} placeholder="name" value={editDraft.name} onChange={e => setEditDraft(d => ({ ...d, name: e.target.value }))} />;
+      case "email": return <input style={{ ...inputStyle, padding:"4px 8px", fontSize:12, width:160 }} type="email" placeholder="email" value={editDraft.email} onChange={e => setEditDraft(d => ({ ...d, email: e.target.value }))} />;
+      case "phone": return <input style={{ ...inputStyle, padding:"4px 8px", fontSize:12, width:120 }} placeholder="phone" value={editDraft.phone} onChange={e => setEditDraft(d => ({ ...d, phone: e.target.value }))} />;
+      case "venmo": return <input style={{ ...inputStyle, padding:"4px 8px", fontSize:12, width:120 }} placeholder="venmo" value={editDraft.venmo} onChange={e => setEditDraft(d => ({ ...d, venmo: e.target.value }))} />;
+      default: return null;
+    }
+  };
+
+  return (<>
+    <Card style={{ maxWidth: 1200, marginTop: 16, padding: isMobile ? 12 : 16 }}>
+      {migrated === false && (
+        <div style={{ marginBottom:14, padding:"10px 12px", borderRadius:10, background:"rgba(240,180,41,.1)", border:"1px solid rgba(240,180,41,.3)", color:"#f0b429", fontSize:13, display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:10 }}>
+          <span>One-time setup: import existing contact overrides, opt-outs, and promoted invitees into Player Profiles.</span>
+          <button style={adminBtn("warning")} onClick={runMigration} disabled={migrating}>{migrating ? "Migrating…" : "Run one-time migration"}</button>
+        </div>
+      )}
+      <Row style={{ gap:16, alignItems:"flex-end", flexWrap:"wrap" }}>
+        <Field label="Search"><input style={{...inputStyle, width:240}} value={search} onChange={e=>setSearch(e.target.value)} placeholder="Name, email, or venmo…" /></Field>
+        <button style={adminBtn("neutral")} onClick={() => setShowColumnMenu(s => !s)}>Columns {showColumnMenu ? "▲" : "▼"}</button>
+        {selectedRows.length >= 2 && (
+          <button style={adminBtn("primary")} onClick={openMergeModal}>Merge Selected ({selectedRows.length})</button>
+        )}
+      </Row>
+
+      {showColumnMenu && (
+        <div style={{ marginTop:10, padding:"10px 12px", borderRadius:10, border:"1px solid #2a3655", background:"#141a30", display:"flex", gap:16, flexWrap:"wrap" }}>
+          {HIDEABLE_COLUMNS.filter(c => c.key !== "name").map(c => (
+            <label key={c.key} style={{ display:"flex", alignItems:"center", gap:6, fontSize:13, color:"#cfd8f0", cursor:"pointer" }}>
+              <input type="checkbox" checked={!hiddenCols.has(c.key)} onChange={() => toggleColVisible(c.key)} />
+              {c.label}
+            </label>
+          ))}
+        </div>
+      )}
+
+      <div style={{ marginTop:14, overflowX:"auto" }}>
+        <table style={{ width:"100%", borderCollapse:"collapse", minWidth:420, fontSize:13 }}>
+          <thead>
+            <tr style={{ textAlign:"left" }}>
+              <th style={{ padding:"8px 10px", borderBottom:"1px solid #1f2a44", width:28 }}></th>
+              {visibleColumns.map(({ key, label }) => (
+                <th
+                  key={key}
+                  style={{ padding:"8px 10px", borderBottom:"1px solid #1f2a44", cursor:"pointer", userSelect:"none", whiteSpace:"nowrap" }}
+                  onClick={() => toggleSort(key)}
+                  title={`Sort by ${label}`}
+                >
+                  {label}{sortBy === key ? (sortDir === "asc" ? " ▲" : " ▼") : ""}
+                </th>
+              ))}
+              <th style={{ padding:"8px 10px", borderBottom:"1px solid #1f2a44", position:"sticky", right:0, background:"#121a2b", boxShadow:"-4px 0 6px -4px rgba(0,0,0,.4)" }}></th>
+            </tr>
+          </thead>
+          <tbody>
+            {filteredRows.map(row => {
+              const isEditing = editingRowId === row.rowId;
+              return (
+                <tr key={row.rowId} style={{ borderBottom:"1px solid #1f2a44" }}>
+                  <td style={{ padding:"8px 10px" }}>
+                    {!isEditing && <input type="checkbox" checked={selectedIds.has(row.rowId)} onChange={() => toggleSelected(row.rowId)} style={{ cursor:"pointer" }} />}
+                  </td>
+                  {visibleColumns.map(({ key }) => (
+                    <td key={key} style={{ padding:"8px 10px", opacity: key === "name" || isEditing ? 1 : .9 }}>
+                      {isEditing ? renderEditCell(key) : renderDataCell(row, key)}
+                    </td>
+                  ))}
+                  <td style={{ padding:"8px 10px", position:"sticky", right:0, background:"#121a2b", boxShadow:"-4px 0 6px -4px rgba(0,0,0,.4)" }}>
+                    {isEditing ? (
+                      <div style={{ display:"flex", gap:6 }}>
+                        <button style={{ ...adminBtn("success"), padding:"4px 8px", fontSize:12 }} onClick={() => saveEdit(row)} disabled={busy}>Save</button>
+                        <button style={{ ...adminBtn("neutral"), padding:"4px 8px", fontSize:12 }} onClick={cancelEdit}>Cancel</button>
+                      </div>
+                    ) : (
+                      <div style={{ display:"flex", gap:6 }}>
+                        <button style={{ ...adminBtn("neutral"), padding:"4px 8px", fontSize:12 }} onClick={() => startEdit(row)}>Edit</button>
+                        {row.playerId && (
+                          <button style={{ ...adminBtn("danger"), padding:"4px 8px", fontSize:12 }} onClick={() => deletePlayer(row)} disabled={busy}>Delete</button>
+                        )}
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+            {loaded && filteredRows.length === 0 && (
+              <tr><td colSpan={visibleColumns.length + 2} style={{ padding:"16px 10px", opacity:.7 }}>No matches.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+
+    <Card style={{ maxWidth: 1200, marginTop: 16, padding: isMobile ? 12 : 16 }}>
+      <h3 style={{ margin: 0 }}>Add New Player</h3>
+      <p style={{ margin: "10px 0 0", fontSize: 13, color: "#9aa4c7" }}>
+        For invitees who haven't played yet. Paste any number of emails below (comma, space, or newline separated) - fill in their name afterward with Edit.
+      </p>
+      <Row style={{ marginTop: 14, gap: 10, alignItems: "flex-start" }}>
+        <textarea
+          style={{ ...inputStyle, flex: 1, minHeight: 70, fontFamily: "inherit", resize: "vertical" }}
+          placeholder="jane@example.com, john@example.com..."
+          value={addDraft}
+          onChange={e => setAddDraft(e.target.value)}
+        />
+        <button style={adminBtn("primary")} onClick={addPlayers} disabled={busy}>Add</button>
+      </Row>
+    </Card>
+
+    {mergeDraft && (
+      <ModalOverlay>
+        <Card style={{ padding:18, width:"min(420px, 92vw)", margin:"0 auto" }}>
+          <h3 style={{ margin:"0 0 4px", fontSize:16 }}>Merge {selectedRows.length} players into one</h3>
+          <p style={{ margin:"0 0 14px", fontSize:12, color:"#9aa4c7" }}>
+            {selectedRows.map(r => `${r.firstName || ""} ${r.lastName || ""}`.trim() || r.email || "—").join(" + ")}
+          </p>
+          <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+            <Field label="Name"><input style={inputStyle} value={mergeDraft.name} onChange={e=>setMergeDraft(d=>({...d, name:e.target.value}))} /></Field>
+            <Field label="Email"><input style={inputStyle} type="email" value={mergeDraft.email} onChange={e=>setMergeDraft(d=>({...d, email:e.target.value}))} /></Field>
+            <Field label="Phone"><input style={inputStyle} value={mergeDraft.phone} onChange={e=>setMergeDraft(d=>({...d, phone:e.target.value}))} /></Field>
+            <Field label="Venmo"><input style={inputStyle} value={mergeDraft.venmo} onChange={e=>setMergeDraft(d=>({...d, venmo:e.target.value}))} /></Field>
+          </div>
+          <div style={{ display:"flex", justifyContent:"flex-end", gap:8, marginTop:16 }}>
+            <button style={adminBtn("neutral")} onClick={() => setMergeDraft(null)} disabled={busy}>Cancel</button>
+            <button style={adminBtn("primary")} onClick={confirmMerge} disabled={busy}>{busy ? "Merging…" : "Merge"}</button>
+          </div>
+        </Card>
+      </ModalOverlay>
+    )}
+  </>);
+}
+
+// Who's Missing tab: today's submissions vs. everyone who's ever played, by
+// name - plus the two Gmail-draft reminder buttons.
+function MissingTab({ roster, loaded, notifiedNameKeys, notifiedPlayerIds, submittedRoots, year, week, isMobile }) {
+  // This week's earliest kickoff, so the intro email draft can quote the
+  // real submission deadline instead of a hardcoded date.
   const [weekGames, setWeekGames] = useState([]);
   useEffect(() => {
     if (!hasWeekValue(year) || !hasWeekValue(week)) { setWeekGames([]); return; }
@@ -3837,263 +6083,18 @@ function AdminMissingPicksPage({ user, isAdmin, setPage }) {
   }, [weekGames]);
   const deadlineLabel = earliestGame ? kickoffLabel(earliestGame, { timeZone: "America/New_York" }) : "TBD";
 
-  // Everyone who has ever submitted picks, any year/week, grouped into
-  // people (not raw docs) via the name/Venmo union-find above - the
-  // "roster" to check this week's submissions against, since the app has
-  // no separate participant list.
-  const [data, setData] = useState(null);
-  useEffect(() => {
-    if (!hasWeekValue(year) || !hasWeekValue(week)) { setData(null); return; }
-    const unsub = onSnapshot(collection(db, "picks"), (snap) => {
-      const dsu = makeDSU();
-      const docs = [];
-      snap.forEach(d => {
-        const p = d.data();
-        const nk = personKey(p);
-        const vk = venmoKeyOf(p);
-        if (!nk && !vk) return;
-        if (nk && vk) dsu.union(nk, vk);
-        docs.push({ p, key: nk || vk });
-      });
-
-      const submittedRoots = new Set();
-      for (const rec of docs) {
-        if (Number(rec.p.year) === Number(year) && Number(rec.p.week) === Number(week)) {
-          submittedRoots.add(dsu.find(rec.key));
-        }
-      }
-
-      const clusters = new Map();
-      for (const rec of docs) {
-        const root = dsu.find(rec.key);
-        const existing = clusters.get(root);
-        const ms = rec.p.updatedAt?.toMillis ? rec.p.updatedAt.toMillis() : (rec.p.createdAt?.toMillis ? rec.p.createdAt.toMillis() : 0);
-        if (!existing || ms >= existing._ms) {
-          clusters.set(root, { key: root, firstName: rec.p.firstName, lastName: rec.p.lastName, phone: rec.p.phone, venmo: rec.p.venmo, email: rec.p.email, _ms: ms });
-        }
-      }
-
-      setData({ clusters, submittedRoots });
-    });
-    return () => unsub();
-  }, [year, week]);
-
-  // Manually-entered emails for people whose picks docs never captured one -
-  // keyed by the same identity key (personKey/venmoKeyOf root) used above,
-  // so it's tied to the person, not any single week's submission.
-  const [contactOverrides, setContactOverrides] = useState({});
-  useEffect(() => {
-    if (!isAdmin) return;
-    const unsub = onSnapshot(collection(db, "contacts"), (snap) => {
-      const m = {};
-      snap.forEach(d => { m[d.id] = d.data() || {}; });
-      setContactOverrides(m);
-    });
-    return () => unsub();
-  }, [isAdmin]);
-
-  const weekKey = hasWeekValue(year) && hasWeekValue(week) ? `${year}_${week}` : null;
-
-  // Anyone who already has push notifications on for a device tagged with
-  // their name doesn't need an email reminder too - auto-treated as opted
-  // out (on top of, not instead of, the manual per-week toggle below). Only
-  // catches devices whose pushTokens doc has a name on it, which happens the
-  // first time that device is used to submit picks (see ConfirmPage) - a
-  // brand-new person who enables notifications but has never submitted has
-  // no identity to attach the token to yet, so they won't be caught here.
-  const [notifiedNameKeys, setNotifiedNameKeys] = useState(new Set());
-  useEffect(() => {
-    if (!isAdmin) return;
-    const unsub = onSnapshot(collection(db, "pushTokens"), (snap) => {
-      const keys = new Set();
-      snap.forEach(d => {
-        const v = d.data() || {};
-        if (v.blocked) return;
-        const k = personKey({ firstName: (v.name || "").trim().split(/\s+/)[0], lastName: (v.name || "").trim().split(/\s+/).slice(1).join(" ") });
-        if (k) keys.add(k);
-      });
-      setNotifiedNameKeys(keys);
-    });
-    return () => unsub();
-  }, [isAdmin]);
-
-  // Someone can opt out of the "Email Missing" reminder without being removed
-  // from the roster - stored alongside their contact info (contacts for
-  // existing players, unassignedContacts for promoted new invitees). Per-week
-  // (a map keyed by "{year}_{week}"), not a permanent flag - someone who sits
-  // out one week shouldn't be silently excluded from every week after it. A
-  // plain merge:true deep-merges nested map fields (same behavior relied on
-  // elsewhere in this app), so writing just this week's key leaves every
-  // other week's flag untouched.
-  const toggleOptOut = async (p, weekKey) => {
-    const next = !p.optedOut;
-    try {
-      if (p.key.startsWith("unassigned:")) {
-        await setDoc(doc(db, "unassignedContacts", p.key.slice("unassigned:".length)), { optedOutWeeks: { [weekKey]: next } }, { merge: true });
-      } else {
-        await setDoc(doc(db, "contacts", p.key), { optedOutWeeks: { [weekKey]: next }, updatedAt: serverTimestamp() }, { merge: true });
-      }
-    } catch (err) {
-      alert("Couldn't update opt-out status: " + (err?.message || String(err)));
-    }
-  };
-
-  // Inline edit for any roster row - name/phone/venmo/email. For real
-  // players this writes to `contacts` as an override on top of whatever
-  // their picks doc has; for promoted invitees it writes straight to their
-  // unassignedContacts doc, which is the only record of them.
-  const [editingKey, setEditingKey] = useState(null);
-  const [editDraft, setEditDraft] = useState({ name: "", phone: "", venmo: "", email: "" });
-  const startEdit = (p) => {
-    setEditingKey(p.key);
-    setEditDraft({ name: `${p.firstName || ""} ${p.lastName || ""}`.trim(), phone: p.phone || "", venmo: p.venmo || "", email: p.email || "" });
-  };
-  const cancelEdit = () => setEditingKey(null);
-  const saveEdit = async (p) => {
-    const parts = editDraft.name.trim().split(/\s+/).filter(Boolean);
-    const firstName = parts[0] || "";
-    const lastName = parts.slice(1).join(" ");
-    try {
-      if (p.key.startsWith("unassigned:")) {
-        await setDoc(doc(db, "unassignedContacts", p.key.slice("unassigned:".length)), {
-          name: editDraft.name.trim(), phone: editDraft.phone.trim(), venmo: editDraft.venmo.trim(), email: editDraft.email.trim(),
-        }, { merge: true });
-      } else {
-        await setDoc(doc(db, "contacts", p.key), {
-          firstName, lastName, phone: editDraft.phone.trim(), venmo: editDraft.venmo.trim(), email: editDraft.email.trim(),
-          updatedAt: serverTimestamp(),
-        }, { merge: true });
-      }
-      setEditingKey(null);
-    } catch (err) {
-      alert("Couldn't save changes: " + (err?.message || String(err)));
-    }
-  };
-
-  // Emails that don't belong to anyone in the roster yet - e.g. a new invite
-  // list where names haven't been sorted out. Kept separate from `contacts`
-  // (which is keyed to an existing player's name/Venmo identity) since there's
-  // no identity to attach these to until someone assigns a name. Once named
-  // and promoted, they're merged into the roster below like anyone else who
-  // hasn't submitted - there's no picks doc for them, so they're always
-  // "missing" until they actually play a week.
-  const [unassigned, setUnassigned] = useState({});
-  useEffect(() => {
-    if (!isAdmin) return;
-    const unsub = onSnapshot(collection(db, "unassignedContacts"), (snap) => {
-      const m = {};
-      snap.forEach(d => { m[d.id] = d.data() || {}; });
-      setUnassigned(m);
-    });
-    return () => unsub();
-  }, [isAdmin]);
-  const unassignedList = useMemo(
-    () => Object.entries(unassigned).filter(([, v]) => !v.promoted).map(([id, v]) => ({ id, email: v.email || id, name: v.name || "" }))
-      .sort((a, b) => a.email.localeCompare(b.email)),
-    [unassigned]
-  );
-  const promotedRoster = useMemo(() => {
-    return Object.entries(unassigned).filter(([, v]) => v.promoted).map(([id, v]) => {
-      const parts = (v.name || "").trim().split(/\s+/).filter(Boolean);
-      return { key: `unassigned:${id}`, firstName: parts[0] || v.email || id, lastName: parts.slice(1).join(" "), phone: v.phone || "", venmo: v.venmo || "", email: v.email || id, optedOutWeeks: v.optedOutWeeks || {} };
-    });
-  }, [unassigned]);
-  const [unassignedDraft, setUnassignedDraft] = useState("");
-  const [nameDrafts, setNameDrafts] = useState({});
-
-  const addUnassignedEmails = async () => {
-    const knownEmails = new Set(
-      [...data?.clusters.values() || []].map(c => String(c.email || "").trim().toLowerCase()).filter(Boolean)
-    );
-    const emails = [...new Set(
-      unassignedDraft.split(/[\s,;]+/).map(s => s.trim().toLowerCase()).filter(s => s && s.includes("@"))
-    )].filter(e => !knownEmails.has(e) && !unassigned[e]);
-    if (emails.length === 0) { setUnassignedDraft(""); return; }
-    try {
-      await Promise.all(emails.map(e => setDoc(doc(db, "unassignedContacts", e), { email: e, name: "", createdAt: serverTimestamp() }, { merge: true })));
-      setUnassignedDraft("");
-    } catch (err) {
-      alert("Couldn't save those emails: " + (err?.message || String(err)));
-    }
-  };
-  const saveUnassignedName = async (id, name) => {
-    try {
-      await setDoc(doc(db, "unassignedContacts", id), { name: (name || "").trim() }, { merge: true });
-    } catch (err) {
-      alert("Couldn't save that name: " + (err?.message || String(err)));
-    }
-  };
-  const promoteToRoster = async (id) => {
-    try {
-      await setDoc(doc(db, "unassignedContacts", id), { promoted: true }, { merge: true });
-    } catch (err) {
-      alert("Couldn't add to the roster: " + (err?.message || String(err)));
-    }
-  };
-  const promoteAllUnassigned = async () => {
-    if (unassignedList.length === 0) return;
-    if (!window.confirm(`Add all ${unassignedList.length} unassigned email(s) to the roster now? You can opt out or fill in names/edit afterward.`)) return;
-    try {
-      await Promise.all(unassignedList.map(u => setDoc(doc(db, "unassignedContacts", u.id), { promoted: true }, { merge: true })));
-    } catch (err) {
-      alert("Couldn't add everyone to the roster: " + (err?.message || String(err)));
-    }
-  };
-  const removeUnassigned = async (id) => {
-    try { await deleteDoc(doc(db, "unassignedContacts", id)); } catch (err) { alert("Couldn't remove: " + (err?.message || String(err))); }
-  };
-
-  // Manual opt-out is recorded per-week (see toggleOptOut) but carries
-  // forward: once someone's opted out, that status applies to every later
-  // week too until explicitly toggled again, rather than needing a fresh
-  // click every single week. Resolved by finding the most recent explicit
-  // choice at or before the week being viewed, so an override for one
-  // specific week (e.g. opting back in just for this one) still works and
-  // itself carries forward from there.
-  const weekOrdinal = (y, w) => Number(y) * 100 + Number(w);
-  const resolveOptedOut = (optedOutWeeks, y, w) => {
-    if (!optedOutWeeks || !hasWeekValue(y) || !hasWeekValue(w)) return false;
-    const targetOrd = weekOrdinal(y, w);
-    let best = false, bestOrd = -Infinity;
-    for (const k of Object.keys(optedOutWeeks)) {
-      const m = /^(\d+)_(\d+)$/.exec(k);
-      if (!m) continue;
-      const ord = weekOrdinal(m[1], m[2]);
-      if (ord <= targetOrd && ord > bestOrd) { bestOrd = ord; best = !!optedOutWeeks[k]; }
-    }
-    return best;
-  };
-  // "notified" is a live, automatic signal (has a named, unblocked device)
-  // that's never written to Firestore - it reflects current pushTokens
-  // state as of each render, so it can't go stale the way a one-time-written
-  // flag could.
   const missing = useMemo(() => {
-    const withFlags = (p, optedOutWeeks) => {
-      const nameKey = personKey({ firstName: p.firstName, lastName: p.lastName });
-      const notified = !!(nameKey && notifiedNameKeys.has(nameKey));
-      const optedOut = resolveOptedOut(optedOutWeeks, year, week);
-      return { ...p, optedOut, notified, excluded: optedOut || notified };
-    };
-    const fromRoster = data ? [...data.clusters.values()]
-      .filter(c => !data.submittedRoots.has(c.key))
-      .map(c => {
-        const ov = contactOverrides[c.key] || {};
-        return withFlags({
-          ...c,
-          firstName: ov.firstName || c.firstName,
-          lastName: ov.lastName || c.lastName,
-          phone: ov.phone || c.phone,
-          venmo: ov.venmo || c.venmo,
-          email: ov.email || c.email || "",
-        }, ov.optedOutWeeks);
-      }) : [];
-    const promoted = promotedRoster.map(p => withFlags(p, p.optedOutWeeks));
-    return [...fromRoster, ...promoted]
+    return roster.rows
+      .filter(r => ![...r.dsuRoots].some(root => submittedRoots.has(root)))
+      .map(r => {
+        const nameKey = personKey({ firstName: r.firstName, lastName: r.lastName });
+        const notified = (r.aliasKeys || []).some(k => notifiedNameKeys.has(k)) || !!(nameKey && notifiedNameKeys.has(nameKey)) || (r.playerId && notifiedPlayerIds.has(r.playerId));
+        return { ...r, notified, excluded: r.emailOptOut || notified };
+      })
       .sort((a, b) => (a.lastName || "").localeCompare(b.lastName || "") || (a.firstName || "").localeCompare(b.firstName || ""));
-  }, [data, contactOverrides, promotedRoster, weekKey, notifiedNameKeys]);
+  }, [roster, submittedRoots, notifiedNameKeys, notifiedPlayerIds]);
 
-  const loaded = !!data;
-  const totalEver = (data ? data.clusters.size : 0) + promotedRoster.length;
+  const totalEver = roster.rows.length;
   const submittedCount = totalEver - missing.length;
 
   const missingEmails = useMemo(() => [...new Set(missing.filter(p => !p.excluded).map(p => String(p.email || "").trim()).filter(Boolean))], [missing]);
@@ -4115,24 +6116,13 @@ function AdminMissingPicksPage({ user, isAdmin, setPage }) {
     window.open(url, "_blank", "noopener,noreferrer");
   };
 
-  return (<Container maxWidth={900} padding={isMobile ? 12 : 24}>
-    <Header user={user} isAdmin={isAdmin} setPage={setPage} />
-    <Card style={{ maxWidth: 900, padding: isMobile ? 12 : 16 }}>
-      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:10 }}>
-        <h2 style={{ margin:0 }}>Who Hasn't Submitted</h2>
-        <button style={adminBtn("neutral")} onClick={() => { window.history.pushState(null, "", "/admin"); setPage("admin"); }}>&larr; Back to Admin</button>
-      </div>
-      <p style={{ margin:"10px 0 0", fontSize:13, color:"#9aa4c7" }}>
+  return (
+    <Card style={{ maxWidth: 900, marginTop: 16, padding: isMobile ? 12 : 16 }}>
+      <p style={{ margin:"0 0 10px", fontSize:13, color:"#9aa4c7" }}>
         Compares this week's submissions against everyone who's ever played, by name.
       </p>
-
-      <Row style={{ marginTop:16, gap:16 }}>
-        <Field label="Year"><input style={{...inputStyle, width:"6rem"}} type="number" value={year ?? ""} onChange={e=>setYear(Number(e.target.value))} /></Field>
-        <Field label="Week"><input style={{...inputStyle, width:"4rem"}} type="number" value={week ?? ""} onChange={e=>setWeek(Number(e.target.value))} /></Field>
-      </Row>
-
       {loaded && (
-        <div style={{ marginTop:14, display:"flex", gap:8, flexWrap:"wrap" }}>
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
           <StatusBadge tone={missing.length === 0 ? "success" : "warning"}>
             {submittedCount} / {totalEver} submitted
           </StatusBadge>
@@ -4153,180 +6143,417 @@ function AdminMissingPicksPage({ user, isAdmin, setPage }) {
       )}
 
       <div style={{ marginTop:14, overflowX:"auto" }}>
-        <table style={{ width:"100%", borderCollapse:"collapse", minWidth:480 }}>
+        <table style={{ width:"100%", borderCollapse:"collapse", minWidth:420 }}>
           <thead>
             <tr style={{ textAlign:"left" }}>
               <th style={{ padding:"8px 10px", borderBottom:"1px solid #1f2a44" }}>Name</th>
               <th style={{ padding:"8px 10px", borderBottom:"1px solid #1f2a44" }}>Email</th>
               <th style={{ padding:"8px 10px", borderBottom:"1px solid #1f2a44" }}>Phone</th>
               <th style={{ padding:"8px 10px", borderBottom:"1px solid #1f2a44" }}>Venmo</th>
-              <th style={{ padding:"8px 10px", borderBottom:"1px solid #1f2a44", position:"sticky", right:0, background:"#121a2b", boxShadow:"-4px 0 6px -4px rgba(0,0,0,.4)" }}></th>
             </tr>
           </thead>
           <tbody>
-            {missing.map(p => {
-              const isEditing = editingKey === p.key;
-              if (isEditing) {
-                return (
-                  <tr key={p.key} style={{ borderBottom:"1px solid #1f2a44" }}>
-                    <td style={{ padding:"8px 10px" }}>
-                      <input style={{ ...inputStyle, padding:"4px 8px", fontSize:12, width:140 }} placeholder="name"
-                        value={editDraft.name} onChange={e => setEditDraft(d => ({ ...d, name: e.target.value }))} />
-                    </td>
-                    <td style={{ padding:"8px 10px" }}>
-                      <input style={{ ...inputStyle, padding:"4px 8px", fontSize:12, width:160 }} type="email" placeholder="email"
-                        value={editDraft.email} onChange={e => setEditDraft(d => ({ ...d, email: e.target.value }))} />
-                    </td>
-                    <td style={{ padding:"8px 10px" }}>
-                      <input style={{ ...inputStyle, padding:"4px 8px", fontSize:12, width:120 }} placeholder="phone"
-                        value={editDraft.phone} onChange={e => setEditDraft(d => ({ ...d, phone: e.target.value }))} />
-                    </td>
-                    <td style={{ padding:"8px 10px" }}>
-                      <input style={{ ...inputStyle, padding:"4px 8px", fontSize:12, width:120 }} placeholder="venmo"
-                        value={editDraft.venmo} onChange={e => setEditDraft(d => ({ ...d, venmo: e.target.value }))} />
-                    </td>
-                    <td style={{ padding:"8px 10px", position:"sticky", right:0, background:"#121a2b", boxShadow:"-4px 0 6px -4px rgba(0,0,0,.4)" }}>
-                      <div style={{ display:"flex", gap:6 }}>
-                        <button style={{ ...adminBtn("success"), padding:"4px 8px", fontSize:12 }} onClick={() => saveEdit(p)}>Save</button>
-                        <button style={{ ...adminBtn("neutral"), padding:"4px 8px", fontSize:12 }} onClick={cancelEdit}>Cancel</button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              }
-              return (
-                <tr key={p.key} style={{ borderBottom:"1px solid #1f2a44" }}>
-                  <td style={{ padding:"8px 10px" }}>{`${p.firstName || ""} ${p.lastName || ""}`.trim()}</td>
-                  <td style={{ padding:"8px 10px", opacity: p.excluded ? 0.5 : .9 }}>
-                    {p.email || "—"}
-                    {p.notified && <span style={{ marginLeft:6, fontSize:11, color:"#6aa2ff" }} title="Has push notifications enabled — auto-excluded from Email Missing">🔔 notified</span>}
-                    {p.optedOut && <span style={{ marginLeft:6, fontSize:11, color:"#f0b429" }}>(opted out this week)</span>}
-                  </td>
-                  <td style={{ padding:"8px 10px", opacity:.9 }}>{p.phone}</td>
-                  <td style={{ padding:"8px 10px", opacity:.9 }}>{p.venmo}</td>
-                  <td style={{ padding:"8px 10px", position:"sticky", right:0, background:"#121a2b", boxShadow:"-4px 0 6px -4px rgba(0,0,0,.4)" }}>
-                    <div style={{ display:"flex", gap:6 }}>
-                      <button style={{ ...adminBtn("neutral"), padding:"4px 8px", fontSize:12 }} onClick={() => startEdit(p)}>Edit</button>
-                      <button
-                        style={{ ...adminBtn(p.optedOut ? "neutral" : "warning"), padding:"4px 8px", fontSize:12 }}
-                        title={p.optedOut ? "Excluded from Email Missing for this week — click to opt back in" : "Exclude this person from this week's Email Missing draft"}
-                        onClick={() => toggleOptOut(p, weekKey)}
-                        disabled={!weekKey}
-                      >
-                        {p.optedOut ? "Opted out" : "Opt out"}
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              );
-            })}
+            {missing.map(p => (
+              <tr key={p.rowId} style={{ borderBottom:"1px solid #1f2a44" }}>
+                <td style={{ padding:"8px 10px" }}>{`${p.firstName || ""} ${p.lastName || ""}`.trim()}</td>
+                <td style={{ padding:"8px 10px", opacity: p.excluded ? 0.5 : .9 }}>
+                  {p.email || "—"}
+                  {p.notified
+                    ? <span style={{ marginLeft:6, fontSize:11, color:"#6aa2ff" }} title="Has push notifications enabled — treated as opted out of email">🔔 opted out (phone)</span>
+                    : p.emailOptOut && <span style={{ marginLeft:6, fontSize:11, color:"#f0b429" }}>(opted out)</span>}
+                </td>
+                <td style={{ padding:"8px 10px", opacity:.9 }}>{p.phone}</td>
+                <td style={{ padding:"8px 10px", opacity:.9 }}>{p.venmo}</td>
+              </tr>
+            ))}
             {loaded && missing.length === 0 && (
-              <tr><td colSpan={5} style={{ padding:"16px 10px", opacity:.7 }}>Everyone who's ever played has submitted for {year} / W{week}.</td></tr>
+              <tr><td colSpan={4} style={{ padding:"16px 10px", opacity:.7 }}>Everyone who's ever played has submitted for {year} / W{week}.</td></tr>
             )}
           </tbody>
         </table>
       </div>
     </Card>
+  );
+}
 
-    <Card style={{ maxWidth: 900, marginTop: 16 }}>
-      <h3 style={{ margin: 0 }}>Unassigned Emails</h3>
-      <p style={{ margin: "10px 0 0", fontSize: 13, color: "#9aa4c7" }}>
-        Emails that don't belong to anyone on the roster yet - e.g. new invitees. Paste any number below (comma, space, or newline separated); attach a name to each whenever you figure out who's who.
-      </p>
-      <Row style={{ marginTop: 14, gap: 10, alignItems: "flex-start" }}>
-        <textarea
-          style={{ ...inputStyle, flex: 1, minHeight: 70, fontFamily: "inherit", resize: "vertical" }}
-          placeholder="jane@example.com, john@example.com..."
-          value={unassignedDraft}
-          onChange={e => setUnassignedDraft(e.target.value)}
-        />
-        <button style={adminBtn("primary")} onClick={addUnassignedEmails}>Add</button>
+// Devices tab: every push-notification device - rename, block, message,
+// tie to a player, or clean up stale ones.
+function DevicesTab({ pushDevices, roster, rosterOptions, assignDeviceToPlayer, submittedRoots, setMsg, isMobile }) {
+  const deviceBtnHalf = isMobile ? { flexBasis: "calc(50% - 4px)" } : undefined;
+
+  async function toggleDeviceBlocked(token, blocked) {
+    try {
+      await setDoc(doc(db, "pushTokens", token), { blocked }, { merge: true });
+    } catch (e) {
+      setMsg("Failed to update device: " + (e?.message || String(e)));
+    }
+  }
+  // Manual override for the auto-retag (which only fires when the same
+  // device is both signed in as admin and has notifications on) - lets an
+  // admin tag their own device directly when that didn't happen on its own.
+  async function toggleDeviceAdmin(token, isAdminFlag) {
+    try {
+      await setDoc(doc(db, "pushTokens", token), { isAdmin: isAdminFlag }, { merge: true });
+    } catch (e) {
+      setMsg("Failed to update device: " + (e?.message || String(e)));
+    }
+  }
+  // Permanent removal - for old reinstall tokens etc. that stay technically
+  // valid to FCM (so the dry-run cleanup won't ever flag them) but are known
+  // by a human to be dead weight.
+  async function deleteDevice(token, label) {
+    if (!window.confirm(`Permanently remove ${label || "this device"}? This can't be undone.`)) return;
+    try {
+      await deleteDoc(doc(db, "pushTokens", token));
+    } catch (e) {
+      setMsg("Failed to remove device: " + (e?.message || String(e)));
+    }
+  }
+  const [editingDeviceToken, setEditingDeviceToken] = useState(null);
+  const [deviceNameDraft, setDeviceNameDraft] = useState("");
+  async function saveDeviceName(token) {
+    try {
+      await setDoc(doc(db, "pushTokens", token), { name: deviceNameDraft.trim() }, { merge: true });
+      setEditingDeviceToken(null);
+    } catch (e) {
+      setMsg("Failed to rename device: " + (e?.message || String(e)));
+    }
+  }
+
+  // Whether this device's person has submitted for the currently-selected
+  // week - matched the same way notified-matching works (assignedPlayerId
+  // first, else by name), then checked against the shared submittedRoots
+  // set, instead of a separate per-week token/name query.
+  const deviceSubmitted = (d) => {
+    let row = null;
+    if (d.assignedPlayerId) row = roster.rows.find(r => r.playerId === d.assignedPlayerId);
+    if (!row && d.name) {
+      const parts = d.name.trim().split(/\s+/).filter(Boolean);
+      const nk = personKey({ firstName: parts[0], lastName: parts.slice(1).join(" ") });
+      if (nk) row = roster.rows.find(r => (r.aliasKeys || []).includes(nk));
+    }
+    if (!row) return false;
+    return [...row.dsuRoots].some(root => submittedRoots.has(root));
+  };
+
+  // Per-device targeted notification (vs. the broadcast "Send a Notification"
+  // on the Notifications page) - same notificationOutbox trigger, but tagged
+  // with a targetToken so the Cloud Function delivers to just that one
+  // device.
+  const [messagingToken, setMessagingToken] = useState(null);
+  const [messageTitleDraft, setMessageTitleDraft] = useState("");
+  const [messageBodyDraft, setMessageBodyDraft] = useState("");
+  const [sendingMessage, setSendingMessage] = useState(false);
+  async function sendTargetedMessage(token) {
+    const title = messageTitleDraft.trim();
+    if (!title) { setMsg("Enter a title before sending."); return; }
+    setSendingMessage(true);
+    try {
+      await addDoc(collection(db, "notificationOutbox"), {
+        title, body: messageBodyDraft.trim(), targetToken: token, createdAt: serverTimestamp()
+      });
+      setMsg("Notification sent to that device.");
+      setMessagingToken(null);
+      setMessageTitleDraft("");
+      setMessageBodyDraft("");
+    } catch (e) {
+      setMsg("Failed to send: " + (e?.message || String(e)));
+    } finally {
+      setSendingMessage(false);
+    }
+  }
+
+  // Stale-device cleanup: dry-run every token (nothing delivered to anyone)
+  // and prune whichever ones FCM reports as no longer registered.
+  const [deviceCleanup, setDeviceCleanup] = useState(null);
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, "config", "deviceCleanup"), (s) => setDeviceCleanup(s.data() || null));
+    return () => unsub();
+  }, []);
+  const [cleaningDevices, setCleaningDevices] = useState(false);
+  async function cleanupDevicesNow() {
+    setCleaningDevices(true);
+    try {
+      await addDoc(collection(db, "deviceCleanupRequests"), { createdAt: serverTimestamp() });
+      setMsg("Checking all devices for stale registrations…");
+    } catch (e) {
+      setMsg("Failed to start cleanup: " + (e?.message || String(e)));
+      setCleaningDevices(false);
+    }
+  }
+  // The check runs server-side and reports back via config/deviceCleanup, so
+  // clear the "in progress" state once a newer run shows up.
+  const lastCleanupSeenRef = useRef(null);
+  useEffect(() => {
+    if (!deviceCleanup?.lastRunAt) return;
+    const ms = deviceCleanup.lastRunAt?.toMillis ? deviceCleanup.lastRunAt.toMillis() : 0;
+    if (ms !== lastCleanupSeenRef.current) {
+      lastCleanupSeenRef.current = ms;
+      setCleaningDevices(false);
+    }
+  }, [deviceCleanup]);
+
+  return (
+    <Card style={{ maxWidth: 1200, marginTop: 16, padding: isMobile ? 12 : 16 }}>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:10, marginBottom:12 }}>
+        <p style={{ margin:0, fontSize:13, color:"#9aa4c7" }}>
+          Every device that's enabled notifications. Devices are only labeled with a name once that browser submits picks &mdash; otherwise they show as unknown. Blocking a device stops every notification (automated and custom) from reaching it.
+        </p>
+        <StatusBadge tone="neutral">{pushDevices.length} registered</StatusBadge>
+      </div>
+      <Row style={{ marginBottom: 12, alignItems: "center", gap: 10 }}>
+        <button style={adminBtn("neutral")} disabled={cleaningDevices} onClick={cleanupDevicesNow}>
+          {cleaningDevices ? "Checking…" : "Clean Up Devices Now"}
+        </button>
+        {deviceCleanup?.lastRunAt && (
+          <span style={{ fontSize: 12, color: "#9aa4c7" }}>
+            Last check: removed {deviceCleanup.removedCount ?? 0} of {deviceCleanup.checkedCount ?? "?"} device(s)
+          </span>
+        )}
       </Row>
-
-      {unassignedList.length > 0 && (
-        <div style={{ marginTop: 14 }}>
-          <button style={adminBtn("success")} onClick={promoteAllUnassigned}>
-            Add All {unassignedList.length} to Roster
-          </button>
-        </div>
-      )}
-
-      {unassignedList.length > 0 && (
-        <div style={{ marginTop: 14, overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 480 }}>
-            <thead>
-              <tr style={{ textAlign: "left" }}>
-                <th style={{ padding: "8px 10px", borderBottom: "1px solid #1f2a44" }}>Email</th>
-                <th style={{ padding: "8px 10px", borderBottom: "1px solid #1f2a44" }}>Name</th>
-                <th style={{ padding: "8px 10px", borderBottom: "1px solid #1f2a44" }}></th>
-              </tr>
-            </thead>
-            <tbody>
-              {unassignedList.map(u => (
-                <tr key={u.id} style={{ borderBottom: "1px solid #1f2a44" }}>
-                  <td style={{ padding: "8px 10px" }}>{u.email}</td>
-                  <td style={{ padding: "8px 10px" }}>
-                    <div style={{ display: "flex", gap: 6 }}>
-                      <input
-                        style={{ ...inputStyle, padding: "4px 8px", fontSize: 12, width: 180 }}
-                        placeholder="name"
-                        value={nameDrafts[u.id] ?? u.name}
-                        onChange={e => setNameDrafts(d => ({ ...d, [u.id]: e.target.value }))}
-                        onKeyDown={e => { if (e.key === "Enter") saveUnassignedName(u.id, nameDrafts[u.id]); }}
-                      />
-                      <button style={{ ...adminBtn("neutral"), padding: "4px 8px", fontSize: 12 }} onClick={() => saveUnassignedName(u.id, nameDrafts[u.id])}>Save</button>
+      {pushDevices.length === 0 ? (
+        <div style={{ fontSize:13, color:"#9aa4c7" }}>No devices have enabled notifications yet.</div>
+      ) : (
+        <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+          {pushDevices.map(d => {
+            const blocked = d.blocked === true;
+            const editing = editingDeviceToken === d.token;
+            const messaging = messagingToken === d.token;
+            const submitted = deviceSubmitted(d);
+            return (
+              <div key={d.token} style={{ padding:"9px 12px", background:"#0e1730", border:"1px solid #1f2a44", borderRadius:10 }}>
+                <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:8 }}>
+                  <div>
+                    {editing ? (
+                      <div style={{ display:"flex", gap:6 }}>
+                        <input
+                          style={{ ...inputStyle, padding:"4px 8px", fontSize:13, width:180 }}
+                          placeholder="who's this?"
+                          value={deviceNameDraft}
+                          onChange={e => setDeviceNameDraft(e.target.value)}
+                          onKeyDown={e => { if (e.key === "Enter") saveDeviceName(d.token); }}
+                          autoFocus
+                        />
+                        <button style={{ ...adminBtn("success"), padding:"4px 8px", fontSize:12 }} onClick={() => saveDeviceName(d.token)}>Save</button>
+                        <button style={{ ...adminBtn("neutral"), padding:"4px 8px", fontSize:12 }} onClick={() => setEditingDeviceToken(null)}>Cancel</button>
+                      </div>
+                    ) : (
+                      <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                        <div style={{ fontWeight:600, fontSize:14 }}>{d.name || "Unknown device"}</div>
+                        {d.name && (
+                          <StatusBadge tone={submitted ? "success" : "warning"}>
+                            {submitted ? "Submitted" : "Not Submitted"}
+                          </StatusBadge>
+                        )}
+                        {d.isAdmin === true && <StatusBadge tone="primary">Admin</StatusBadge>}
+                      </div>
+                    )}
+                    <div style={{ fontSize:11, color:"#9aa4c7", fontFamily:"monospace" }}>{d.token.slice(0, 24)}&hellip;</div>
+                    <div style={{ fontSize:11, color:"#9aa4c7" }}>
+                      {d.device ? `${d.device} · ` : ""}Registered: {d.createdAt?.toDate ? d.createdAt.toDate().toLocaleString("en-US", { month:"short", day:"numeric", hour:"numeric", minute:"2-digit" }) : "unknown"}
                     </div>
-                  </td>
-                  <td style={{ padding: "8px 10px", display: "flex", gap: 6 }}>
-                    {u.name && (
-                      <button style={{ ...adminBtn("success"), padding: "4px 8px", fontSize: 12 }} onClick={() => promoteToRoster(u.id)} title="Adds them to the main roster above, so they show up in Who Hasn't Submitted and the Email Missing draft">
-                        Add to Roster
+                    <div style={{ marginTop:6, display:"flex", alignItems:"center", gap:6 }}>
+                      <span style={{ fontSize:11, color:"#9aa4c7" }}>Notifies as:</span>
+                      <select
+                        style={{ ...inputStyle, padding:"3px 6px", fontSize:12, maxWidth:220 }}
+                        value={d.assignedPlayerId || ""}
+                        onChange={e => assignDeviceToPlayer(d.token, e.target.value || null)}
+                        title="Directly ties this device to a Player Profile, independent of name-matching - use this for an unknown device, or one whose name doesn't match anyone cleanly"
+                      >
+                        <option value="">— auto (by name match) —</option>
+                        {rosterOptions.map(o => <option key={o.rowId} value={o.rowId}>{o.label}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                  <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+                    <div style={isMobile ? { flexBasis: "100%" } : undefined}>
+                      <StatusBadge tone={blocked ? "danger" : "success"}>{blocked ? "Blocked" : "Active"}</StatusBadge>
+                    </div>
+                    {!editing && !messaging && (
+                      <button style={adminBtn("success", deviceBtnHalf)} onClick={() => { setEditingDeviceToken(d.token); setDeviceNameDraft(d.name || ""); }}>
+                        Rename
                       </button>
                     )}
-                    <button style={{ ...adminBtn("danger"), padding: "4px 8px", fontSize: 12 }} onClick={() => removeUnassigned(u.id)}>Remove</button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                    {!editing && !messaging && (
+                      <button style={adminBtn(d.isAdmin === true ? "neutral" : "purple", deviceBtnHalf)} onClick={() => toggleDeviceAdmin(d.token, d.isAdmin !== true)}>
+                        {d.isAdmin === true ? "Unmark Admin" : "Mark as Admin"}
+                      </button>
+                    )}
+                    {!editing && !messaging && (
+                      <button style={adminBtn("primary", deviceBtnHalf)} onClick={() => { setMessagingToken(d.token); setMessageTitleDraft(""); setMessageBodyDraft(""); }}>
+                        Message
+                      </button>
+                    )}
+                    <button style={adminBtn(blocked ? "primary" : "warning", deviceBtnHalf)} onClick={() => toggleDeviceBlocked(d.token, !blocked)}>
+                      {blocked ? "Unblock" : "Block"}
+                    </button>
+                    {!editing && !messaging && (
+                      <button style={adminBtn("danger", deviceBtnHalf)} title="Permanently remove this device (e.g. an old reinstall)" onClick={() => deleteDevice(d.token, d.name)}>
+                        Delete
+                      </button>
+                    )}
+                  </div>
+                </div>
+                {messaging && (
+                  <div style={{ marginTop:10, paddingTop:10, borderTop:"1px solid #1f2a44", display:"flex", flexDirection:"column", gap:8 }}>
+                    <input
+                      style={inputStyle}
+                      placeholder="Title"
+                      value={messageTitleDraft}
+                      onChange={e => setMessageTitleDraft(e.target.value)}
+                      autoFocus
+                    />
+                    <input
+                      style={inputStyle}
+                      placeholder="Message (optional)"
+                      value={messageBodyDraft}
+                      onChange={e => setMessageBodyDraft(e.target.value)}
+                    />
+                    <Row style={isMobile ? { flexDirection: "column", alignItems: "stretch" } : undefined}>
+                      <button style={adminBtn("primary")} disabled={sendingMessage} onClick={() => sendTargetedMessage(d.token)}>
+                        {sendingMessage ? "Sending…" : `Send to ${d.name || "this device"}`}
+                      </button>
+                      <button style={adminBtn("neutral")} onClick={() => setMessagingToken(null)}>Cancel</button>
+                    </Row>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
     </Card>
-  </Container>);
+  );
 }
 
-// Look up everything a person has ever submitted, across all years/weeks,
-// using the same name+Venmo identity matching as AdminMissingPicksPage
-// (there's no login/account system, so this is the only way to tie someone's
-// weeks together — a fresh random code is generated per week's submission).
+// Chat tab: every device that's claimed a chat display name (locked per
+// firestore.rules once created) - rename/unlock a stuck one, or block a
+// message-spamming one.
+function ChatTab({ chatDevices, setMsg }) {
+  const [editingChatDeviceId, setEditingChatDeviceId] = useState(null);
+  const [chatDeviceNameDraft, setChatDeviceNameDraft] = useState("");
+  async function renameChatDevice(id) {
+    try {
+      await setDoc(doc(db, "chatDevices", id), { name: chatDeviceNameDraft.trim() }, { merge: true });
+      setEditingChatDeviceId(null);
+    } catch (e) {
+      setMsg("Failed to rename chat name: " + (e?.message || String(e)));
+    }
+  }
+  async function unlockChatDevice(id, label) {
+    if (!window.confirm(`Unlock ${label || "this device"}? It'll be asked to pick a name again next time it opens chat.`)) return;
+    try {
+      await deleteDoc(doc(db, "chatDevices", id));
+    } catch (e) {
+      setMsg("Failed to unlock device: " + (e?.message || String(e)));
+    }
+  }
+  // Blocked devices keep their claimed name (so past messages still show
+  // correctly) but the create rule rejects any new message from them - see
+  // firestore.rules' chatMessages create rule, which checks this flag.
+  async function toggleChatDeviceBlocked(id, blocked) {
+    try {
+      await setDoc(doc(db, "chatDevices", id), { blocked }, { merge: true });
+    } catch (e) {
+      setMsg("Failed to update chat device: " + (e?.message || String(e)));
+    }
+  }
+
+  return (
+    <Card style={{ maxWidth: 900, marginTop: 16 }}>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:10, marginBottom:10 }}>
+        <p style={{ margin: 0, fontSize: 13, color: "#9aa4c7" }}>
+          Each device locks to a name the first time it uses chat. Rename or unlock a stuck one here, or block a device to stop it posting (it keeps its name and past messages - only new messages are rejected).
+        </p>
+        <StatusBadge tone="neutral">{chatDevices.length} claimed</StatusBadge>
+      </div>
+      {chatDevices.length === 0 ? (
+        <p style={{ fontSize: 13, color: "#9aa4c7" }}>No one has used chat yet.</p>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {chatDevices.map(d => (
+            <div key={d.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "6px 8px", background: "#141a30", borderRadius: 8, flexWrap: "wrap" }}>
+              {editingChatDeviceId === d.id ? (
+                <Row style={{ flex: 1 }}>
+                  <input
+                    style={{ ...inputStyle, flex: 1 }}
+                    value={chatDeviceNameDraft}
+                    onChange={e => setChatDeviceNameDraft(e.target.value)}
+                    autoFocus
+                  />
+                  <button style={adminBtn("primary")} onClick={() => renameChatDevice(d.id)}>Save</button>
+                  <button style={adminBtn("neutral")} onClick={() => setEditingChatDeviceId(null)}>Cancel</button>
+                </Row>
+              ) : (
+                <>
+                  <div style={{ fontSize: 13 }}>
+                    {d.name}
+                    {d.verified && <span title="Verified via email" style={{ marginLeft: 4 }}>✓</span>}
+                    {d.linkedFromPushToken && <span style={{ marginLeft: 6, opacity: 0.6 }}>(from notifications)</span>}
+                    {d.blocked && <StatusBadge tone="danger" style={{ marginLeft: 8 }}>Blocked</StatusBadge>}
+                  </div>
+                  <Row>
+                    <button style={adminBtn("neutral")} onClick={() => { setEditingChatDeviceId(d.id); setChatDeviceNameDraft(d.name || ""); }}>Rename</button>
+                    <button style={adminBtn(d.blocked ? "primary" : "warning")} onClick={() => toggleChatDeviceBlocked(d.id, !d.blocked)}>
+                      {d.blocked ? "Unblock" : "Block"}
+                    </button>
+                    <button style={adminBtn("danger")} onClick={() => unlockChatDevice(d.id, d.name)}>Unlock</button>
+                  </Row>
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+// Sortable/hideable columns on the Roster tab's table, in display order.
+// Name is intentionally not in this list - it's the one column that's
+// always shown, everything else can be toggled off to fit the table into
+// less width.
+const HIDEABLE_COLUMNS = [
+  { key: "name", label: "Name" },
+  { key: "email", label: "Email" },
+  { key: "phone", label: "Phone" },
+  { key: "venmo", label: "Venmo" },
+  { key: "notify", label: "Notify" },
+  { key: "submitted", label: "Submitted" },
+];
+
+// Look up everything a person has ever submitted, across all years/weeks -
+// there's no login/account system, so this is the only way to tie someone's
+// weeks together. Uses the same buildRoster identity resolution as Player
+// Profiles/Who Hasn't Submitted (name/Venmo/email clustering, overlaid with
+// any `players` doc), so a manual merge there (e.g. two differently-spelled
+// submissions the automatic matching couldn't tell were the same person)
+// surfaces someone's full season here too, not just whichever spelling they
+// happen to search with.
 async function findMySeason({ firstName, lastName, venmo }) {
   const ln = (lastName || "").trim().toLowerCase();
   if (!ln) throw new Error("Enter your last name.");
 
-  const snap = await getDocs(query(collection(db, "picks"), where("lastNameLower", "==", ln)));
-  const docs = [];
-  snap.forEach(d => docs.push(d.data()));
-  if (docs.length === 0) return { weeks: [] };
-
-  const dsu = makeDSU();
-  const keyed = [];
-  for (const p of docs) {
-    const nk = personKey(p);
-    const vk = venmoKeyOf(p);
-    if (!nk && !vk) continue;
-    if (nk && vk) dsu.union(nk, vk);
-    keyed.push({ p, key: nk || vk });
-  }
-
   const targetKey = venmoKeyOf({ venmo }) || personKey({ firstName, lastName });
   if (!targetKey) throw new Error("Enter your first and last name.");
-  const targetRoot = dsu.find(targetKey);
-  const mine = keyed.filter(rec => dsu.find(rec.key) === targetRoot);
+
+  const [picksSnap, playersSnap] = await Promise.all([
+    getDocs(collection(db, "picks")),
+    getDocs(collection(db, "players")),
+  ]);
+  const allPicks = []; picksSnap.forEach(d => allPicks.push(d.data()));
+  const players = []; playersSnap.forEach(d => players.push({ id: d.id, ...d.data() }));
+
+  const roster = buildRoster(allPicks, players);
+  const targetRoot = roster.dsu.find(targetKey);
+  const row = roster.rows.find(r => r.playerId ? r.aliasKeys.includes(targetKey) : r.dsuRoots.has(targetRoot));
+  if (!row) return { weeks: [] };
+  const mine = docsForRosterRow(roster, row);
   if (mine.length === 0) return { weeks: [] };
 
   // One entry per year/week (in case of duplicate submissions, keep the latest).
   const byWeek = new Map();
-  for (const { p } of mine) {
+  for (const p of mine) {
     const wk = `${p.year}_${p.week}`;
     const ms = p.updatedAt?.toMillis ? p.updatedAt.toMillis() : (p.createdAt?.toMillis ? p.createdAt.toMillis() : 0);
     const existing = byWeek.get(wk);
@@ -4340,10 +6567,15 @@ async function findMySeason({ firstName, lastName, venmo }) {
     // A tied-for-1st week (pot split) credits a fractional win - e.g. 0.5
     // apiece for a two-way tie - instead of a full win each.
     const coWinnerCount = rows.filter(r => r.isWinner).length || 1;
+    // Standard competition ranking (ties share a place) - same formula used
+    // by computeAllTimePercentiles for the all-time stat.
+    const place = mineRow ? 1 + rows.filter(x => x.points > mineRow.points).length : null;
     return {
       year: wr.year, week: wr.week,
       points: mineRow?.points ?? null,
       totalGames,
+      place,
+      fieldSize: rows.length,
       isWinner: !!mineRow?.isWinner,
       winCredit: mineRow?.isWinner ? 1 / coWinnerCount : 0,
       winNote: mineRow?.winNote || null,
@@ -4365,16 +6597,26 @@ async function findMySeason({ firstName, lastName, venmo }) {
 // except when that year is the currently-live one, where anyone who's
 // played at all is included (a season in progress hasn't had a chance to
 // reach 3 weeks yet).
-async function computeAllTimePercentiles({ yearFilter = null, currentYear = null } = {}) {
-  const snap = await getDocs(collection(db, "picks"));
+async function computeAllTimePercentiles({ yearFilter = null, currentYear = null, minPlayedOverride = null } = {}) {
+  const [picksSnap, playersSnap] = await Promise.all([
+    getDocs(collection(db, "picks")),
+    getDocs(collection(db, "players")),
+  ]);
   const allPicks = [];
-  snap.forEach(d => allPicks.push(d.data()));
+  picksSnap.forEach(d => allPicks.push(d.data()));
+  const players = [];
+  playersSnap.forEach(d => players.push({ id: d.id, ...d.data() }));
+  const keyToPlayerId = new Map();
+  for (const pl of players) for (const k of pl.aliasKeys || []) keyToPlayerId.set(k, pl.id);
 
   const dsu = makeDSU();
   for (const p of allPicks) {
     const nk = personKey(p);
     const vk = venmoKeyOf(p);
+    const ek = emailKeyOf(p);
+    if (!nk && !vk) continue;
     if (nk && vk) dsu.union(nk, vk);
+    if (ek) dsu.union(nk || vk, ek);
   }
 
   const weekKeys = new Map();
@@ -4401,6 +6643,7 @@ async function computeAllTimePercentiles({ yearFilter = null, currentYear = null
     for (const r of rows) {
       const nk = personKey(r);
       const vk = venmoKeyOf(r);
+      const ek = emailKeyOf(r);
       const key = nk || vk;
       if (!key) continue;
       const root = dsu.find(key);
@@ -4419,6 +6662,7 @@ async function computeAllTimePercentiles({ yearFilter = null, currentYear = null
       a.ratioSum += place / fieldSize;
       if (nk) a.keys.add(nk);
       if (vk) a.keys.add(vk);
+      if (ek) a.keys.add(ek);
       // Display name is whichever spelling they used most often - a single
       // joke entry (e.g. "bigsot money 1000000") shouldn't outrank the name
       // used on every other week just because it's a longer string.
@@ -4426,11 +6670,41 @@ async function computeAllTimePercentiles({ yearFilter = null, currentYear = null
     }
   }
 
-  const list = [...agg.values()]
+  // Overlay `players` on top of the automatic clustering above - two agg
+  // entries that are the same real person per a manual merge (which the
+  // automatic name/Venmo/email matching alone couldn't tell) combine into
+  // one leaderboard entry instead of showing up as two.
+  const merged = new Map(); // playerId-or-root -> combined aggregate
+  for (const [root, a] of agg) {
+    let playerId = null;
+    for (const k of a.keys) { const pid = keyToPlayerId.get(k); if (pid) { playerId = pid; break; } }
+    const mergeKey = playerId || root;
+    const existing = merged.get(mergeKey);
+    if (!existing) {
+      merged.set(mergeKey, { playerId, nameCounts: new Map(a.nameCounts), weeksPlayed: a.weeksPlayed, weeksWon: a.weeksWon, ratioSum: a.ratioSum, keys: new Set(a.keys), wonWeeks: [...a.wonWeeks] });
+    } else {
+      existing.weeksPlayed += a.weeksPlayed;
+      existing.weeksWon += a.weeksWon;
+      existing.ratioSum += a.ratioSum;
+      existing.wonWeeks.push(...a.wonWeeks);
+      for (const k of a.keys) existing.keys.add(k);
+      for (const [nm, c] of a.nameCounts) existing.nameCounts.set(nm, (existing.nameCounts.get(nm) || 0) + c);
+    }
+  }
+
+  const list = [...merged.values()]
     .map(a => {
       let name = "", bestCount = -1;
       for (const [nm, c] of a.nameCounts) {
         if (c > bestCount || (c === bestCount && nm.length > name.length)) { name = nm; bestCount = c; }
+      }
+      // A matched player's own edited name wins over the "most common
+      // spelling" heuristic above - that heuristic only exists to pick a
+      // sane default for people nobody's renamed yet.
+      if (a.playerId) {
+        const pl = players.find(x => x.id === a.playerId);
+        const plName = pl ? `${pl.firstName || ""} ${pl.lastName || ""}`.trim() : "";
+        if (plName) name = plName;
       }
       return {
         name, weeksPlayed: a.weeksPlayed, weeksWon: Math.round(a.weeksWon * 100) / 100,
@@ -4440,7 +6714,8 @@ async function computeAllTimePercentiles({ yearFilter = null, currentYear = null
       };
     });
 
-  const minPlayed = yearFilter == null ? 5 : (currentYear != null && Number(yearFilter) === Number(currentYear)) ? 0 : 2;
+  const minPlayed = minPlayedOverride != null ? minPlayedOverride
+    : yearFilter == null ? 5 : (currentYear != null && Number(yearFilter) === Number(currentYear)) ? 0 : 2;
   const filtered = list
     .filter(p => p.weeksPlayed > minPlayed)
     .sort((a, b) => a.avgFinishPct - b.avgFinishPct);
@@ -4454,18 +6729,6 @@ async function computeAllTimePercentiles({ yearFilter = null, currentYear = null
   return filtered;
 }
 
-// Small horizontal bar showing correct-picks percentage, color-graded from
-// red (rough week) through amber to green (great week) - same visual idea
-// as the stat tiles below, just per-row.
-function RecordBar({ pct }) {
-  const color = pct == null ? "#3a4770" : pct >= 65 ? "#3ecf8e" : pct >= 45 ? "#f0b429" : "#f0596b";
-  return (
-    <div style={{ width: "100%", height: 5, borderRadius: 999, background: "#1a2440", overflow: "hidden" }}>
-      <div style={{ width: `${Math.max(0, Math.min(100, pct ?? 0))}%`, height: "100%", background: color, borderRadius: 999 }} />
-    </div>
-  );
-}
-
 function ordinalSuffix(n) {
   const v = Math.abs(n) % 100;
   if (v >= 11 && v <= 13) return "th";
@@ -4475,6 +6738,14 @@ function ordinalSuffix(n) {
     case 3: return "rd";
     default: return "th";
   }
+}
+
+// Same red/amber/green grading the old per-week record bar used, just keyed
+// off where they placed in the field that week instead of pick percentage.
+function placeColor(place, fieldSize) {
+  if (place == null || !fieldSize) return "#8590b0";
+  const frac = place / fieldSize;
+  return frac <= 0.34 ? "#3ecf8e" : frac <= 0.67 ? "#f0b429" : "#f0596b";
 }
 
 function MySeasonStatTile({ tone, value, label }) {
@@ -4567,11 +6838,23 @@ function MySeasonPage({ user, isAdmin, setPage }) {
       </p>
 
       <form onSubmit={onSubmit}>
-        <Row style={{ marginTop: 18, gap: 14 }}>
-          <Field label="First name"><input style={inputStyle} value={firstName} onChange={e => setFirstName(e.target.value)} placeholder="Jane" /></Field>
-          <Field label="Last name"><input style={inputStyle} value={lastName} onChange={e => setLastName(e.target.value)} placeholder="Smith" /></Field>
-          <Field label="Venmo (optional)"><input style={inputStyle} value={venmo} onChange={e => setVenmo(e.target.value)} placeholder="@jane-smith" /></Field>
-        </Row>
+        {isMobile ? (
+          <>
+            <Row style={{ marginTop: 18, gap: 14 }}>
+              <Field style={{ flex: 1 }} label="First name"><input style={{ ...inputStyle, width: "100%" }} value={firstName} onChange={e => setFirstName(e.target.value)} placeholder="Jane" /></Field>
+              <Field style={{ flex: 1 }} label="Last name"><input style={{ ...inputStyle, width: "100%" }} value={lastName} onChange={e => setLastName(e.target.value)} placeholder="Smith" /></Field>
+            </Row>
+            <Row style={{ marginTop: 14, gap: 14 }}>
+              <Field style={{ flex: 1 }} label="Venmo (optional)"><input style={{ ...inputStyle, width: "100%" }} value={venmo} onChange={e => setVenmo(e.target.value)} placeholder="@jane-smith" /></Field>
+            </Row>
+          </>
+        ) : (
+          <Row style={{ marginTop: 18, gap: 14 }}>
+            <Field style={{ flex: 1 }} label="First name"><input style={{ ...inputStyle, width: "100%" }} value={firstName} onChange={e => setFirstName(e.target.value)} placeholder="Jane" /></Field>
+            <Field style={{ flex: 1 }} label="Last name"><input style={{ ...inputStyle, width: "100%" }} value={lastName} onChange={e => setLastName(e.target.value)} placeholder="Smith" /></Field>
+            <Field style={{ flex: 1 }} label="Venmo (optional)"><input style={{ ...inputStyle, width: "100%" }} value={venmo} onChange={e => setVenmo(e.target.value)} placeholder="@jane-smith" /></Field>
+          </Row>
+        )}
         <button type="submit" style={{ marginTop: 14, padding: "10px 20px", borderRadius: 10, border: "1px solid #1f2a44", background: "#6aa2ff", color: "#07152b", fontWeight: 700, fontSize: 14.5, cursor: "pointer" }} disabled={status === "loading"}>
           {status === "loading" ? "Looking…" : "Find My Season"}
         </button>
@@ -4625,8 +6908,8 @@ function MySeasonPage({ user, isAdmin, setPage }) {
                           {w.isWinner && <span title={w.winNote || "Winner"} style={{ fontSize: 15 }}>🏆</span>}
                           <span style={{ fontSize: isMobile ? 13 : 14, fontWeight: 600, color: "#cfd8f0" }}>{weekLabelFor(w.year, w.week)}</span>
                         </div>
-                        <div style={{ flex: "1 1 auto", minWidth: 40 }}>
-                          <RecordBar pct={pct} />
+                        <div style={{ flex: "1 1 auto", minWidth: 40, fontSize: isMobile ? 13 : 14, fontWeight: 700, color: placeColor(w.place, w.fieldSize) }}>
+                          {w.place != null ? `${w.place}${ordinalSuffix(w.place)} of ${w.fieldSize}` : "—"}
                         </div>
                         <div style={{ flex: "0 0 auto", minWidth: isMobile ? 56 : 64, textAlign: "right", fontSize: isMobile ? 13 : 14, fontWeight: 700, color: "#fff" }}>
                           {w.points ?? "-"}/{w.totalGames}
@@ -4655,6 +6938,11 @@ function OverallLeaderboardPage({ user, isAdmin, setPage }) {
   const [list, setList] = useState([]);
   const [error, setError] = useState("");
   const [selected, setSelected] = useState(null); // the row whose won-weeks modal is open
+  // "finish" ranks by average finish (existing behavior, with its usual
+  // weeks-played floor). "wins" ranks by total weeks won and drops that
+  // floor entirely - anyone with at least one win qualifies, no matter how
+  // few weeks they've played.
+  const [rankBy, setRankBy] = useState("finish");
 
   // Special-week display names ("Conference Champs", "Bowls", etc.) and the
   // list of seasons with anything to show, same source the Leaderboard's
@@ -4702,14 +6990,33 @@ function OverallLeaderboardPage({ user, isAdmin, setPage }) {
     setStatus("loading");
     (async () => {
       try {
-        const result = await computeAllTimePercentiles({ yearFilter: selectedYear, currentYear });
+        // Wins mode drops the usual weeks-played floor (minPlayedOverride:0)
+        // so anyone with at least one win qualifies, then re-filters/sorts
+        // by wins below - see displayList.
+        const result = await computeAllTimePercentiles({
+          yearFilter: selectedYear, currentYear,
+          minPlayedOverride: rankBy === "wins" ? 0 : null,
+        });
         if (!cancelled) { setList(result); setStatus("done"); }
       } catch (err) {
         if (!cancelled) { setError(err?.message || "Something went wrong loading the leaderboard."); setStatus("error"); }
       }
     })();
     return () => { cancelled = true; };
-  }, [selectedYear, currentYear]);
+  }, [selectedYear, currentYear, rankBy]);
+
+  // Wins mode re-ranks the same data by total weeks won (ties broken by the
+  // usual average-finish metric) and only keeps people with at least one
+  // win - a completely different qualifying bar than finish mode's weeks-
+  // played floor, so rank/percentile from computeAllTimePercentiles don't
+  // apply here and get recomputed fresh.
+  const displayList = useMemo(() => {
+    if (rankBy !== "wins") return list;
+    return list
+      .filter(p => p.weeksWon > 0)
+      .sort((a, b) => b.weeksWon - a.weeksWon || a.avgFinishPct - b.avgFinishPct)
+      .map((p, i) => ({ ...p, rank: i + 1 }));
+  }, [list, rankBy]);
 
   const medal = (rank) => rank === 1 ? "🥇" : rank === 2 ? "🥈" : rank === 3 ? "🥉" : `#${rank}`;
   const medalColor = (rank) => rank === 1 ? "#f0b429" : rank === 2 ? "#cbd5e1" : rank === 3 ? "#cd7f32" : "#6b7797";
@@ -4722,22 +7029,37 @@ function OverallLeaderboardPage({ user, isAdmin, setPage }) {
     <Card style={{ padding: isMobile ? 12 : 16 }}>
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
         <h2 style={{ margin: 0, fontSize: isMobile ? 20 : 24 }}>🏆 Overall Leaderboard</h2>
-        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "#9aa4c7" }}>
-          Season
-          <select
-            value={selectedYear === null ? "overall" : selectedYear}
-            onChange={e => setSelectedYear(e.target.value === "overall" ? null : Number(e.target.value))}
-            style={{ ...inputStyle, padding: "8px 10px", fontSize: 13.5 }}
-          >
-            <option value="overall">Overall (all-time)</option>
-            {yearsAvailable.map(y => (
-              <option key={y} value={y}>{y}{currentYear != null && y === currentYear ? " (current)" : ""}</option>
-            ))}
-          </select>
-        </label>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "#9aa4c7" }}>
+            Rank by
+            <select
+              value={rankBy}
+              onChange={e => setRankBy(e.target.value)}
+              style={{ ...inputStyle, padding: "8px 10px", fontSize: 13.5 }}
+            >
+              <option value="finish">Average finish</option>
+              <option value="wins">All-time wins</option>
+            </select>
+          </label>
+          <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "#9aa4c7" }}>
+            Season
+            <select
+              value={selectedYear === null ? "overall" : selectedYear}
+              onChange={e => setSelectedYear(e.target.value === "overall" ? null : Number(e.target.value))}
+              style={{ ...inputStyle, padding: "8px 10px", fontSize: 13.5 }}
+            >
+              <option value="overall">Overall (all-time)</option>
+              {yearsAvailable.map(y => (
+                <option key={y} value={y}>{y}{currentYear != null && y === currentYear ? " (current)" : ""}</option>
+              ))}
+            </select>
+          </label>
+        </div>
       </div>
       <p style={{ margin: "10px 0 0", fontSize: isMobile ? 12 : 13, color: "#9aa4c7", lineHeight: 1.45 }}>
-        Ranked by average finish across every week played — a 5th out of 10 counts the same as a 10th out of 20 (both mean you finished ahead of half the field), so it's fair across seasons with different-sized pools. Only players with {minPlayedLabel} are ranked.
+        {rankBy === "wins"
+          ? "Ranked by total weeks won. Only players with at least one win are shown."
+          : <>Ranked by average finish across every week played — a 5th out of 10 counts the same as a 10th out of 20 (both mean you finished ahead of half the field), so it's fair across seasons with different-sized pools. Only players with {minPlayedLabel} are ranked.</>}
       </p>
 
       {status === "loading" && (
@@ -4748,13 +7070,13 @@ function OverallLeaderboardPage({ user, isAdmin, setPage }) {
         <div style={{ marginTop: 16, padding: "10px 12px", borderRadius: 10, background: "rgba(239,68,68,.1)", border: "1px solid rgba(239,68,68,.3)", color: "#fca5a5", fontSize: 13 }}>{error}</div>
       )}
 
-      {status === "done" && list.length === 0 && (
+      {status === "done" && displayList.length === 0 && (
         <div style={{ marginTop: 16, padding: "10px 12px", borderRadius: 10, background: "rgba(240,180,41,.1)", border: "1px solid rgba(240,180,41,.3)", color: "#f0b429", fontSize: 13 }}>
-          Nobody has {minPlayedLabel} yet.
+          {rankBy === "wins" ? "Nobody has won a week yet." : `Nobody has ${minPlayedLabel} yet.`}
         </div>
       )}
 
-      {status === "done" && list.length > 0 && (
+      {status === "done" && displayList.length > 0 && (
         <div style={{ marginTop: 18, borderRadius: 14, border: "1px solid #1f2a44", overflow: "hidden", background: "#0e1730" }}>
           <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 6 : 16, padding: isMobile ? "7px 8px" : "8px 16px", borderBottom: "1px solid #1f2a44", fontSize: isMobile ? 10 : 11, color: "#6b7797", fontWeight: 700, letterSpacing: .3 }}>
             <div style={{ flex: "0 0 auto", width: isMobile ? 22 : 40 }} />
@@ -4763,7 +7085,7 @@ function OverallLeaderboardPage({ user, isAdmin, setPage }) {
             <div style={{ flex: "0 0 auto", minWidth: isMobile ? 28 : 46, textAlign: "right" }}>WON</div>
             <div style={{ flex: "0 0 auto", minWidth: isMobile ? 40 : 78, textAlign: "right" }}>AVG FINISH</div>
           </div>
-          {list.map((p, i) => (
+          {displayList.map((p, i) => (
             <div
               key={`${p.name}_${i}`}
               style={{
@@ -4851,15 +7173,320 @@ function OverallLeaderboardPage({ user, isAdmin, setPage }) {
   </Container>);
 }
 
+// Occasional/dev tools that aren't part of weekly admin operations - split
+// out of AdminPage (which had grown into one long scroll of every admin
+// section) so the weekly-workflow page stays focused on what's actually
+// touched every week, while these stay reachable but out of the way.
+function AdminToolsPage({ user, isAdmin, setPage }) {
+  const isMobile = useIsMobile();
+  const stackRow = isMobile ? { flexDirection: "column", alignItems: "stretch" } : undefined;
+
+  const [live, setLive] = useState({ year: null, week: null });
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, "config", "live"), (s) => setLive(s.data() || {}));
+    return () => unsub();
+  }, []);
+  const [year, setYear] = useState(null);
+  const [week, setWeek] = useState(null);
+  const seededFromLiveRef = useRef(false);
+  useEffect(() => {
+    if (seededFromLiveRef.current) return;
+    if (hasWeekValue(live?.year) && hasWeekValue(live?.week)) {
+      setYear(Number(live.year));
+      setWeek(Number(live.week));
+      seededFromLiveRef.current = true;
+    }
+  }, [live]);
+
+  const [games, setGames] = useState([]);
+  useEffect(() => {
+    if (!hasWeekValue(year) || !hasWeekValue(week)) return;
+    (async () => {
+      try { setGames(await listGames({ year, week, includedOnly: false })); }
+      catch (e) { console.error(e); }
+    })();
+  }, [year, week]);
+
+  const [msg, setMsg] = useState("");
+
+  const [scoreboardCfg, setScoreboardCfg] = useState({});
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, "config", "app"), (s) => setScoreboardCfg((s.data() || {}).scoreboard || {}));
+    return () => unsub();
+  }, []);
+
+  // Does the 2099/W1 test sandbox currently exist?
+  const [dummyWeekExists, setDummyWeekExists] = useState(false);
+  useEffect(() => {
+    const unsub = onSnapshot(
+      query(collection(db, "games"), where("year","==",2099), where("week","==",1)),
+      (snap) => setDummyWeekExists(!snap.empty)
+    );
+    return () => unsub();
+  }, []);
+
+  const [localFixture, setLocalFixture] = useState(() => {
+    try { return localStorage.getItem("sbLocalFixture") === "1"; } catch { return false; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("sbLocalFixture", localFixture ? "1" : "0"); } catch {}
+  }, [localFixture]);
+
+  // ---------- Dummy Week helpers ----------
+  const createDummyWeek = async () => {
+    setMsg("Creating dummy week...");
+    const Y = 2099, W = 1;
+    const batch = writeBatch(db);
+
+    const dummyGames = [
+  { away:"Notre Dame",      awayRank:9,  home:"Texas A&M",     homeRank:6,  startTimeStr:"2099-08-26T23:00:00Z" },
+  { away:"Miami",           awayRank:24, home:"Florida",       homeRank:17, startTimeStr:"2099-08-31T23:00:00Z" },
+  { away:"Clemson",         awayRank:18, home:"Georgia",       homeRank:7,  startTimeStr:"2099-09-01T00:00:00Z" },
+  { away:"Boise State",     awayRank:null,home:"Oregon",       homeRank:12, startTimeStr:"2099-09-01T00:30:00Z" },
+  { away:"Texas",           awayRank:5,  home:"Michigan",      homeRank:3,  startTimeStr:"2099-09-01T01:00:00Z" },
+  { away:"Florida State",   awayRank:11, home:"LSU",           homeRank:10, startTimeStr:"2099-09-01T01:30:00Z" },
+
+  { away:"Alabama",         awayRank:2,  home:"Oklahoma",      homeRank:14, startTimeStr:"2099-09-01T02:00:00Z" },
+  { away:"USC",             awayRank:20, home:"Washington",    homeRank:8,  startTimeStr:"2099-09-01T02:30:00Z" },
+  { away:"Penn State",      awayRank:13, home:"Ohio State",    homeRank:4,  startTimeStr:"2099-09-01T03:00:00Z" },
+  { away:"Tennessee",       awayRank:15, home:"North Carolina",homeRank:19, startTimeStr:"2099-09-01T03:30:00Z" },
+
+  { away:"Utah",            awayRank:16, home:"TCU",           homeRank:21, startTimeStr:"2099-09-01T04:00:00Z" },
+  { away:"Nebraska",        awayRank:null,home:"Iowa",         homeRank:25, startTimeStr:"2099-09-01T04:30:00Z" },
+  { away:"Wisconsin",       awayRank:null,home:"Minnesota",    homeRank:null,startTimeStr:"2099-09-01T05:00:00Z" },
+  { away:"Ole Miss",        awayRank:22, home:"Auburn",        homeRank:null,startTimeStr:"2099-09-01T05:30:00Z" },
+
+  { away:"Kansas State",    awayRank:23, home:"Kansas",        homeRank:null,startTimeStr:"2099-09-01T06:00:00Z" },
+  { away:"UCF",             awayRank:null,home:"West Virginia",homeRank:null,startTimeStr:"2099-09-01T06:30:00Z" },
+  { away:"Duke",            awayRank:null,home:"NC State",     homeRank:null,startTimeStr:"2099-09-01T07:00:00Z" },
+  { away:"Arizona",         awayRank:null,home:"Arizona State",homeRank:null,startTimeStr:"2099-09-01T07:30:00Z" },
+  { away:"BYU",             awayRank:null,home:"Utah State",   homeRank:null,startTimeStr:"2099-09-01T08:00:00Z" },
+  { away:"Army",            awayRank:null,home:"Navy",         homeRank:null,startTimeStr:"2099-09-01T08:30:00Z" }
+];
+
+    const keepIds = new Set();
+    const ids = [];
+    for (const g of dummyGames) {
+      const id = `${Y}_W${W}_${g.away}_at_${g.home}`.replace(/[^\w\-@.]+/g, "_");
+      keepIds.add(id); ids.push({ id, g });
+      batch.set(doc(db, "games", id), {
+        id, year: Y, week: W,
+        away: g.away, home: g.home,
+        awayAbbr: null, homeAbbr: null,
+        awayRank: g.awayRank ?? null, homeRank: g.homeRank ?? null,
+      included: (g.included ?? true),
+      startTimeStr: g.startTimeStr ?? null,
+      order: (g.order ?? g._order ?? null),
+      orderDay: (g.orderDay ?? null),
+      }, { merge: true });
+    }
+
+    const existing = await getDocs(query(collection(db, "games"), where("year","==",Y), where("week","==",W)));
+    existing.forEach(d => { if (!keepIds.has(d.id)) batch.delete(d.ref); });
+
+    const winnersById = {};
+    winnersById[ids[0].id] = ids[0].g.home; // Texas A&M
+    winnersById[ids[1].id] = ids[1].g.home; // Florida
+    winnersById[ids[2].id] = ids[2].g.home; // Georgia
+
+    for (const { id } of ids) {
+      const w = winnersById[id];
+      if (w) batch.set(doc(db, "results", id), { winner: w, updatedAt: serverTimestamp() }, { merge: true });
+    }
+
+    await batch.commit();
+
+    // Seed picks
+    let seeded = 0;
+    const samples = (() => {
+  const names = [
+    "Alex Smith","Jordan Lee","Taylor Kim","Casey Nguyen","Morgan Patel","Riley Johnson","Cameron Brooks",
+    "Avery Martinez","Quinn Davis","Harper Wilson","Jamie Clark","Parker Lewis","Emery Thompson","Drew Rivera",
+    "Kendall Wright","Rowan Hall","Reese Young","Sawyer King","Skyler Scott","Charlie Green","Elliot Adams",
+    "Sasha Baker","Devon Carter","Shawn Perez","Blake Turner","Leslie Torres","Hayden Flores","Sidney Howard",
+    "Micah Ward","Noel Butler","Angel Price","Jules Stewart","Phoenix Bell","River Cooper","Sloan Reed"
+  ];
+  const out = [];
+  for (let i = 0; i < names.length; i++) {
+    const parts = names[i].split(" ");
+    const firstName = parts[0];
+    const lastName  = parts.slice(1).join(" ") || "";
+    const email = (firstName.toLowerCase() + "." + (lastName.toLowerCase().replace(/\s+/g,"")) + "@example.com");
+    const picks = {};
+    ids.forEach(({ id, g }, j) => {
+      // Simple variety: some users slightly favor home teams, others away; alternates by game index.
+      const bias = (i % 5);              // 0..4
+      const favorHome = (bias === 0 || bias === 3);
+      const pick = ((j + (favorHome ? 1 : 0)) % 2 === 0) ? g.away : g.home;
+      picks[id] = pick;
+    });
+    out.push({ firstName, lastName, email, picks });
+  }
+  return out;
+})();
+    if (user?.email) {
+      samples.push({
+        firstName: (user.displayName || user.email).split(" ")[0] || "You",
+        lastName: "",
+        email: user.email,
+        picks: {
+          [ids[0].id]: ids[0].g.home,
+          [ids[1].id]: ids[1].g.home,
+          [ids[2].id]: ids[2].g.home,
+        }
+      });
+    }
+    for (const s of samples) {
+      try {
+        await setDoc(doc(db, "picks", picksDocId(Y, W, s.email)), {
+          id: picksDocId(Y, W, s.email),
+          year: Y, week: W, email: s.email,
+          firstName: s.firstName, lastName: s.lastName,
+          phone: "", venmo: "",
+          picks: s.picks, updatedAt: serverTimestamp()
+        }, { merge: true });
+        seeded++;
+      } catch (_) {}
+    }
+
+    setMsg(`Dummy week created (Year ${Y}, Week ${W})  -  Games: ${ids.length}  -  Winners set: ${Object.keys(winnersById).length}  -  Sample players seeded: ${seeded}`);
+  };
+
+  // Clear Dummy Week
+  const clearDummyWeek = async () => {
+  const t0 = Date.now();
+  try {
+    const Y = 2099, W = 1;
+    setMsg("Clearing dummy week...");
+
+    // Query targets
+    const qGames = query(collection(db, "games"), where("year","==",Y), where("week","==",W));
+    const qPicks = query(collection(db, "picks"), where("year","==",Y), where("week","==",W));
+
+    const gsSnap  = await getDocs(qGames);
+    const gameIds = gsSnap.docs.map(d => d.id);
+    const psSnap  = await getDocs(qPicks);
+
+    // Results are keyed by game id; derive from gameIds
+    const resultsToDelete = gameIds.length;
+
+    setMsg("Deleting " + gsSnap.size + " games, " + resultsToDelete + " results, " + psSnap.size + " picks...");
+
+    const batch = writeBatch(db);
+    gsSnap.forEach(d => batch.delete(d.ref));
+    gameIds.forEach(id => batch.delete(doc(db, "results", id)));
+    psSnap.forEach(d => batch.delete(d.ref));
+
+    await batch.commit();
+
+    // Quick verify
+    const leftGames = (await getDocs(qGames)).size;
+    const leftPicks = (await getDocs(qPicks)).size;
+
+    const ms = Date.now() - t0;
+
+    // Refresh Admin data + final message
+    setGames(await listGames({ year: Y, week: W, includedOnly: false }));
+    setMsg("Dummy week cleared (Year " + Y + ", Week " + W + ") - Deleted: Games " + gsSnap.size + " -> " + leftGames + ", Results " + resultsToDelete + ", Picks " + psSnap.size + " -> " + leftPicks + " - " + ms + "ms");
+  } catch (err) {
+    console.error("clearDummyWeek failed:", err);
+    setMsg("Clear failed: " + (err && err.message ? err.message : String(err)));
+  }
+};
+
+  if (year == null || week == null) { return (<Container maxWidth={720}><Header user={user} isAdmin={isAdmin} setPage={setPage} /><Card><p>Loading live week&hellip;</p></Card></Container>); }
+  return (<Container maxWidth={900} padding={isMobile ? 12 : 24}>
+    <Header user={user} isAdmin={isAdmin} setPage={setPage} />
+    <Card style={{ maxWidth: 900, padding: isMobile ? 12 : 16 }}>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:10 }}>
+        <h2 style={{ margin:0 }}>Tools</h2>
+        <button style={adminBtn("neutral")} onClick={() => { window.history.pushState(null, "", "/admin"); setPage("admin"); }}>&larr; Back to Admin</button>
+      </div>
+      <p style={{ margin: "8px 0 0", fontSize: 13, color: "#9aa4c7" }}>
+        Occasional/dev tools, not part of weekly operations - testing the scoreboard without live games, and bulk-importing picks from a spreadsheet.
+      </p>
+
+      <Row style={{ marginTop:16, gap:16 }}>
+        <Field label="Year"><input style={{...inputStyle, width:"6rem"}} type="number" value={year ?? ""} onChange={e=>setYear(Number(e.target.value))} /></Field>
+        <Field label="Week"><input style={{...inputStyle, width:"4rem"}} type="number" value={week ?? ""} onChange={e=>setWeek(Number(e.target.value))} /></Field>
+      </Row>
+
+      {msg && (
+        <div style={{ marginTop:12, padding:"8px 12px", borderRadius:10, background:"rgba(106,162,255,.1)", border:"1px solid rgba(106,162,255,.3)", color:"#cfe0ff", fontSize:13 }}>{msg}</div>
+      )}
+
+      <AdminSection title="Testing Mode (without live games)" tone="neutral" right={
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+          <StatusBadge tone={dummyWeekExists ? "success" : "neutral"}>Sandbox: {dummyWeekExists ? "Active" : "Empty"}</StatusBadge>
+          <StatusBadge tone={scoreboardCfg.testMode ? "primary" : (scoreboardCfg.mode === "on" ? "success" : "neutral")}>
+            Scoreboard: {scoreboardCfg.testMode ? "Demo" : (scoreboardCfg.mode === "on" ? "Live" : "Off")}
+          </StatusBadge>
+          <StatusBadge tone={localFixture ? "primary" : "neutral"}>Local Override: {localFixture ? "On" : "Off"}</StatusBadge>
+        </div>
+      }>
+        <Row style={{ marginBottom: 10, ...stackRow }}>
+          <button style={adminBtn("success")} onClick={createDummyWeek}>Create Dummy Week (2099 / W1)</button>
+          <button style={adminBtn("danger")} onClick={clearDummyWeek}>Clear Dummy Week</button>
+        </Row>
+        <Row style={{ marginBottom: 10, ...stackRow }}>
+          <button style={adminBtn("neutral")} onClick={async()=>{
+            try {
+              await setDoc(doc(db, "config", "app"), {
+                scoreboard: {
+                  testMode: true,
+                  mode: "off",
+                  fixturePath: "/dev/scoreboard-demo.json"
+                },
+                updatedAt: serverTimestamp()
+              }, { merge: true });
+              setMsg("Scoreboard set to DEMO (fixture) via config/app.");
+            } catch(e) {
+              console.error(e);
+              setMsg("Failed to set scoreboard to DEMO");
+            }
+          }}>
+            Use Demo (Fixture)
+          </button>
+
+          <button style={adminBtn("primary")} onClick={async()=>{
+            try {
+              await setDoc(doc(db, "config", "app"), {
+                scoreboard: {
+                  testMode: false,
+                  mode: "on"
+                },
+                updatedAt: serverTimestamp()
+              }, { merge: true });
+              setMsg("Scoreboard set to CFBD LIVE via config/app.");
+            } catch(e) {
+              console.error(e);
+              setMsg("Failed to set scoreboard to LIVE");
+            }
+          }}>
+            Use CFBD Live
+          </button>
+        </Row>
+        <Row style={stackRow}>
+          <button style={adminBtn("neutral")} onClick={(e)=>{ e.preventDefault(); try { makeLiveDemoFromGames(games||[]); } catch(err){ console.error(err); } }}>
+            Make Live Demo
+          </button>
+          <button style={adminBtn(localFixture ? "primary" : "neutral")} onClick={()=>setLocalFixture(v=>!v)} title="Force local fixture JSON in your own browser; disables CFBD calls for safe testing">
+            Local Fixture Override: {localFixture ? "ON" : "OFF"}
+          </button>
+        </Row>
+      </AdminSection>
+
+      <BulkImportPicksPreview year={year} week={week} />
+    </Card>
+  </Container>);
+}
+
 function AdminPage({ user, isAdmin, setPage }) {
   const isMobile = useIsMobile();
   // On mobile, action-button groups stack full-width (one per row) instead of
   // wrapping mid-row - align-items:stretch fills each button to the row's
   // width since neither Row nor adminBtn() set an explicit width.
   const stackRow = isMobile ? { flexDirection: "column", alignItems: "stretch" } : undefined;
-  // Paired with stackRow: a badge sitting next to a stacked full-width button
-  // shouldn't stretch into a full-width bar too, so pin it to its own size.
-  const badgeAlign = isMobile ? { alignSelf: "flex-start", marginTop: 2 } : undefined;
   const [live, setLive] = useState({ year: null, week: null });
   const [year, setYear] = useState(null);
   const [week, setWeek] = useState(null);
@@ -4922,23 +7549,7 @@ function AdminPage({ user, isAdmin, setPage }) {
   const [apiKey, setApiKey] = useState("");
   const [showApiKey, setShowApiKey] = useState(false);
   const [appCfg, setAppCfg] = useState({ leaderboardLocked: false, leaderboardPicksPublic: false, picksLocked: false, potHidden: false });
-  const [dummyWeekExists, setDummyWeekExists] = useState(false);
-  const [localFixture, setLocalFixture] = useState(() => {
-    try { return localStorage.getItem("sbLocalFixture") === "1"; } catch { return false; }
-  });
-  useEffect(() => {
-    try { localStorage.setItem("sbLocalFixture", localFixture ? "1" : "0"); } catch {}
-  }, [localFixture]);
   const pot = useMemo(() => (pickCount * 5), [pickCount]);
-
-  // Does the 2099/W1 test sandbox currently exist?
-  useEffect(() => {
-    const unsub = onSnapshot(
-      query(collection(db, "games"), where("year","==",2099), where("week","==",1)),
-      (snap) => setDummyWeekExists(!snap.empty)
-    );
-    return () => unsub();
-  }, []);
 
   // Subscribe to config/live (drives the "Current Week" display and Sync GameDay)
   useEffect(() => {
@@ -4979,7 +7590,8 @@ function AdminPage({ user, isAdmin, setPage }) {
       try {
         if (hasWeekValue(year) && hasWeekValue(week)) {
           const arr = await getPicksForWeek(year, week);
-          setPickCount(Array.isArray(arr) ? arr.length : 0);
+          const counted = Array.isArray(arr) ? arr.filter(p => !isForfeitedPick(games, p)) : [];
+          setPickCount(counted.length);
         } else {
           setPickCount(0);
         }
@@ -4987,7 +7599,7 @@ function AdminPage({ user, isAdmin, setPage }) {
         setPickCount(0);
       }
     })();
-  }, [year, week]);
+  }, [year, week, games]);
 
   // Weeks dropdown: populate from games in the selected year
   useEffect(() => {
@@ -5262,173 +7874,11 @@ Type "home" or "away".`,
     setGames(await listGames({ year, week, includedOnly: false }));
   };
 
-  // ---------- Dummy Week helpers ----------
-  const createDummyWeek = async () => {
-    setMsg("Creating dummy week...");
-    const Y = 2099, W = 1;
-    const batch = writeBatch(db);
-
-    const dummyGames = [
-  { away:"Notre Dame",      awayRank:9,  home:"Texas A&M",     homeRank:6,  startTimeStr:"2099-08-26T23:00:00Z" },
-  { away:"Miami",           awayRank:24, home:"Florida",       homeRank:17, startTimeStr:"2099-08-31T23:00:00Z" },
-  { away:"Clemson",         awayRank:18, home:"Georgia",       homeRank:7,  startTimeStr:"2099-09-01T00:00:00Z" },
-  { away:"Boise State",     awayRank:null,home:"Oregon",       homeRank:12, startTimeStr:"2099-09-01T00:30:00Z" },
-  { away:"Texas",           awayRank:5,  home:"Michigan",      homeRank:3,  startTimeStr:"2099-09-01T01:00:00Z" },
-  { away:"Florida State",   awayRank:11, home:"LSU",           homeRank:10, startTimeStr:"2099-09-01T01:30:00Z" },
-
-  { away:"Alabama",         awayRank:2,  home:"Oklahoma",      homeRank:14, startTimeStr:"2099-09-01T02:00:00Z" },
-  { away:"USC",             awayRank:20, home:"Washington",    homeRank:8,  startTimeStr:"2099-09-01T02:30:00Z" },
-  { away:"Penn State",      awayRank:13, home:"Ohio State",    homeRank:4,  startTimeStr:"2099-09-01T03:00:00Z" },
-  { away:"Tennessee",       awayRank:15, home:"North Carolina",homeRank:19, startTimeStr:"2099-09-01T03:30:00Z" },
-
-  { away:"Utah",            awayRank:16, home:"TCU",           homeRank:21, startTimeStr:"2099-09-01T04:00:00Z" },
-  { away:"Nebraska",        awayRank:null,home:"Iowa",         homeRank:25, startTimeStr:"2099-09-01T04:30:00Z" },
-  { away:"Wisconsin",       awayRank:null,home:"Minnesota",    homeRank:null,startTimeStr:"2099-09-01T05:00:00Z" },
-  { away:"Ole Miss",        awayRank:22, home:"Auburn",        homeRank:null,startTimeStr:"2099-09-01T05:30:00Z" },
-
-  { away:"Kansas State",    awayRank:23, home:"Kansas",        homeRank:null,startTimeStr:"2099-09-01T06:00:00Z" },
-  { away:"UCF",             awayRank:null,home:"West Virginia",homeRank:null,startTimeStr:"2099-09-01T06:30:00Z" },
-  { away:"Duke",            awayRank:null,home:"NC State",     homeRank:null,startTimeStr:"2099-09-01T07:00:00Z" },
-  { away:"Arizona",         awayRank:null,home:"Arizona State",homeRank:null,startTimeStr:"2099-09-01T07:30:00Z" },
-  { away:"BYU",             awayRank:null,home:"Utah State",   homeRank:null,startTimeStr:"2099-09-01T08:00:00Z" },
-  { away:"Army",            awayRank:null,home:"Navy",         homeRank:null,startTimeStr:"2099-09-01T08:30:00Z" }
-];
-
-    const keepIds = new Set();
-    const ids = [];
-    for (const g of dummyGames) {
-      const id = `${Y}_W${W}_${g.away}_at_${g.home}`.replace(/[^\w\-@.]+/g, "_");
-      keepIds.add(id); ids.push({ id, g });
-      batch.set(doc(db, "games", id), {
-        id, year: Y, week: W,
-        away: g.away, home: g.home,
-        awayAbbr: null, homeAbbr: null,
-        awayRank: g.awayRank ?? null, homeRank: g.homeRank ?? null,
-      included: (g.included ?? true),
-      startTimeStr: g.startTimeStr ?? null,
-      order: (g.order ?? g._order ?? null),
-      orderDay: (g.orderDay ?? null),
-      }, { merge: true });
-    }
-
-    const existing = await getDocs(query(collection(db, "games"), where("year","==",Y), where("week","==",W)));
-    existing.forEach(d => { if (!keepIds.has(d.id)) batch.delete(d.ref); });
-
-    const winnersById = {};
-    winnersById[ids[0].id] = ids[0].g.home; // Texas A&M
-    winnersById[ids[1].id] = ids[1].g.home; // Florida
-    winnersById[ids[2].id] = ids[2].g.home; // Georgia
-
-    for (const { id } of ids) {
-      const w = winnersById[id];
-      if (w) batch.set(doc(db, "results", id), { winner: w, updatedAt: serverTimestamp() }, { merge: true });
-    }
-
-    await batch.commit();
-
-    // Seed picks
-    let seeded = 0;
-    const samples = (() => {
-  const names = [
-    "Alex Smith","Jordan Lee","Taylor Kim","Casey Nguyen","Morgan Patel","Riley Johnson","Cameron Brooks",
-    "Avery Martinez","Quinn Davis","Harper Wilson","Jamie Clark","Parker Lewis","Emery Thompson","Drew Rivera",
-    "Kendall Wright","Rowan Hall","Reese Young","Sawyer King","Skyler Scott","Charlie Green","Elliot Adams",
-    "Sasha Baker","Devon Carter","Shawn Perez","Blake Turner","Leslie Torres","Hayden Flores","Sidney Howard",
-    "Micah Ward","Noel Butler","Angel Price","Jules Stewart","Phoenix Bell","River Cooper","Sloan Reed"
-  ];
-  const out = [];
-  for (let i = 0; i < names.length; i++) {
-    const parts = names[i].split(" ");
-    const firstName = parts[0];
-    const lastName  = parts.slice(1).join(" ") || "";
-    const email = (firstName.toLowerCase() + "." + (lastName.toLowerCase().replace(/\s+/g,"")) + "@example.com");
-    const picks = {};
-    ids.forEach(({ id, g }, j) => {
-      // Simple variety: some users slightly favor home teams, others away; alternates by game index.
-      const bias = (i % 5);              // 0..4
-      const favorHome = (bias === 0 || bias === 3);
-      const pick = ((j + (favorHome ? 1 : 0)) % 2 === 0) ? g.away : g.home;
-      picks[id] = pick;
-    });
-    out.push({ firstName, lastName, email, picks });
-  }
-  return out;
-})();
-    if (user?.email) {
-      samples.push({
-        firstName: (user.displayName || user.email).split(" ")[0] || "You",
-        lastName: "",
-        email: user.email,
-        picks: {
-          [ids[0].id]: ids[0].g.home,
-          [ids[1].id]: ids[1].g.home,
-          [ids[2].id]: ids[2].g.home,
-        }
-      });
-    }
-    for (const s of samples) {
-      try {
-        await setDoc(doc(db, "picks", picksDocId(Y, W, s.email)), {
-          id: picksDocId(Y, W, s.email),
-          year: Y, week: W, email: s.email,
-          firstName: s.firstName, lastName: s.lastName,
-          phone: "", venmo: "",
-          picks: s.picks, updatedAt: serverTimestamp()
-        }, { merge: true });
-        seeded++;
-      } catch (_) {}
-    }
-
-    setMsg(`Dummy week created (Year ${Y}, Week ${W})  -  Games: ${ids.length}  -  Winners set: ${Object.keys(winnersById).length}  -  Sample players seeded: ${seeded}`);
-  };
-
-  // Clear Dummy Week
-  const clearDummyWeek = async () => {
-  const t0 = Date.now();
-  try {
-    const Y = 2099, W = 1;
-    setMsg("Clearing dummy week...");
-
-    // Query targets
-    const qGames = query(collection(db, "games"), where("year","==",Y), where("week","==",W));
-    const qPicks = query(collection(db, "picks"), where("year","==",Y), where("week","==",W));
-
-    const gsSnap  = await getDocs(qGames);
-    const gameIds = gsSnap.docs.map(d => d.id);
-    const psSnap  = await getDocs(qPicks);
-
-    // Results are keyed by game id; derive from gameIds
-    const resultsToDelete = gameIds.length;
-
-    setMsg("Deleting " + gsSnap.size + " games, " + resultsToDelete + " results, " + psSnap.size + " picks...");
-
-    const batch = writeBatch(db);
-    gsSnap.forEach(d => batch.delete(d.ref));
-    gameIds.forEach(id => batch.delete(doc(db, "results", id)));
-    psSnap.forEach(d => batch.delete(d.ref));
-
-    await batch.commit();
-
-    // Quick verify
-    const leftGames = (await getDocs(qGames)).size;
-    const leftPicks = (await getDocs(qPicks)).size;
-
-    const ms = Date.now() - t0;
-
-    // Refresh Admin data + final message
-    setGames(await listGames({ year: Y, week: W, includedOnly: false }));
-    setMsg("Dummy week cleared (Year " + Y + ", Week " + W + ") - Deleted: Games " + gsSnap.size + " -> " + leftGames + ", Results " + resultsToDelete + ", Picks " + psSnap.size + " -> " + leftPicks + " - " + ms + "ms");
-  } catch (err) {
-    console.error("clearDummyWeek failed:", err);
-    setMsg("Clear failed: " + (err && err.message ? err.message : String(err)));
-  }
-};
-
     // Clear selected week if it has NO picks (safety guard)
   const clearWeekIfNoPicks = async () => {
     try {
       const Y = Number(year), W = Number(week);
-      setMsg(`Checking picks for ${Y} / W${W}ï¿½`);
+      setMsg(`Checking picks for ${Y} / W${W}…`);
 
       // Check both numeric-typed and string-typed year/week (defensive for any older docs)
       const qNum = query(collection(db, "picks"), where("year","==", Y), where("week","==", W));
@@ -5471,9 +7921,10 @@ Type "home" or "away".`,
         <div style={{ display:"flex", alignItems: isMobile ? "stretch" : "center", justifyContent:"space-between", flexDirection: isMobile ? "column" : "row", flexWrap:"wrap", gap:10 }}>
           <h2 style={{ margin:0 }}>Admin</h2>
           <Row style={{ gap:8, ...stackRow }}>
-            <button style={adminBtn("neutral")} onClick={() => { window.history.pushState(null, "", "/admin/picks"); setPage("adminpicks"); }}>Open Picks Management</button>
             <button style={adminBtn("neutral")} onClick={() => { window.history.pushState(null, "", "/admin/payments"); setPage("adminpayments"); }}>Payment Tracking</button>
-            <button style={adminBtn("neutral")} onClick={() => { window.history.pushState(null, "", "/admin/missing"); setPage("adminmissing"); }}>Who Hasn't Submitted</button>
+            <button style={adminBtn("neutral")} onClick={() => { window.history.pushState(null, "", "/admin/players"); setPage("adminplayers"); }}>Player Management</button>
+            <button style={adminBtn("neutral")} onClick={() => { window.history.pushState(null, "", "/admin/notifications"); setPage("adminnotifications"); }}>Notifications</button>
+            <button style={adminBtn("neutral")} onClick={() => { window.history.pushState(null, "", "/admin/tools"); setPage("admintools"); }}>Tools</button>
           </Row>
         </div>
         {msg && (
@@ -5549,16 +8000,36 @@ Type "home" or "away".`,
         )}
 
         <AdminSection title="Live Week" tone="primary" right={<StatusBadge tone="primary">Live: {live?.year ?? "-"} / W{live?.week ?? "-"}</StatusBadge>}>
-          <Row>
-            <Field label="Year"><input style={{...inputStyle, width:"6rem"}} type="number" value={(year ?? '')} onChange={e=>setYear(Number(e.target.value))}/></Field>
-            <Field label="Week"><input style={{...inputStyle, width:"4rem"}} type="number" value={(week ?? '')} onChange={e=>setWeek(Number(e.target.value))}/></Field>
-            <button style={adminBtn("neutral")} onClick={async()=>setGames(await listGames({ year, week, includedOnly: false }))}>Load</button>
-          </Row>
-          <Row style={{ marginTop: 10, ...stackRow }}>
-            <button style={adminBtn("primary")} onClick={async()=>{ try { await setDoc(doc(db,"config","live"), { year, week }, { merge:true });
+          <AdminActionRow
+            divider={false}
+            label="Selected Week"
+            description="Which year/week the actions below apply to - defaults to whatever's live."
+          >
+            <input style={{...inputStyle, width:"4.5rem", padding:"6px 8px", fontSize:13}} type="number" value={(year ?? '')} onChange={e=>setYear(Number(e.target.value))} aria-label="Year" />
+            <input style={{...inputStyle, width:"3rem", padding:"6px 8px", fontSize:13}} type="number" value={(week ?? '')} onChange={e=>setWeek(Number(e.target.value))} aria-label="Week" />
+            <button style={adminBtn("neutral", { padding:"6px 10px", fontSize:12.5 })} onClick={async()=>setGames(await listGames({ year, week, includedOnly: false }))}>Load</button>
+          </AdminActionRow>
+
+          <AdminActionRow
+            label="Make This the Live Week"
+            description="What players see on Picks, Leaderboard, etc. right now."
+          >
+            <button style={adminBtn("primary", { padding:"7px 14px", fontSize:13 })} onClick={async()=>{ try { await setDoc(doc(db,"config","live"), { year, week }, { merge:true });
 await setDoc(doc(db,"config","app"), { currentYear: year, currentWeek: week, updatedAt: serverTimestamp() }, { merge:true }); setMsg(`Live week set to ${year} / W${week} (config/live + config/app)`); } catch(e) { console.error(e); setMsg("Failed to set live week"); } }}>Set Live Week</button>
-            <button style={adminBtn("success")} onClick={async()=>{ try { await addDoc(collection(db,"notificationOutbox"), { title: `🏈 Week ${week} is open`, body: "Picks are open — submit yours on the Picks page.", createdAt: serverTimestamp() }); setMsg(`Push notification sent to everyone for Week ${week}.`); } catch(e) { console.error(e); setMsg("Failed to send notification"); } }}>Notify Players: Picks Open</button>
-            <button style={adminBtn("neutral")} onClick={async()=>{
+          </AdminActionRow>
+
+          <AdminActionRow
+            label="Opening Notification"
+            description={`Pushes a "Week ${week ?? ""} is open" alert to everyone.`}
+          >
+            <button style={adminBtn("success", { padding:"7px 14px", fontSize:13 })} onClick={async()=>{ try { await addDoc(collection(db,"notificationOutbox"), { title: `🏈 Week ${week} is open`, body: "Picks are open — submit yours on the Picks page.", createdAt: serverTimestamp() }); setMsg(`Push notification sent to everyone for Week ${week}.`); } catch(e) { console.error(e); setMsg("Failed to send notification"); } }}>Notify Players</button>
+          </AdminActionRow>
+
+          <AdminActionRow
+            label="GameDay Tiebreaker"
+            description="Syncs the live tiebreaker game from whichever game is flagged 🏈 in Games below."
+          >
+            <button style={adminBtn("neutral", { padding:"7px 14px", fontSize:13 })} onClick={async()=>{
               try {
                 const gs = await listGames({ year, week, includedOnly: false });
                 const gd = (gs || []).filter(g => g && g.gameday);
@@ -5572,153 +8043,67 @@ await setDoc(doc(db,"config","app"), { currentYear: year, currentWeek: week, upd
                 console.error(e);
                 setMsg("Failed to sync live GameDay");
               }
-            }}>Sync Live GameDay</button>
-          </Row>
-          <Row style={{ marginTop: 10 }}>
-            <button style={adminBtn("danger")} onClick={clearWeekIfNoPicks}>Clear Week (if no picks)</button>
-          </Row>
+            }}>Sync</button>
+          </AdminActionRow>
+
+          <AdminActionRow
+            label="Clear Week"
+            description="Deletes this week's games and results. Only works while no picks exist yet."
+          >
+            <button style={adminBtn("danger", { padding:"6px 12px", fontSize:12.5 })} onClick={clearWeekIfNoPicks}>Clear</button>
+          </AdminActionRow>
         </AdminSection>
 
-        <AdminSection title="Notifications" tone="neutral">
-          <p style={{ margin:"0 0 10px", fontSize:13, color:"#9aa4c7" }}>
-            Automated reminder/kickoff/results toggles, device management, and sending a custom push all live on their own page now.
-          </p>
-          <button style={adminBtn("primary")} onClick={() => { window.history.pushState(null, "", "/admin/notifications"); setPage("adminnotifications"); }}>Manage Notifications</button>
-        </AdminSection>
-
-        <BulkImportPicksPreview year={year} week={week} />
-
-        <AdminSection title="Submissions" tone="warning" right={
-          <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
-            <StatusBadge tone={appCfg.picksLocked ? "danger" : "success"}>{appCfg.picksLocked ? "Locked" : "Open"}</StatusBadge>
-            <StatusBadge tone={appCfg.scoreboard?.autoLockPicks !== false ? "primary" : "neutral"}>
-              Automation: {appCfg.scoreboard?.autoLockPicks !== false ? "On" : "Off"}
-            </StatusBadge>
-          </div>
-        }>
-          <Row style={{ marginBottom: 10, ...stackRow }}>
-            <button style={adminBtn("warning")} onClick={async ()=>{ try {
-              await setDoc(doc(db, "config", "app"), { picksLocked: true, updatedAt: serverTimestamp() }, { merge: true });
-              setMsg("Submissions locked.");
-            } catch (e) {
-              setMsg("Failed: " + (e?.message || String(e)));
-            } }}>
-              Lock Submissions
-            </button>
-            <button style={adminBtn("success")} onClick={async ()=>{ try {
-              await setDoc(doc(db, "config", "app"), { picksLocked: false, updatedAt: serverTimestamp() }, { merge: true });
-              setMsg("Submissions unlocked.");
-            } catch (e) {
-              setMsg("Failed: " + (e?.message || String(e)));
-            } }}>
-              Unlock Submissions
-            </button>
-          </Row>
-          <Row>
-            <button
-              style={adminBtn(appCfg.scoreboard?.autoLockPicks !== false ? "neutral" : "primary")}
-              title="Auto-lock picks + open leaderboard at kickoff. Turn off to make a manual unlock stick during a game."
-              onClick={async ()=>{
-                const next = appCfg.scoreboard?.autoLockPicks === false; // currently off -> turn on
-                try {
-                  await setDoc(doc(db, "config", "app"), { scoreboard: { autoLockPicks: next }, updatedAt: serverTimestamp() }, { merge: true });
-                  setMsg(`Auto-lock-at-kickoff turned ${next ? "ON" : "OFF"}.`);
-                } catch (e) {
-                  setMsg("Failed: " + (e?.message || String(e)));
-                }
-              }}
-            >
-              Automation: {appCfg.scoreboard?.autoLockPicks !== false ? "ON (turn off)" : "OFF (turn on)"}
-            </button>
-          </Row>
+        <AdminSection title="Submissions" tone="warning">
+          <AdminToggleRow
+            divider={false}
+            label="Submissions Open"
+            description="Players can submit or edit their picks right now."
+            checked={!appCfg.picksLocked}
+            onChange={async (next) => {
+              try {
+                await setDoc(doc(db, "config", "app"), { picksLocked: !next, updatedAt: serverTimestamp() }, { merge: true });
+                setMsg(next ? "Submissions unlocked." : "Submissions locked.");
+              } catch (e) {
+                setMsg("Failed: " + (e?.message || String(e)));
+              }
+            }}
+          />
+          <AdminToggleRow
+            label="Auto-Lock at Kickoff"
+            description="Automatically locks picks and opens the leaderboard once the first game starts. Turn off to make a manual unlock stick during a game."
+            checked={appCfg.scoreboard?.autoLockPicks !== false}
+            onChange={async (next) => {
+              try {
+                await setDoc(doc(db, "config", "app"), { scoreboard: { autoLockPicks: next }, updatedAt: serverTimestamp() }, { merge: true });
+                setMsg(`Auto-lock-at-kickoff turned ${next ? "ON" : "OFF"}.`);
+              } catch (e) {
+                setMsg("Failed: " + (e?.message || String(e)));
+              }
+            }}
+          />
         </AdminSection>
 
         <AdminSection title="Leaderboard" tone="warning">
-          <Row style={{ marginBottom: 10, ...stackRow }}>
-            <button style={adminBtn(appCfg.leaderboardLocked ? "success" : "warning")} onClick={toggleLeaderboardLock}>
-              {appCfg.leaderboardLocked ? "Unlock Leaderboard" : "Lock Leaderboard (current week)"}
-            </button>
-            <StatusBadge tone={appCfg.leaderboardLocked ? "danger" : "success"} style={badgeAlign}>
-              {appCfg.leaderboardLocked ? "Locked (current week)" : "Unlocked"}
-            </StatusBadge>
-          </Row>
-          <Row style={stackRow}>
-            <button style={adminBtn("neutral")} onClick={toggleLeaderboardPicks}>
-              {appCfg.leaderboardPicksPublic ? "Switch to Admin-Only Picks" : "Switch to Public Picks"}
-            </button>
-            <StatusBadge tone={appCfg.leaderboardPicksPublic ? "primary" : "neutral"} style={badgeAlign}>
-              {appCfg.leaderboardPicksPublic ? "Public (everyone can see picks)" : "Admin-Only"}
-            </StatusBadge>
-          </Row>
-          <Row style={{ marginTop: 10, ...stackRow }}>
-            <button style={adminBtn(appCfg.potHidden ? "success" : "warning")} onClick={togglePotHidden}>
-              {appCfg.potHidden ? "Show Pot" : "Hide Pot"}
-            </button>
-            <StatusBadge tone={appCfg.potHidden ? "danger" : "success"} style={badgeAlign}>
-              {appCfg.potHidden ? "Hidden from everyone but admins" : "Visible to everyone"}
-            </StatusBadge>
-          </Row>
-        </AdminSection>
-
-        <AdminSection title="Testing Mode (without live games)" tone="neutral" right={
-          <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
-            <StatusBadge tone={dummyWeekExists ? "success" : "neutral"}>Sandbox: {dummyWeekExists ? "Active" : "Empty"}</StatusBadge>
-            <StatusBadge tone={appCfg.scoreboard?.testMode ? "primary" : (appCfg.scoreboard?.mode === "on" ? "success" : "neutral")}>
-              Scoreboard: {appCfg.scoreboard?.testMode ? "Demo" : (appCfg.scoreboard?.mode === "on" ? "Live" : "Off")}
-            </StatusBadge>
-            <StatusBadge tone={localFixture ? "primary" : "neutral"}>Local Override: {localFixture ? "On" : "Off"}</StatusBadge>
-          </div>
-        }>
-          <Row style={{ marginBottom: 10, ...stackRow }}>
-            <button style={adminBtn("success")} onClick={createDummyWeek}>Create Dummy Week (2099 / W1)</button>
-            <button style={adminBtn("danger")} onClick={clearDummyWeek}>Clear Dummy Week</button>
-          </Row>
-          <Row style={{ marginBottom: 10, ...stackRow }}>
-            <button style={adminBtn("neutral")} onClick={async()=>{
-              try {
-                await setDoc(doc(db, "config", "app"), {
-                  scoreboard: {
-                    testMode: true,
-                    mode: "off",
-                    fixturePath: "/dev/scoreboard-demo.json"
-                  },
-                  updatedAt: serverTimestamp()
-                }, { merge: true });
-                setMsg("Scoreboard set to DEMO (fixture) via config/app.");
-              } catch(e) {
-                console.error(e);
-                setMsg("Failed to set scoreboard to DEMO");
-              }
-            }}>
-              Use Demo (Fixture)
-            </button>
-
-            <button style={adminBtn("primary")} onClick={async()=>{
-              try {
-                await setDoc(doc(db, "config", "app"), {
-                  scoreboard: {
-                    testMode: false,
-                    mode: "on"
-                  },
-                  updatedAt: serverTimestamp()
-                }, { merge: true });
-                setMsg("Scoreboard set to CFBD LIVE via config/app.");
-              } catch(e) {
-                console.error(e);
-                setMsg("Failed to set scoreboard to LIVE");
-              }
-            }}>
-              Use CFBD Live
-            </button>
-          </Row>
-          <Row style={stackRow}>
-            <button style={adminBtn("neutral")} onClick={(e)=>{ e.preventDefault(); try { makeLiveDemoFromGames(games||[]); } catch(err){ console.error(err); } }}>
-              Make Live Demo
-            </button>
-            <button style={adminBtn(localFixture ? "primary" : "neutral")} onClick={()=>setLocalFixture(v=>!v)} title="Force local fixture JSON in your own browser; disables CFBD calls for safe testing">
-              Local Fixture Override: {localFixture ? "ON" : "OFF"}
-            </button>
-          </Row>
+          <AdminToggleRow
+            divider={false}
+            label="Leaderboard Locked"
+            description="Freezes the current week's leaderboard - no further picks or result changes affect it."
+            checked={!!appCfg.leaderboardLocked}
+            onChange={toggleLeaderboardLock}
+          />
+          <AdminToggleRow
+            label="Public Picks"
+            description="Anyone can see everyone's picks for the week. Turn off to keep picks visible to admins only."
+            checked={!!appCfg.leaderboardPicksPublic}
+            onChange={toggleLeaderboardPicks}
+          />
+          <AdminToggleRow
+            label="Show Pot to Everyone"
+            description="Turn off to hide the pot amount from everyone except admins."
+            checked={!appCfg.potHidden}
+            onChange={togglePotHidden}
+          />
         </AdminSection>
 
         <AdminSection title="Schedule Import" tone="primary">
@@ -5829,274 +8214,6 @@ await setDoc(doc(db,"config","app"), { currentYear: year, currentWeek: week, upd
         </AdminSection>
       </Card>
 </Container>
-  );
-}
-
-function ConfirmPage({ setPage }) {
-  const isMobile = useIsMobile();
-  const [picksLocked, setPicksLocked] = useState(false);
-  useEffect(() => {
-    const unsub = onSnapshot(doc(db, "config", "app"), (s) => {
-      const d = s.data() || {};
-      setPicksLocked(!!d.picksLocked);
-    });
-    return () => unsub && unsub();
-  }, []);
-  const [pending, setPending] = React.useState(null);
-  const [games, setGames] = React.useState([]);
-  const [gamesLoaded, setGamesLoaded] = React.useState(false);
-  const [msg, setMsg] = React.useState("");
-
-  React.useEffect(() => {
-  (async () => {
-    try {
-      const p = JSON.parse(localStorage.getItem("pending") || "null");
-      if (!p || !hasWeekValue(p.year) || !hasWeekValue(p.week)) { setPage("picks"); return; }
-      setPending(p);
-
-      // Use the same fetch + sort as PicksPage
-      let items = await listGames({ year: p.year, week: p.week, includedOnly: true });
-
-      // Put College GameDay at the end (same presentation as Picks)
-      const gd = Array.isArray(items) ? items.find(x => x && x.gameday) : null;
-      items = gd ? [...items.filter(x => x && x.id !== gd.id), gd] : items;
-
-      setGames(items);
-      setGamesLoaded(true);
-    } catch (e) {
-      setPage("picks");
-    }
-  })();
-}, [setPage]);
-
-  const normEmail = (s) => String(s||"").trim().toLowerCase();
-const normPhone = (s) => String(s||"").replace(/[^0-9]/g, "");
-const normVenmo = (s) => String(s||"").trim().toLowerCase().replace(/^@+/, "");const confirmAndSubmit = async () => { if (picksLocked) { if (typeof setMsg==="function") setMsg("Submissions are locked right now."); return; }
-    if (!pending) return;
-    // Games (and whether this week has a GameDay tiebreaker game) load async
-    // on mount. Submitting before that resolves left `gd` below undefined
-    // even when the user had already entered a tiebreaker guess on the
-    // Picks page, silently dropping it from the payload - confirmed as the
-    // cause of three real submissions missing a tiebreaker entirely.
-    if (!gamesLoaded) { setMsg("Still loading this week's games — try again in a second."); return; }
-    setMsg("Saving...");
-    try {
-      const { year, week, form, picks, code, tiebreaker, polls, feedback } = pending;
-      // ---- Front-end validations (required fields & all picks) ----
-      const phoneDigits = String((form && form.phone) || "").replace(/[^0-9]/g, "");
-      const venmoTrim   = String((form && form.venmo) || "").trim();
-      const firstTrim   = String((form && form.firstName) || "").trim();
-      const lastTrim    = String((form && form.lastName) || "").trim();
-
-      // Required: first & last name
-      if (!firstTrim || !lastTrim) { setMsg("Enter your first and last name."); return; }
-
-      // Required: phone (any digits; Firestore rules may be stricter)
-      if (!phoneDigits) { setMsg("Enter your phone number."); return; }
-
-      // Required: Venmo + confirmation checkbox
-      if (!venmoTrim) { setMsg("Enter your Venmo username."); return; }
-      if (!form?.venmoConfirmed) { setMsg("Please confirm your Venmo is correct."); return; }
-
-      // Required: a pick for every included game
-      const missingPick = (Array.isArray(games) ? games : [])
-        .filter(g => (typeof g?.included === "boolean" ? g.included : true))
-        .find(g => (picks == null || picks[g.id] == null));
-      if (missingPick) { setMsg("Make a pick for every listed game."); return; }
-      const id = `${year}_W${week}_${code}`;
-      const gd = games.find(x => x && x.gameday);
-
-      const payload = {
-        id, year, week, code,
-        firstName: form.firstName,
-        lastName: form.lastName,
-        lastNameLower: (form.lastName || "").toLowerCase().trim(),
-        phone: form.phone || "",
-        venmo: form.venmo || "",
-        email: (form.email || "").toLowerCase(),
-        venmoConfirmed: !!form.venmoConfirmed,
-        picks,
-        updatedAt: serverTimestamp()
-      };
-      // If this browser has notifications enabled, tag the submission with
-      // its push token so reminder notifications can skip devices that
-      // already submitted for this week.
-      try {
-        const pushToken = localStorage.getItem("pushToken");
-        if (pushToken) {
-          payload.pushToken = pushToken;
-          setDoc(doc(db, "pushTokens", pushToken), { name: `${firstTrim} ${lastTrim}`.trim() }, { merge: true }).catch(()=>{});
-        }
-      } catch (e) {}
-
-      if (gd) {
-        const tbTotal = tiebreaker && tiebreaker.total !== "" ? Number(tiebreaker.total) : NaN;
-        if (Number.isNaN(tbTotal)) { setMsg("Enter total points for the College GameDay tiebreaker."); return; }
-        payload.tiebreaker = { gameId: gd.id, total: tbTotal };
-      }
-
-      try {
-  await runTransaction(db, async (tx) => {
-    const locks = [];
-    const eKey = normEmail(form.email);
-    const pKey = normPhone(form.phone);
-    const vKey = normVenmo(form.venmo);
-    if (eKey) locks.push({ ref: doc(db, "keys", `${year}_W${week}_email_${eKey}`), type: "email", value: eKey });
-    if (pKey) locks.push({ ref: doc(db, "keys", `${year}_W${week}_phone_${pKey}`), type: "phone", value: pKey });
-    if (vKey) locks.push({ ref: doc(db, "keys", `${year}_W${week}_venmo_${vKey}`), type: "venmo", value: vKey });
-
-    // If any lock exists and points to a different submission, block
-    for (const l of locks) {
-      const s = await tx.get(l.ref);
-      const existing = s.exists() ? s.data() : null;
-      if (existing && existing.picksId !== id) {
-        throw new Error("DUPLICATE_LOCK");
-      }
-    }
-
-    // Create/update locks for this submission, then write the picks
-    for (const l of locks) {
-      tx.set(l.ref, { year, week, type: l.type, value: l.value, picksId: id, code, createdAt: serverTimestamp() }, { merge: true });
-    }
-    tx.set(doc(db, "picks", id), payload, { merge: true });
-  });
-} catch (e2) {
-  const msg = String((e2 && e2.message) || e2 || "");
-  if (msg === "DUPLICATE_LOCK") {
-    setMsg("this email/number/venmo is already associated with a submission, if you feel this was reached in error contact zslay@live.com");
-    return;
-  }
-  throw e2;
-}
-// Poll answers and the feedback note are only uploaded now, at the
-// moment picks actually go through, tied to the name on this
-// submission - not live as someone clicks through the survey. Best
-// effort: never blocks the actual pick submission if this fails.
-try {
-  const voterId = localStorage.getItem("pollVoterId");
-  const nameFields = { firstName: form.firstName || "", lastName: form.lastName || "" };
-  if (voterId && polls) {
-    const writes = [];
-    for (const pollId of ["tf_games", "games_per_week", "app_enroll"]) {
-      const choice = polls[pollId];
-      if (!choice) continue;
-      writes.push(setDoc(doc(db, "pollVotes", `${pollId}__${voterId}`), { pollId, choice, ...nameFields, updatedAt: serverTimestamp() }, { merge: true }).catch(()=>{}));
-    }
-    const feedbackText = (feedback || "").trim();
-    if (feedbackText) {
-      writes.push(setDoc(doc(db, "feedback", voterId), { text: feedbackText, ...nameFields, updatedAt: serverTimestamp() }, { merge: true }).catch(()=>{}));
-    }
-    await Promise.all(writes);
-  }
-} catch (e3) {}
-localStorage.setItem("receipt", JSON.stringify({ year, week, code, form, picks, tiebreaker: payload.tiebreaker || null }));
-      setMsg("");
-      setPage("receipt");
-      window.history.pushState(null, "", "/receipt");
-    } catch (e) {
-      setMsg("Save failed: " + (e && e.message ? e.message : e));
-    }
-  };
-
-  const included = Array.isArray(games) ? games.filter(g => (typeof g.included === "boolean" ? g.included : true)) : [];
-  const gd = included.find(x => x && x.gameday);
-  const list = gd ? [...included.filter(x => x && x.id !== gd.id), gd] : included;
-
-  const pickLabel = (g) => {
-    const t = pending?.picks?.[g.id];
-    if (t == null) return "(no pick)";
-    if (t === g.home) return teamLabel(g.home, g.homeRank);
-    if (t === g.away) return teamLabel(g.away, g.awayRank);
-    return String(t);
-  };
-
-  if (!pending) return null;
-
-  return (
-    <Container maxWidth={720}>
-      <Card style={{ maxWidth: 900, padding: isMobile ? 12 : 16 }}>
-        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:10 }}>
-          <h2 style={{ margin:0 }}>Confirm Your Picks — Week {pending.week}</h2>
-          <div style={{ display:"flex", alignItems:"center", gap:8, background:"#0e1730", border:"1px solid #1f2a44", borderRadius:999, padding:"6px 14px" }}>
-            <span style={{ fontSize:12, color:"#9aa4c7" }}>Edit code</span>
-            <code style={{ fontSize:16, fontWeight:700, letterSpacing:1 }}>{pending.code}</code>
-          </div>
-        </div>
-        <div style={{ fontSize:13, color:"#9aa4c7", margin:"6px 0 16px" }}>
-          Double-check your picks below, then confirm to submit.
-        </div>
-
-        <div style={{ display:"flex", flexDirection:"column", gap: isMobile ? 4 : 8 }}>
-          {list.map(g => {
-            const pickedHome = pending?.picks?.[g.id] === g.home;
-            const pickedAway = pending?.picks?.[g.id] === g.away;
-            const hasPick = pickedHome || pickedAway;
-
-            if (isMobile) {
-              // Compact, single-line, non-wrapping row so a full slate stays
-              // screenshot-friendly - long names truncate instead of wrapping.
-              return (
-                <div key={g.id} style={{
-                  display:"flex", alignItems:"center", gap:6, flexWrap:"nowrap",
-                  padding:"6px 8px", borderRadius:8,
-                  background:"#0e1730", border: g.gameday ? "1px solid #f0b429" : "1px solid #1f2a44"
-                }}>
-                  <TeamLogo school={g.away} size={16} style={{ opacity: pickedAway ? 1 : .4, flexShrink:0 }}/>
-                  <span style={{ fontSize:11, fontWeight: pickedAway ? 700 : 400, color: pickedAway ? "#fff" : "#9aa4c7", minWidth:0, flexShrink:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
-                    {teamLabelNoMascot(g.away, g.awayRank)}
-                  </span>
-                  <span style={{ fontSize:10, color:"#5b6a8f", flexShrink:0 }}>@</span>
-                  <TeamLogo school={g.home} size={16} style={{ opacity: pickedHome ? 1 : .4, flexShrink:0 }}/>
-                  <span style={{ fontSize:11, fontWeight: pickedHome ? 700 : 400, color: pickedHome ? "#fff" : "#9aa4c7", minWidth:0, flexShrink:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
-                    {teamLabelNoMascot(g.home, g.homeRank)}
-                  </span>
-                  <div style={{ marginLeft:"auto", flexShrink:0 }}>
-                    <StatusBadge tone={hasPick ? "success" : "danger"}>{pickLabel(g)}</StatusBadge>
-                  </div>
-                </div>
-              );
-            }
-
-            return (
-              <div key={g.id} style={{
-                display:"flex", alignItems:"center", justifyContent:"space-between", gap:12, flexWrap:"wrap",
-                padding:"10px 14px", borderRadius:12,
-                background:"#0e1730", border: g.gameday ? "1px solid #f0b429" : "1px solid #1f2a44"
-              }}>
-                <div style={{ display:"flex", alignItems:"center", gap:8, minWidth:0, flexWrap:"wrap" }}>
-                  <TeamLogo school={g.away} size={28} style={{ opacity: pickedAway ? 1 : .4 }}/>
-                  <span style={{ fontSize:13, fontWeight: pickedAway ? 700 : 400, color: pickedAway ? "#fff" : "#9aa4c7" }}>
-                    {teamLabelNoMascot(g.away, g.awayRank)}
-                  </span>
-                  <span style={{ fontSize:12, color:"#5b6a8f" }}>@</span>
-                  <TeamLogo school={g.home} size={28} style={{ opacity: pickedHome ? 1 : .4 }}/>
-                  <span style={{ fontSize:13, fontWeight: pickedHome ? 700 : 400, color: pickedHome ? "#fff" : "#9aa4c7" }}>
-                    {teamLabelNoMascot(g.home, g.homeRank)}
-                  </span>
-                  {g.gameday && <span style={{ fontSize:11, color:"#f0b429", fontWeight:700, marginLeft:4 }}>GAMEDAY</span>}
-                </div>
-                <StatusBadge tone={hasPick ? "success" : "danger"}>{pickLabel(g)}</StatusBadge>
-              </div>
-            );
-          })}
-        </div>
-
-        {gd && (
-          <div style={{ marginTop: 16, padding:"12px 14px", borderRadius:12, background:"#0e1730", border:"1px solid #f0b429" }}>
-            <div style={{ fontSize:12, color:"#f0b429", fontWeight:700, marginBottom:4 }}>College GameDay Tiebreaker</div>
-            <div style={{ fontSize:14, fontWeight:600 }}>
-              Total points: {pending?.tiebreaker?.total === "" || pending?.tiebreaker?.total == null ? "(not set)" : Number(pending.tiebreaker.total)}
-            </div>
-          </div>
-        )}
-
-        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginTop:20, gap:12, flexWrap:"wrap" }}>
-          <button type="button" style={adminBtn("neutral")} onClick={()=>{ setPage("picks"); window.history.pushState(null, "", "/picks"); }}>Back to Edit</button>
-          {msg && <div style={{ flex:1, textAlign:"center", color:"#f0b429", fontSize:13, fontWeight:600 }}>{msg}</div>}
-          <button type="button" style={adminBtn((picksLocked || !gamesLoaded) ? "neutral" : "primary")} onClick={confirmAndSubmit} disabled={!!(picksLocked || !gamesLoaded)}>{gamesLoaded ? "Confirm & Submit" : "Loading…"}</button>
-        </div>
-      </Card>
-    </Container>
   );
 }
 
@@ -6257,6 +8374,8 @@ export default function App() {
       if (p === "admin/notifications") { setPage("adminnotifications"); return; }
       if (p === "admin/payments") { setPage("adminpayments"); return; }
       if (p === "admin/missing") { setPage("adminmissing"); return; }
+      if (p === "admin/players") { setPage("adminplayers"); return; }
+      if (p === "admin/tools") { setPage("admintools"); return; }
     };
     readPath(); // on load
     window.addEventListener("popstate", readPath);
@@ -6272,16 +8391,17 @@ export default function App() {
 
   return (
     <>
-      {(page === "picks" || page === "confirm" || page === "receipt") && <PicksPage user={user} isAdmin={isAdmin} setPage={setPage} />}
+      {(page === "picks" || page === "receipt") && <PicksPage user={user} isAdmin={isAdmin} setPage={setPage} />}
       {page === "leader" && <LeaderboardPage user={user} isAdmin={isAdmin} setPage={setPage} />}
       {page === "myseason" && <MySeasonPage user={user} isAdmin={isAdmin} setPage={setPage} />}
       {page === "overall" && <OverallLeaderboardPage user={user} isAdmin={isAdmin} setPage={setPage} />}
       {page === "admin" && <AdminPage user={user} isAdmin={isAdmin} setPage={setPage} />}
-      {page === "adminpicks" && <AdminPicksPage user={user} isAdmin={isAdmin} setPage={setPage} />}
+      {page === "adminpicks" && <PlayerManagementPage user={user} isAdmin={isAdmin} setPage={setPage} initialTab="picks" />}
       {page === "adminnotifications" && <AdminNotificationsPage user={user} isAdmin={isAdmin} setPage={setPage} />}
       {page === "adminpayments" && <AdminPaymentsPage user={user} isAdmin={isAdmin} setPage={setPage} />}
-      {page === "adminmissing" && <AdminMissingPicksPage user={user} isAdmin={isAdmin} setPage={setPage} />}
-      {page === "confirm" && <ModalOverlay><ConfirmPage setPage={setPage} /></ModalOverlay>}
+      {page === "adminmissing" && <PlayerManagementPage user={user} isAdmin={isAdmin} setPage={setPage} initialTab="missing" />}
+      {page === "adminplayers" && <PlayerManagementPage user={user} isAdmin={isAdmin} setPage={setPage} initialTab="roster" />}
+      {page === "admintools" && <AdminToolsPage user={user} isAdmin={isAdmin} setPage={setPage} />}
       {page === "receipt" && <ModalOverlay><ReceiptPage setPage={setPage} /></ModalOverlay>}
     </>
   );

@@ -472,6 +472,65 @@ function isWithinWindow(nowET, startET, endET) {
   return now >= start || now <= end;
 }
 
+// Chat is one continuous thread, not scoped per week - keep this in sync
+// with CHAT_THREAD_KEY in web/src/App.jsx.
+const CHAT_THREAD_KEY = "general";
+
+// Posts a system banner into the chat thread - same collection the client's
+// WeekChat feature reads (chatMessages/general/messages), just written
+// directly via the Admin SDK so it bypasses the normal chatDevices name-lock
+// rule (there's no device behind a banner). `system: true` is what the
+// client renders as a centered pill instead of a bubble.
+async function postChatBanner(db, text, extra) {
+  if (!text) return;
+  try {
+    await db.collection("chatMessages").doc(CHAT_THREAD_KEY).collection("messages").add({
+      system: true,
+      text,
+      ...(extra || {}),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  } catch (e) {
+    logger.warn("postChatBanner failed:", e?.message || e);
+  }
+}
+
+// Pushes a notification for a real chat message to every device that's
+// opted in via the chat panel's "Notify me when people chat" toggle
+// (chatNotifsEnabled on its pushTokens doc - self-service, available to
+// anyone in the pool, separate from the admin-controlled reminder toggles
+// which stay opt-out). Never fires for system banners (game-final,
+// picks-locked, final-standings - all set system:true via postChatBanner
+// above), only genuine messages someone typed or a photo someone sent.
+// deviceId doubles as the sender's own push token when they have one
+// registered (see WeekChat in App.jsx), so excluding it here means nobody
+// gets notified about their own message.
+exports.sendChatNotification = onDocumentCreated(
+  { document: `chatMessages/${CHAT_THREAD_KEY}/messages/{msgId}`, region: "us-east4" },
+  async (event) => {
+    const data = event.data?.data() || {};
+    if (data.system) return;
+    const name = (data.name || "").trim() || "Someone";
+    const preview = data.text ? data.text : (data.imageUrl ? "📷 Sent a photo" : "sent a message");
+    const body = preview.length > 120 ? preview.slice(0, 117) + "..." : preview;
+    try {
+      const snap = await admin.firestore().collection("pushTokens").get();
+      const tokens = snap.docs
+        .filter(d => d.data()?.chatNotifsEnabled === true && d.data()?.blocked !== true && d.id !== data.deviceId)
+        .map(d => d.id);
+      if (!tokens.length) return;
+      for (let i = 0; i < tokens.length; i += 500) {
+        const batch = tokens.slice(i, i + 500);
+        const res = await admin.messaging().sendEachForMulticast({ tokens: batch, data: { title: `💬 ${name}`, body } });
+        logger.info(`sendChatNotification: sent to ${res.successCount}/${batch.length} device(s)`);
+        await pruneUnregisteredTokens(batch, res.responses);
+      }
+    } catch (e) {
+      logger.warn("sendChatNotification failed:", e?.message || e);
+    }
+  }
+);
+
 // Auto-write winners for any game the live map shows as final that doesn't
 // already have a recorded result. Runs server-side (unlike the old client-only
 // useAutoWinners hook) so it works regardless of whether an admin has the
@@ -493,6 +552,7 @@ async function autoWriteWinners(db, mapObj) {
 
   const batch = db.batch();
   let writes = 0;
+  const banners = [];
 
   games.forEach((g, i) => {
     const prior = existing[i].exists ? existing[i].data() : null;
@@ -528,11 +588,19 @@ async function autoWriteWinners(db, mapObj) {
       source: "auto-cron"
     }, { merge: true });
     writes++;
+    banners.push({
+      text: `🏁 FINAL: ${g.away} ${ap} @ ${g.home} ${hp}`,
+      kind: "game-final",
+      away: g.away, home: g.home, awayPoints: ap, homePoints: hp, winner,
+    });
   });
 
   if (writes > 0) {
     await batch.commit();
     logger.info(`autoWriteWinners: wrote ${writes} winner(s) for ${year}/W${week}`);
+    await Promise.all(banners.map(b => postChatBanner(db, b.text, {
+      kind: b.kind, away: b.away, home: b.home, awayPoints: b.awayPoints, homePoints: b.homePoints, winner: b.winner,
+    })));
   }
 }
 
@@ -595,6 +663,7 @@ async function autoLockAtKickoff(db, mapObj) {
         title: "🔒 Picks are locked - leaderboard is live!",
         body: `${firstGame.away} @ ${firstGame.home} just kicked off. See where everyone landed.`
       });
+      await postChatBanner(db, "🔒 Picks are locked — the leaderboard is live!");
       await db.doc("config/app").set(
         { notifications: { kickoffSentWeekKey: `${year}_W${week}` }, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
         { merge: true }
@@ -663,10 +732,12 @@ async function maybeSendReminderTier(db, { enabledField, sentField, title, body,
   if (app?.notifications?.[sentField] === weekKey) return;
 
   const excludeTokens = await getSubmittedTokensForWeek(db, year, week);
+  const resolvedTitle = typeof title === "function" ? title(firstGame, kickoffMs) : title;
   await sendPush({
-    title: typeof title === "function" ? title(firstGame, kickoffMs) : title,
+    title: resolvedTitle,
     body: body(firstGame, kickoffMs)
   }, { excludeTokens });
+  await postChatBanner(db, resolvedTitle);
   await db.doc("config/app").set(
     { notifications: { [sentField]: weekKey }, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
     { merge: true }
@@ -723,9 +794,17 @@ const STUCK_GAME_HOURS = 8;
 // doesn't have a recorded winner yet? If so, Live Scores should be running
 // to track it - whether that's the very first game of the week, or a later
 // one after a gap (e.g. Thursday/Friday games finish, nothing happening
-// until Saturday's slate kicks off). Games stuck past STUCK_GAME_HOURS are
-// excluded here (see maybeAlertStuckGames) so one bad game can't keep Live
-// Scores running for the rest of the week.
+// until Saturday's slate kicks off), or a late West Coast/Hawaii kickoff
+// still going after the default polling window's clock cutoff (see the
+// isWithinWindow bypass in publishLiveMap below). Deliberately no upper
+// bound on how long past kickoff a game can be and still count here -
+// polling should keep going until every game actually has a result, not
+// give up after some fixed number of hours. That's safe from ever running
+// forever on one broken game: a "Mark as Push" (no contest) result still
+// sets a truthy `winner` (the PUSH sentinel - see markResultAsPush in
+// App.jsx), so once an admin resolves a stuck game manually - which is
+// exactly what maybeAlertStuckGames' push notification below asks them to
+// do - it stops counting as pending here too.
 async function hasGameNeedingTracking(db) {
   const liveSnap = await db.doc("config/live").get();
   const liveCfg = liveSnap.exists ? liveSnap.data() : {};
@@ -742,10 +821,9 @@ async function hasGameNeedingTracking(db) {
   if (!games.length) return false;
 
   const now = Date.now();
-  const stuckCutoffMs = STUCK_GAME_HOURS * 60 * 60 * 1000;
   const pending = games.filter(g => {
     const t = new Date(g.startTimeStr).getTime();
-    return Number.isFinite(t) && now >= t && (now - t) < stuckCutoffMs;
+    return Number.isFinite(t) && now >= t;
   });
   if (!pending.length) return false;
 
@@ -845,22 +923,30 @@ exports.publishLiveMap = onSchedule(
     } catch (e) {
       logger.warn("publishLiveMap: stuck-game check failed", e?.message || e);
     }
+    // Whether any included game for the current live week has kicked off
+    // and still has no recorded winner - computed once, up front, so it can
+    // bypass BOTH gates below (the manual hard-stop toggle and the
+    // time-of-day window), not just the first one. A late West Coast/Hawaii
+    // kickoff commonly runs past the default window's 2am ET cutoff -
+    // previously, even after this check auto-disengaged the hard stop, the
+    // window check right after it would still skip polling and the game's
+    // winner would never get picked up until the window reopened at noon,
+    // hours after it actually finished.
+    let needsPolling = false;
+    try {
+      needsPolling = await hasGameNeedingTracking(db);
+    } catch (e) {
+      logger.warn("publishLiveMap: game-tracking check failed", e?.message || e);
+    }
 
     // Respect the Live Scores hard stop (config/app.scoreboard.mode !== "on" /
-    // hardStop === true). Before giving up, do a cheap Firestore-only check
-    // (no CFBD call) for whether any included game needs tracking right now -
-    // if so, auto-disengage the hard stop so live polling can start on its
-    // own. This also covers turning back on for a later game (e.g. Saturday's
-    // slate) after an earlier gap where nothing was happening.
+    // hardStop === true) - unless a game needs tracking, in which case
+    // auto-disengage it so live polling can start on its own. This also
+    // covers turning back on for a later game (e.g. Saturday's slate) after
+    // an earlier gap where nothing was happening.
     const mode = scoreboardCfg.mode ? String(scoreboardCfg.mode).toLowerCase() : "on";
     const hardStopped = scoreboardCfg.hardStop === true || mode !== "on";
     if (hardStopped) {
-      let needsPolling = false;
-      try {
-        needsPolling = await hasGameNeedingTracking(db);
-      } catch (e) {
-        logger.warn("publishLiveMap: game-tracking check failed", e?.message || e);
-      }
       if (!needsPolling) {
         logger.info("publishLiveMap skipped (Live Scores off, nothing to track)");
         return;
@@ -873,12 +959,15 @@ exports.publishLiveMap = onSchedule(
       logger.info("publishLiveMap: a game needs tracking - auto-enabled Live Scores");
     }
 
-    // Only poll during actual game hours (default noon-2am ET; configurable via
-    // config/app.scoreboard.window). Cuts unnecessary CFBD calls the rest of the week.
+    // Only enforce the actual-game-hours window (default noon-2am ET;
+    // configurable via config/app.scoreboard.window) when nothing is
+    // pending - cuts unnecessary CFBD/ESPN calls the rest of the week, but
+    // never at the cost of abandoning a game that's still waiting on its
+    // winner just because the clock rolled past the usual cutoff.
     const win = scoreboardCfg.window || {};
     const startET = win.startET || "12:00";
     const endET = win.endET || "02:00";
-    if (!isWithinWindow(nowTimeET(), startET, endET)) {
+    if (!needsPolling && !isWithinWindow(nowTimeET(), startET, endET)) {
       logger.info(`publishLiveMap skipped (outside game window ${startET}-${endET} ET)`);
       return;
     }
@@ -1068,6 +1157,7 @@ exports.publishLiveMap = onSchedule(
                   title: "🏆 Final standings are in",
                   body: "This week's games are all final - check the leaderboard for results."
                 });
+                await postChatBanner(db, "🏆 Final standings are in");
                 const weekKey = await getLiveWeekKey(db);
                 if (weekKey) {
                   await db.doc("config/app").set(

@@ -9,6 +9,7 @@ import {
   onAuthStateChanged,
 } from "firebase/auth";
 import { getMessaging, getToken, onMessage, isSupported } from "firebase/messaging";
+import { getStorage } from "firebase/storage";
 
 const firebaseConfig = {
   apiKey: "AIzaSyBjEhQs6kmYhD0TbCqVHdhRE5b1n2motnk",
@@ -26,6 +27,7 @@ const VAPID_KEY = "BOonwzies3d69Wg4OeSSXdK0nQ7N10XS0Hj49kvKgAkjWcCCC-2qcRlvmPdQm
 export const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app);
 export const auth = getAuth(app);
+export const storage = getStorage(app);
 
 const provider = new GoogleAuthProvider();
 export const googleLogin = () => signInWithPopup(auth, provider);

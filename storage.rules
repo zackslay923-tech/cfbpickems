@@ -1,0 +1,25 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // Chat photos: any device can upload (matches the app's low-friction,
+    // unauthenticated chat posting model - see chatMessages in
+    // firestore.rules), capped at 8MB and images only. Deletion is
+    // restricted to a signed-in Firebase Auth user - in this app that's
+    // only ever an admin (regular chat participants are anonymous
+    // devices, never Google sign-in), so this matches admin-only chat
+    // message deletion without needing a cross-service Firestore lookup
+    // from Storage rules.
+    match /chatImages/{fileName} {
+      allow read: if true;
+      allow create: if request.resource.size < 8 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+      allow update: if false;
+      allow delete: if request.auth != null;
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -15,19 +15,28 @@ service cloud.firestore {
       return get(/databases/$(database)/documents/config/app).data.leaderboardLocked == true;
     }
 
+    function chatDeviceOf(deviceId) {
+      return get(/databases/$(database)/documents/chatDevices/$(deviceId)).data;
+    }
+
     // A pick write must include a valid tiebreaker whenever it's for the
     // currently live year/week AND that week has a College GameDay game
     // assigned (config/live.gamedayGameId). Added after a client-side race
     // let three real submissions through with no tiebreaker at all - this
     // is the server-side backstop so no future client bug can do that
-    // again. Admins are exempt so historical data can still be patched.
+    // again. Admins are exempt so historical data can still be patched. A
+    // partial-slate doc (see picks.partial) may omit it entirely for now -
+    // GameDay itself may be one of the deferred games - but if one IS given
+    // it still has to be well-formed.
     function tiebreakerValid(data) {
       let live = get(/databases/$(database)/documents/config/live).data;
       let gdId = live.get('gamedayGameId', null);
       let isLiveWeek = data.year == live.get('year', null) && data.week == live.get('week', null);
       let gdRequired = isLiveWeek && gdId is string && gdId.size() > 0;
       let tb = data.get('tiebreaker', null);
-      return !gdRequired || (tb is map && tb.get('gameId', null) == gdId && tb.get('total', null) is number);
+      return !gdRequired
+        || (data.get('partial', false) == true && tb == null)
+        || (tb is map && tb.get('gameId', null) == gdId && tb.get('total', null) is number);
     }
 
     // Picks: public create/update with code+lastNameLower checks; reads allowed
@@ -49,7 +58,20 @@ service cloud.firestore {
         && request.resource.data.picks is map
         && (isAdmin() || tiebreakerValid(request.resource.data));
 
-      allow update: if (submissionsOpen() || isAdmin())
+      // Any submission for a week with later day(s) of games - partial or a
+      // normal complete one - can still be edited after the pool-wide lock
+      // trips, up until its own stored editDeadline (the earliest kickoff
+      // among the later day's games). editDeadline is set once, at initial
+      // submission, and carried forward unchanged after that - nothing here
+      // re-validates its value against the schedule. (Separately, `partial`
+      // gates whether the doc was allowed to leave those games unpicked in
+      // the first place - see tiebreakerValid and isForfeitedPick client-side.)
+      allow update: if (
+        submissionsOpen()
+        || isAdmin()
+        || (resource.data.editDeadline is timestamp
+            && request.time < resource.data.editDeadline)
+      )
         && request.resource.data.code == resource.data.code
         && request.resource.data.lastNameLower == resource.data.lastNameLower
         && request.resource.data.year == resource.data.year
@@ -111,18 +133,25 @@ service cloud.firestore {
     }
 
     // Push notification tokens: any device can register itself (doc id is the
-    // token, so a device can only touch its own doc) and self-tag a display
-    // name when it submits picks. Only a genuine admin can mark their own
-    // token isAdmin:true (so admin-only alerts can't be self-granted). Only
-    // admins can read the list (to manage recipients) or set `blocked`.
+    // token, so a device can only touch its own doc), self-tag a display
+    // name when it submits picks, and self-toggle chatNotifsEnabled (the
+    // chat panel's opt-in "notify me when people chat" switch - deliberately
+    // separate from the admin-controlled reminder toggles, which stay
+    // opt-out by default). Only a genuine admin can mark their own token
+    // isAdmin:true (so admin-only alerts can't be self-granted). A device
+    // can read back its own doc (get) - needed so the chat panel can show
+    // whether *this* device's toggle is on - but the token itself is an
+    // effectively-unguessable ~150-char string, so this doesn't expose
+    // anyone else's; only admins can list the whole collection or set
+    // `blocked`.
     match /pushTokens/{token} {
-      allow get: if isAdmin();
+      allow get: if true;
       allow list: if isAdmin();
       allow create: if request.resource.data.token == token
         && (request.resource.data.get('isAdmin', false) != true || isAdmin());
       allow update: if isAdmin()
         || (request.resource.data.token == token
-            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["name"]));
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["name", "chatNotifsEnabled"]));
       allow delete: if true;
     }
 
@@ -139,6 +168,19 @@ service cloud.firestore {
     // keyed by the email itself until an admin attaches a name.
     match /unassignedContacts/{key} {
       allow read: if isAdmin();
+      allow write: if isAdmin();
+    }
+
+    // Players: the persistent, admin-editable roster (Player Profiles page) -
+    // supersedes /contacts and /unassignedContacts above (kept in place as
+    // inert leftovers post-migration, not read/written by current app code).
+    // Auto-generated doc id; aliasKeys ties it to picks docs, see buildRoster
+    // in web/src/App.jsx. Public read (matching /picks below, the same
+    // category of contact info) so a Player Profiles rename/merge/opt-out is
+    // reflected on public pages too - My Season, Overall Leaderboard, chat -
+    // not just admin-only ones. Write stays admin-only.
+    match /players/{playerId} {
+      allow read: if true;
       allow write: if isAdmin();
     }
 
@@ -176,6 +218,67 @@ service cloud.firestore {
       allow create: if request.resource.data.text is string && request.resource.data.text.size() > 0;
       allow update: if request.resource.data.text is string && request.resource.data.text.size() > 0;
       allow delete: if false;
+    }
+
+    // Weekly chat: a device claims a display name once (doc id is either the
+    // device's push-notification token, reused so a device already known by
+    // name never has to ask again, or a random locally-generated id). Once
+    // created a device can never rename itself - only an admin can, via
+    // update/delete - so no device can later post messages under a different
+    // name than the one it started with. The `verified` flag (client-set,
+    // true only when the chooser's typed email matched that person's known
+    // picks-history email) is purely informational for the "verified" badge;
+    // it is not itself enforced server-side, matching the low-friction bar
+    // requested for this feature. `blocked` (admin-set) IS enforced - see
+    // the chatMessages create rule below, which rejects new messages from a
+    // blocked device while leaving its name and past messages untouched.
+    match /chatDevices/{deviceId} {
+      allow get: if true;
+      allow list: if isAdmin();
+      allow create: if request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() < 60;
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // Chat: one continuous thread, not scoped per week - {threadKey} is
+    // always the fixed CHAT_THREAD_KEY value ("general", kept in sync
+    // between web/src/App.jsx and functions/index.js), just still nested a
+    // level down so reads/writes never need a composite index. A message's
+    // `name` must equal the poster's own locked chatDevices name, so nobody
+    // can spoof a different display name than the one their device is stuck
+    // with, and a blocked device is rejected outright.
+    match /chatMessages/{threadKey}/messages/{msgId} {
+      allow get: if true;
+      allow list: if true;
+      // A message needs either non-empty text or a photo (imageUrl) - one
+      // can carry both (a caption on a photo) or just one. imageUrl must
+      // point at our own Storage bucket, not an arbitrary external URL, so
+      // there's no way to bypass the upload flow's size/type limits.
+      allow create: if request.resource.data.deviceId is string
+        && request.resource.data.name is string
+        && request.resource.data.get('text', '') is string
+        && request.resource.data.get('text', '').size() <= 500
+        && (
+          request.resource.data.get('text', '').size() > 0
+          || (request.resource.data.get('imageUrl', null) is string
+              && request.resource.data.imageUrl.matches('https://firebasestorage\\.googleapis\\.com/.*'))
+        )
+        && (
+          isAdmin()
+          || (request.resource.data.name == chatDeviceOf(request.resource.data.deviceId).name
+              && chatDeviceOf(request.resource.data.deviceId).get('blocked', false) != true)
+        );
+      // Reactions are the one thing a client can update after the fact - a
+      // message's text/name/deviceId stay immutable once posted (create-only
+      // per above), but anyone can toggle an emoji on any message. Not
+      // scoped to "only your own name" (that would need per-entry diffing
+      // rules can't easily express) - matches the same low-friction trust
+      // bar the rest of chat uses.
+      allow update: if request.resource.data.diff(resource.data).affectedKeys().hasOnly(["reactions"])
+        && request.resource.data.reactions is map;
+      allow delete: if isAdmin();
     }
 
     // Admin taps "Clean Up Devices Now" -> drops an empty trigger doc here;
