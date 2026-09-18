@@ -3718,12 +3718,18 @@ while (i < seq.length) {
                       <td key={g.id} data-game-id={g.id} style={{ ...pickCellStyle(g.id, revealed ? choice : null), width: 140, minwidth: 140 }}><div style={{display:"flex",justifyContent:"center"}}>{label}</div></td>
                     );
                   })}
-                {gameday ? (
-  <td key={"tb_"+(p.email||p.name||p.code||p.id)}
-      style={{ ...cell, textAlign:"center", width: 140, minwidth: 140 }}>
-    {(lbPicksPublic || isAdmin || !isLiveWeek) ? (p.tb ?? (p.tiebreaker?.total ?? p.tiebreaker ?? p.tieBreaker ?? p.tiebreak ?? p.tb ?? "")) : "🔒"}
-  </td>
-) : null}</tr>
+                {gameday ? (() => {
+  const canSeePicks = lbPicksPublic || isAdmin || !isLiveWeek;
+  const tbGroupStartMs = gameGroupStartMap.get(gameday.id);
+  const tbStarted = tbGroupStartMs != null && tbGroupStartMs <= Date.now();
+  const tbRevealed = canSeePicks && (isAdmin || !isLiveWeek || tbStarted);
+  return (
+    <td key={"tb_"+(p.email||p.name||p.code||p.id)}
+        style={{ ...cell, textAlign:"center", width: 140, minwidth: 140 }}>
+      {tbRevealed ? (p.tb ?? (p.tiebreaker?.total ?? p.tiebreaker ?? p.tieBreaker ?? p.tiebreak ?? p.tb ?? "")) : "🔒"}
+    </td>
+  );
+})() : null}</tr>
               ))}
             </tbody>
           </table>
