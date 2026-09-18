@@ -6162,7 +6162,20 @@ function MissingTab({ roster, loaded, notifiedNameKeys, notifiedPlayerIds, submi
                     ? <span style={{ marginLeft:6, fontSize:11, color:"#6aa2ff" }} title="Has push notifications enabled — treated as opted out of email">🔔 opted out (phone)</span>
                     : p.emailOptOut && <span style={{ marginLeft:6, fontSize:11, color:"#f0b429" }}>(opted out)</span>}
                 </td>
-                <td style={{ padding:"8px 10px", opacity:.9 }}>{p.phone}</td>
+                <td style={{ padding:"8px 10px" }}>
+                  {(() => {
+                    const digits = String(p.phone || "").replace(/\D/g, "");
+                    if (digits.length < 10) return <span style={{ opacity:.9 }}>{p.phone || "—"}</span>;
+                    const num = digits.length === 10 ? `+1${digits}` : `+${digits}`;
+                    const body = `Hey ${p.firstName || "there"}, reminder to get your CFB Pick'em picks in for Week ${week}! https://cfbpickems.web.app`;
+                    return (
+                      <a href={`sms:${num}?&body=${encodeURIComponent(body)}`} title="Opens your Messages app with a reminder ready to send"
+                         style={{ color:"#6aa2ff", textDecoration:"underline", whiteSpace:"nowrap" }}>
+                        💬 {p.phone}
+                      </a>
+                    );
+                  })()}
+                </td>
                 <td style={{ padding:"8px 10px", opacity:.9 }}>{p.venmo}</td>
               </tr>
             ))}
