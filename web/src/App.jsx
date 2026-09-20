@@ -2322,15 +2322,24 @@ const onSubmitPicks = async function(e){
                         </div>
                       )}
                       <label style={{ display:"block" }}>
-                        {"Total Points Scored in the "}
-                        <strong>{teamLabelNoMascot(g.away, g.awayRank)} @ {teamLabelNoMascot(g.home, g.homeRank)}</strong>
-                        {" Game? (Whole number)"}
+                        {isMobile ? (
+                          <>
+                            {"Total points: "}
+                            <strong>{teamLabelNoMascot(g.away, g.awayRank)} @ {teamLabelNoMascot(g.home, g.homeRank)}</strong>
+                          </>
+                        ) : (
+                          <>
+                            {"Total Points Scored in the "}
+                            <strong>{teamLabelNoMascot(g.away, g.awayRank)} @ {teamLabelNoMascot(g.home, g.homeRank)}</strong>
+                            {" Game? (Whole number)"}
+                          </>
+                        )}
                         <input
                           type="number"
                           inputMode="numeric"
                           step="1"
                           min="0"
-                          style={{ ...inputStyle, width:220, marginLeft:8, marginTop:8 }}
+                          style={{ ...inputStyle, width: isMobile ? "100%" : 220, marginLeft: isMobile ? 0 : 8, marginTop:8 }}
                           value={tiebreaker.total}
                           onChange={(e)=> setTiebreaker({ gameId: g.id, total: (e.target.value || "").replace(/[^\d]/g,"") })}
                         />
