@@ -1040,19 +1040,19 @@ async function computeWeekStandings(year, week) {
     if (topGroup.length === 1) {
       topGroup[0].isWinner = true;
     } else if (gdTotal == null) {
-      topGroup.forEach(p => { p.isWinner = true; p.winNote = "Tied for 1st — GameDay tiebreaker not final yet"; });
+      topGroup.forEach(p => { p.isWinner = true; p.winNote = "Tied for 1st — GameDay tiebreaker not final yet"; p.winNoteShort = "Tiebreaker pending"; });
     } else {
       const diffOf = (p) => p.tb == null ? Infinity : Math.abs(p.tb - gdTotal);
       const bestDiff = Math.min(...topGroup.map(diffOf));
       if (bestDiff === Infinity) {
-        topGroup.forEach(p => { p.isWinner = true; p.winNote = "Tied for 1st — no tiebreaker guess on file"; });
+        topGroup.forEach(p => { p.isWinner = true; p.winNote = "Tied for 1st — no tiebreaker guess on file"; p.winNoteShort = "No tiebreaker guess"; });
       } else {
         const coWinners = topGroup.filter(p => diffOf(p) === bestDiff);
         if (coWinners.length > 1) {
-          coWinners.forEach(p => { p.isWinner = true; p.winNote = "Tied for 1st — pot split (tiebreaker also tied)"; });
+          coWinners.forEach(p => { p.isWinner = true; p.winNote = "Tied for 1st — pot split (tiebreaker also tied)"; p.winNoteShort = "Pot split (tied)"; });
         } else {
           coWinners[0].isWinner = true;
-          coWinners[0].winNote = `Won on tiebreaker — guessed ${coWinners[0].tb}, GameDay total was ${gdTotal}`;
+          coWinners[0].winNote = "Won on tiebreaker";
         }
         topGroup.sort((a, b) => diffOf(a) - diffOf(b) || a.name.localeCompare(b.name));
         const rest = rows.filter(p => p.points !== topPoints);
@@ -3699,7 +3699,7 @@ while (i < seq.length) {
                         <span>
                           {p.isWinner && <span title={p.winNote || "Winner"} style={{ marginRight: 6 }}>🏆</span>}
                           {p.name}
-                          {p.winNote && <div style={{ fontSize: 10, fontWeight: 400, opacity: 0.75, marginTop: 2 }}>{p.winNote}</div>}
+                          {p.winNote && <div style={{ fontSize: 10, fontWeight: 400, opacity: 0.75, marginTop: 2 }}>{isMobile ? (p.winNoteShort || p.winNote) : p.winNote}</div>}
                         </span>
                       </span>
                       <span style={{ width:POINTS_COL_W, minWidth:POINTS_COL_W, boxSizing:"border-box", display:"flex", alignItems:"center", justifyContent:"center", fontWeight:700, borderLeft:"2px solid #1f2a44" }}>{p.points}</span>
