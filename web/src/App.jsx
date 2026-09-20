@@ -1052,8 +1052,7 @@ async function computeWeekStandings(year, week) {
           coWinners.forEach(p => { p.isWinner = true; p.winNote = "Tied for 1st — pot split (tiebreaker also tied)"; p.winNoteShort = "Pot split (tied)"; });
         } else {
           coWinners[0].isWinner = true;
-          coWinners[0].winNote = `Won on tiebreaker — guessed ${coWinners[0].tb}, GameDay total was ${gdTotal}`;
-          coWinners[0].winNoteShort = `Won on tiebreaker (${coWinners[0].tb} vs ${gdTotal})`;
+          coWinners[0].winNote = "Won on tiebreaker";
         }
         topGroup.sort((a, b) => diffOf(a) - diffOf(b) || a.name.localeCompare(b.name));
         const rest = rows.filter(p => p.points !== topPoints);
