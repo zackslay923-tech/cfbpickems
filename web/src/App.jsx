@@ -182,68 +182,6 @@ function Header({ user, isAdmin, setPage }) {
   const isMobile = useIsMobile();
   const [chatOpen, setChatOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  // One-time "new feature" banner, shown to every device (not just mobile,
-  // unlike the install/notification prompts below) the first time the app
-  // loads after this shipped. Previously announced weekly chat; now
-  // repurposed for the new partial-slate submission option - a fresh
-  // localStorage key so it reaches everyone again, including people who
-  // already dismissed the chat announcement.
-  const [showAnnounceBanner, setShowAnnounceBanner] = useState(() => {
-    if (typeof window === "undefined") return false;
-    try { return localStorage.getItem("partialSlateAnnounceDismissedForever") !== "1"; } catch (e) { return false; }
-  });
-  function dismissAnnounceBanner() {
-    try { localStorage.setItem("partialSlateAnnounceDismissedForever", "1"); } catch (e) {}
-    setShowAnnounceBanner(false);
-  }
-  // Dynamic day/time for the banner's copy below - computed live from the
-  // real schedule (the same "later day-group's earliest kickoff" PicksPage
-  // uses for its own partial-slate deadline) so it can't go stale the way a
-  // hardcoded time would the moment a game gets added or pulled from the
-  // slate. Only subscribes while the banner is still showing - no point
-  // keeping listeners open for everyone who's already dismissed it.
-  const [bannerLive, setBannerLive] = useState({ year: null, week: null });
-  useEffect(() => {
-    if (!showAnnounceBanner) return;
-    const unsub = onSnapshot(doc(db, "config", "live"), (s) => {
-      const d = s.data() || {};
-      setBannerLive({ year: Number(d.year), week: Number(d.week) });
-    });
-    return () => unsub();
-  }, [showAnnounceBanner]);
-  const [bannerGames, setBannerGames] = useState([]);
-  useEffect(() => {
-    if (!showAnnounceBanner) return;
-    const { year, week } = bannerLive;
-    if (!Number.isFinite(year) || !Number.isFinite(week)) { setBannerGames([]); return; }
-    const unsub = onSnapshot(
-      query(collection(db, "games"), where("year", "==", year), where("week", "==", week)),
-      (snap) => setBannerGames(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
-      () => setBannerGames([])
-    );
-    return () => unsub();
-  }, [showAnnounceBanner, bannerLive.year, bannerLive.week]);
-  const bannerSchedule = useMemo(() => {
-    const needsIncludedFlag = bannerGames.some(g => Object.prototype.hasOwnProperty.call(g, "included"));
-    const list = needsIncludedFlag ? bannerGames.filter(g => !!g.included) : bannerGames;
-    const groups = groupGamesByDate(list, { timeZone: "America/New_York" });
-    if (groups.length < 2) return null; // nothing later this week to describe
-    const laterDates = groups.slice(1).flatMap(grp => grp.items)
-      .map(g => kickoffDate(g))
-      .filter(d => d instanceof Date && !isNaN(d))
-      .sort((a, b) => a - b);
-    const earliestLater = laterDates[0];
-    if (!earliestLater) return null;
-    const firstDate = kickoffDate(groups[0]?.items?.[0]);
-    const dayFmt = new Intl.DateTimeFormat("en-US", { weekday: "long", timeZone: "America/New_York" });
-    const timeFmt = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/New_York" });
-    const fmtTime = (d) => timeFmt.format(d).toLowerCase().replace(/\s/g, "").replace(":00", "");
-    return {
-      firstDay: (firstDate instanceof Date && !isNaN(firstDate)) ? dayFmt.format(firstDate) : "kickoff",
-      laterDay: dayFmt.format(earliestLater),
-      laterTime: fmtTime(earliestLater),
-    };
-  }, [bannerGames]);
   const onIOS = isIOSDevice();
   const onAndroid = isAndroidDevice();
   const showIOSSteps = onIOS || !onAndroid;
@@ -450,32 +388,6 @@ function Header({ user, isAdmin, setPage }) {
         </nav>
       )}
     </div>
-    {showAnnounceBanner && (
-      <div style={{
-        display:"flex", alignItems:"flex-start", justifyContent:"space-between", gap:10,
-        background:"#1c2b52", border:"1px solid #2a4fb8", borderRadius:10,
-        padding:"9px 12px", marginBottom:14, fontSize:13, color:"#eef2ff", lineHeight:1.45
-      }}>
-        <div>
-          <div>
-            <b>⏳ New this week</b> — {bannerSchedule ? `${bannerSchedule.laterDay}'s` : "later"} picks stay editable until{" "}
-            {bannerSchedule ? `${bannerSchedule.laterTime} on ${bannerSchedule.laterDay}` : "their kickoff"}, even after new submissions lock at{" "}
-            {bannerSchedule ? `${bannerSchedule.firstDay}'s` : "the first"} kickoff.
-          </div>
-          <div style={{ marginTop:8 }}>
-            <b>Can't finish by {bannerSchedule ? bannerSchedule.firstDay : "then"}?</b> Opt into a Partial Slate to submit{" "}
-            {bannerSchedule ? `${bannerSchedule.firstDay}'s` : "those"} picks now and fill in {bannerSchedule ? `${bannerSchedule.laterDay}'s` : "the rest"} later.
-          </div>
-        </div>
-        <button
-          onClick={dismissAnnounceBanner}
-          aria-label="Dismiss"
-          style={{ background:"transparent", border:"none", color:"#cfd8f0", cursor:"pointer", fontSize:16, flexShrink:0, padding:2, lineHeight:1 }}
-        >
-          ✕
-        </button>
-      </div>
-    )}
     {showWhatsNewModal && (
       <div style={{
         position:"fixed", inset:0, zIndex:100, background:"rgba(4,7,15,.72)",
