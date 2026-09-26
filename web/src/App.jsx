@@ -1123,25 +1123,70 @@ function compareHeadToHead(games, results, gameGroupStartMap, players, aName, bN
   return { A, B, margin, agree, disagree, stillOpenDisagree, aClinched, bClinched, neededByA, neededByB, hiddenRemainingCount };
 }
 
-// Whole-field "chance to win the pot" - there's no real odds/spread data
-// anywhere in this app, so this is a Monte Carlo estimate that treats every
-// still-open, revealed game as a 50/50 coin flip, not a Vegas-accurate
-// prediction. Each trial picks a random winner for every such game, scores
-// everyone, and splits credit evenly across however many players tie for
-// the lead in that trial (mirrors the real pot-split rule - there's no
-// model here for the GameDay tiebreaker score itself). Percentages are an
-// estimate, not exact math like Path to Victory/Compare above.
+// Moneyline -> implied win probability (standard American-odds conversion),
+// de-vigged by normalizing both sides so they sum to 1 - a book's moneyline
+// pair always implies slightly over 100% between the two, since that margin
+// (the vig) is how the book makes money, not a real edge either team has.
+function impliedProbFromMoneyline(ml) {
+  if (ml == null || !Number.isFinite(ml)) return null;
+  return ml < 0 ? (-ml) / (-ml + 100) : 100 / (ml + 100);
+}
+// Point spread -> win probability, via the standard normal-distribution
+// model sports-analytics sites use (sigma = the roughly-13.5-point typical
+// college football scoring-margin standard deviation). Only used as a
+// fallback when a game has a spread but no moneyline posted.
+function erf(x) {
+  const sign = x < 0 ? -1 : 1;
+  x = Math.abs(x);
+  const a1 = 0.254829592, a2 = -0.284496736, a3 = 1.421413741, a4 = -1.453152027, a5 = 1.061405429, p = 0.3275911;
+  const t = 1 / (1 + p * x);
+  const y = 1 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * Math.exp(-x * x);
+  return sign * y;
+}
+function normalCdf(z) { return 0.5 * (1 + erf(z / Math.SQRT2)); }
+// This project's `spread` field is CFBD's convention: positive means the
+// AWAY team is favored by that many points, negative means the HOME team
+// is (confirmed against real synced games - e.g. "NC State -14" at home
+// stores as spread: -14). So the home team's expected margin is -spread.
+function spreadToHomeWinProb(spread, sigma = 13.5) {
+  if (spread == null || !Number.isFinite(spread)) return null;
+  return normalCdf(-spread / sigma);
+}
+// Best-available home-win probability for a game: moneyline first (a direct
+// market price), spread as a fallback, else null (caller defaults to 50/50).
+function homeWinProbFor(g) {
+  const viaMoneyline = (() => {
+    const pHome = impliedProbFromMoneyline(g?.homeMoneyline);
+    const pAway = impliedProbFromMoneyline(g?.awayMoneyline);
+    if (pHome == null || pAway == null) return null;
+    const total = pHome + pAway;
+    return total > 0 ? pHome / total : null;
+  })();
+  if (viaMoneyline != null) return viaMoneyline;
+  return spreadToHomeWinProb(g?.spread);
+}
+
+// Whole-field "chance to win the pot" - a Monte Carlo simulation over every
+// still-open, revealed game. Uses real market odds (moneyline, or spread as
+// a fallback) when a game has them synced, and a 50/50 coin flip for any
+// game that doesn't (small-conference games often have no posted line) -
+// still an estimate, not a Vegas-accurate prediction, since it's driven by
+// odds as of whenever they were last synced. Each trial scores everyone and
+// splits credit evenly across however many players tie for the lead in that
+// trial (mirrors the real pot-split rule - there's no model here for the
+// GameDay tiebreaker score itself).
 function computeFieldWinProbabilities(games, results, players, gameGroupStartMap, trials = 8000) {
   const nowMs = Date.now();
   const isFinal = (g) => !!results[g.id]?.winner;
   const isRevealed = (g) => gameIsRevealed(gameGroupStartMap, g, nowMs);
   const revealedRemaining = games.filter(g => !isFinal(g) && isRevealed(g));
   const hiddenRemainingCount = games.filter(g => !isFinal(g) && !isRevealed(g)).length;
+  const homeWinProb = new Map(revealedRemaining.map(g => [g.id, homeWinProbFor(g) ?? 0.5]));
 
   const credit = new Map(players.map(p => [p.name, 0]));
   for (let t = 0; t < trials; t++) {
     const winners = new Map();
-    for (const g of revealedRemaining) winners.set(g.id, Math.random() < 0.5 ? g.home : g.away);
+    for (const g of revealedRemaining) winners.set(g.id, Math.random() < homeWinProb.get(g.id) ? g.home : g.away);
     let top = -Infinity;
     const scores = players.map(p => {
       let pts = p.points;
@@ -4095,7 +4140,7 @@ while (i < seq.length) {
                 <button type="button" onClick={() => setShowWinOdds(false)} aria-label="Close" style={{ background:"transparent", border:"none", color:"#cfd8f0", cursor:"pointer", fontSize:18, padding:2, lineHeight:1 }}>✕</button>
               </div>
               <p style={{ margin:"6px 0 0", fontSize:11.5, color:"#9aa4c7", lineHeight:1.5 }}>
-                Simulated assuming every remaining game is a coin flip — not real odds, not a prediction. Ties split the odds evenly.
+                Simulated using live betting odds where available (coin flip otherwise) — an estimate, not a prediction. Ties split the odds evenly.
                 {winOdds.hiddenRemainingCount > 0 && ` ${winOdds.hiddenRemainingCount} game${winOdds.hiddenRemainingCount === 1 ? "" : "s"} later this week aren't revealed yet.`}
               </p>
             </div>
@@ -8190,6 +8235,8 @@ function AdminPage({ user, isAdmin, setPage }) {
           spread: Number.isFinite(+line.spread) ? +line.spread : null,
           formattedSpread: line.formattedSpread || null,
           overUnder: Number.isFinite(+line.overUnder) ? +line.overUnder : null,
+          homeMoneyline: Number.isFinite(+line.homeMoneyline) ? +line.homeMoneyline : null,
+          awayMoneyline: Number.isFinite(+line.awayMoneyline) ? +line.awayMoneyline : null,
           oddsProvider: line.provider || null,
           oddsUpdatedAt: serverTimestamp()
         }, { merge: true });

@@ -396,6 +396,72 @@ async function readCfbdToken(db) {
   return token;
 }
 
+// Pulls spreads/over-under from CFBD's /lines endpoint for the given
+// year/week and writes them onto games/{id} - same fields the admin's
+// manual "Sync Odds" button on the web app already writes (spread,
+// formattedSpread, overUnder, oddsProvider, oddsUpdatedAt), just automatic
+// now, called from publishLiveMap on the same cadence/gating as live scores
+// (only while something's actually live) so Win Odds always has fresh
+// numbers without anyone needing to remember to click Sync. Best-effort:
+// never throws past its own caller - a failure here shouldn't affect score
+// polling, which is what actually matters most.
+async function syncOddsForWeek(db, year, week) {
+  if (!Number.isFinite(year) || !Number.isFinite(week)) return 0;
+
+  let token;
+  try {
+    token = await readCfbdToken(db);
+  } catch (e) {
+    return 0; // no CFBD key configured - odds sync just doesn't run
+  }
+
+  const gamesSnap = await db.collection("games")
+    .where("year", "==", year)
+    .where("week", "==", week)
+    .get();
+  if (gamesSnap.empty) return 0;
+  const byKey = new Map(gamesSnap.docs.map(d => [toKey(d.data().away, d.data().home), d.id]));
+
+  const qs = new URLSearchParams({ year: String(year), week: String(week), seasonType: "regular" });
+  const res = await fetch(`https://api.collegefootballdata.com/lines?${qs}`, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  if (!res.ok) {
+    logger.warn("syncOddsForWeek: CFBD /lines non-2xx", res.status);
+    return 0;
+  }
+  const arr = await res.json();
+
+  const batch = db.batch();
+  let written = 0;
+  for (const g of (Array.isArray(arr) ? arr : [])) {
+    const home = g.homeTeam ?? g.home_team ?? "";
+    const away = g.awayTeam ?? g.away_team ?? "";
+    const gameId = byKey.get(toKey(away, home));
+    if (!gameId) continue;
+
+    const lines = Array.isArray(g.lines) ? g.lines : [];
+    if (!lines.length) continue;
+    const line = lines.find(l => String(l.provider || "").toLowerCase() === "consensus") || lines[0];
+
+    batch.set(db.collection("games").doc(gameId), {
+      spread: Number.isFinite(+line.spread) ? +line.spread : null,
+      formattedSpread: line.formattedSpread || null,
+      overUnder: Number.isFinite(+line.overUnder) ? +line.overUnder : null,
+      // Moneyline is what Win Odds actually uses to price the winner (a
+      // direct implied probability, once de-vigged) - spread is kept as a
+      // fallback for games a provider didn't post a moneyline for.
+      homeMoneyline: Number.isFinite(+line.homeMoneyline) ? +line.homeMoneyline : null,
+      awayMoneyline: Number.isFinite(+line.awayMoneyline) ? +line.awayMoneyline : null,
+      oddsProvider: line.provider || null,
+      oddsUpdatedAt: admin.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+    written++;
+  }
+  if (written) await batch.commit();
+  return written;
+}
+
 // How long CFBD fetches need to be failing in a row before alerting the
 // admin (bad/expired API key, CFBD outage, etc.) rather than a single
 // transient blip.
@@ -982,6 +1048,14 @@ exports.publishLiveMap = onSchedule(
     const liveSnap = await db.doc("config/live").get();
     const liveCfg = liveSnap.exists ? liveSnap.data() : {};
     const liveYear = Number(liveCfg?.year), liveWeek = Number(liveCfg?.week);
+
+    // Odds sync rides the same gate as live scores above (hard-stop/window
+    // already passed by the time execution reaches here) - only pulls while
+    // something's actually live, on the same 1-minute cadence. Never throws
+    // past here; a failed odds pull shouldn't take down live score polling.
+    syncOddsForWeek(db, liveYear, liveWeek).catch(e => {
+      logger.warn("publishLiveMap: odds sync failed", e?.message || e);
+    });
 
     let expectedKeys = [];
     if (Number.isFinite(liveYear) && Number.isFinite(liveWeek)) {
