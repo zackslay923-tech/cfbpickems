@@ -1001,6 +1001,25 @@ function gameIsRevealed(gameGroupStartMap, g, nowMs) {
   return ms != null && ms <= nowMs;
 }
 
+// Same hard, provable elimination check as computePathToVictory below, for
+// every player at once - nobody's .points can ever go down, so once a
+// player's max possible score can't clear some rival's already-locked
+// score, they're out, no scenario search needed. Used to badge the Win
+// Odds list without running the full per-player computation for everyone.
+function computeEliminatedNames(games, results, players, gameGroupStartMap) {
+  const nowMs = Date.now();
+  const isFinal = (g) => !!results[g.id]?.winner;
+  const isRevealed = (g) => gameIsRevealed(gameGroupStartMap, g, nowMs);
+  const revealedRemainingCount = games.filter(g => !isFinal(g) && isRevealed(g)).length;
+  const eliminated = new Set();
+  for (const p of players) {
+    const ceiling = p.points + revealedRemainingCount;
+    const bestRivalFloor = Math.max(0, ...players.filter(x => x.name !== p.name).map(x => x.points));
+    if (ceiling < bestRivalFloor) eliminated.add(p.name);
+  }
+  return eliminated;
+}
+
 // Path to Victory for one player: are they mathematically alive, what does
 // their own best case look like, and which still-open games do they
 // actually need.
@@ -3338,6 +3357,13 @@ useEffect(() => {
     () => (weekAllFinal || !players.length || !ptvEnabled ? null : computeFieldWinProbabilities(games, results, players, gameGroupStartMap)),
     [games, results, players, gameGroupStartMap, weekAllFinal, ptvEnabled]
   );
+  // Same hard, provable elimination check as computePathToVictory's - who's
+  // still mathematically alive, so the Win Odds list can badge names without
+  // running that per player one at a time.
+  const eliminatedNames = useMemo(
+    () => (ptvEnabled ? computeEliminatedNames(games, results, players, gameGroupStartMap) : new Set()),
+    [games, results, players, gameGroupStartMap, ptvEnabled]
+  );
 
   // Computed once and dropped into both of this page's return branches below
   // (the locked/minimal view and the full board) rather than duplicated -
@@ -4354,7 +4380,17 @@ while (i < seq.length) {
                           {medal ? <span style={{ fontSize:15 }}>{medal}</span> : <span style={{ opacity:.5, fontSize:11, width:16, textAlign:"right" }}>{i + 1}</span>}
                           <span style={{ fontWeight: i < 3 ? 700 : 500, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", textDecoration:"underline", textDecorationColor:"rgba(255,255,255,.25)" }}>{o.name}</span>
                         </span>
-                        <span style={{ fontWeight:800, flexShrink:0, marginLeft:8 }}>{o.pct < 0.1 && o.pct > 0 ? "<0.1" : o.pct.toFixed(1)}%</span>
+                        <span style={{ display:"flex", alignItems:"center", gap:6, flexShrink:0, marginLeft:8 }}>
+                          <span style={{
+                            fontSize:9.5, fontWeight:700, padding:"2px 6px", borderRadius:999, whiteSpace:"nowrap",
+                            background: eliminatedNames.has(o.name) ? "rgba(240,89,107,0.18)" : "rgba(62,207,142,0.18)",
+                            color: eliminatedNames.has(o.name) ? "#f0596b" : "#3ecf8e",
+                            border: `1px solid ${eliminatedNames.has(o.name) ? "rgba(240,89,107,0.45)" : "rgba(62,207,142,0.45)"}`,
+                          }}>
+                            {eliminatedNames.has(o.name) ? "Out" : "Alive"}
+                          </span>
+                          <span style={{ fontWeight:800 }}>{o.pct < 0.1 && o.pct > 0 ? "<0.1" : o.pct.toFixed(1)}%</span>
+                        </span>
                       </div>
                     </div>
                   );
