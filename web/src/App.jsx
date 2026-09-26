@@ -901,6 +901,40 @@ async function getPicksForWeek(year, week) {
   return out;
 }
 
+// Marks the winner(s) on an already points-sorted rows array (GameDay-total
+// tiebreaker when there's a tie for first, only once gdTotal is known).
+// Pulled out of computeWeekStandings so the Path to Victory "best case"
+// scenario recompute (LeaderboardPage) can reuse the exact same rule instead
+// of re-deriving it.
+function applyWinnerTiebreak(rows, gdGame, gdTotal) {
+  if (!rows.length) return rows;
+  const topPoints = rows[0].points;
+  const topGroup = rows.filter(p => p.points === topPoints);
+  if (topGroup.length === 1) {
+    topGroup[0].isWinner = true;
+  } else if (gdTotal == null) {
+    topGroup.forEach(p => { p.isWinner = true; p.winNote = "Tied for 1st — GameDay tiebreaker not final yet"; p.winNoteShort = "Tiebreaker pending"; });
+  } else {
+    const diffOf = (p) => p.tb == null ? Infinity : Math.abs(p.tb - gdTotal);
+    const bestDiff = Math.min(...topGroup.map(diffOf));
+    if (bestDiff === Infinity) {
+      topGroup.forEach(p => { p.isWinner = true; p.winNote = "Tied for 1st — no tiebreaker guess on file"; p.winNoteShort = "No tiebreaker guess"; });
+    } else {
+      const coWinners = topGroup.filter(p => diffOf(p) === bestDiff);
+      if (coWinners.length > 1) {
+        coWinners.forEach(p => { p.isWinner = true; p.winNote = "Tied for 1st — pot split (tiebreaker also tied)"; p.winNoteShort = "Pot split (tied)"; });
+      } else {
+        coWinners[0].isWinner = true;
+        coWinners[0].winNote = "Won on tiebreaker";
+      }
+      topGroup.sort((a, b) => diffOf(a) - diffOf(b) || a.name.localeCompare(b.name));
+      const rest = rows.filter(p => p.points !== topPoints);
+      rows.splice(0, rows.length, ...topGroup, ...rest);
+    }
+  }
+  return rows;
+}
+
 // Compute one week's standings: each submitted player's correct-pick count,
 // sorted, with the winner marked (via the GameDay tiebreaker when there's a
 // tie for first, only once every game that week is final). Shared by the
@@ -947,34 +981,132 @@ async function computeWeekStandings(year, week) {
     const gdGame = g.find(x => x && x.gameday);
     const gdTotalRaw = gdGame ? r[gdGame.id]?.totalPoints : null;
     const gdTotal = Number.isFinite(+gdTotalRaw) ? +gdTotalRaw : null;
-    const topPoints = rows[0].points;
-    const topGroup = rows.filter(p => p.points === topPoints);
-    if (topGroup.length === 1) {
-      topGroup[0].isWinner = true;
-    } else if (gdTotal == null) {
-      topGroup.forEach(p => { p.isWinner = true; p.winNote = "Tied for 1st — GameDay tiebreaker not final yet"; p.winNoteShort = "Tiebreaker pending"; });
-    } else {
-      const diffOf = (p) => p.tb == null ? Infinity : Math.abs(p.tb - gdTotal);
-      const bestDiff = Math.min(...topGroup.map(diffOf));
-      if (bestDiff === Infinity) {
-        topGroup.forEach(p => { p.isWinner = true; p.winNote = "Tied for 1st — no tiebreaker guess on file"; p.winNoteShort = "No tiebreaker guess"; });
-      } else {
-        const coWinners = topGroup.filter(p => diffOf(p) === bestDiff);
-        if (coWinners.length > 1) {
-          coWinners.forEach(p => { p.isWinner = true; p.winNote = "Tied for 1st — pot split (tiebreaker also tied)"; p.winNoteShort = "Pot split (tied)"; });
-        } else {
-          coWinners[0].isWinner = true;
-          coWinners[0].winNote = "Won on tiebreaker";
-        }
-        topGroup.sort((a, b) => diffOf(a) - diffOf(b) || a.name.localeCompare(b.name));
-        const rest = rows.filter(p => p.points !== topPoints);
-        rows.splice(0, rows.length, ...topGroup, ...rest);
-      }
-    }
+    applyWinnerTiebreak(rows, gdGame, gdTotal);
   }
 
   const playedGames = ids.filter(id => !!r[id]?.winner).length;
   return { games: g, results: r, rows, allGamesFinal, totalGames: ids.length, playedGames };
+}
+
+// ---------- Path to Victory / Compare (LeaderboardPage) ----------
+// Both of these are pure functions of state LeaderboardPage already has
+// (games/results/players/gameGroupStartMap) - no extra Firestore reads.
+// Only ever reason over games that are actually revealed to everyone right
+// now (final, or their whole day already started) - a day that hasn't
+// started yet is excluded from the math entirely and just disclosed as a
+// count, since nobody (partial-slate players especially) can see those
+// picks yet and they could still change.
+function gameIsRevealed(gameGroupStartMap, g, nowMs) {
+  const ms = gameGroupStartMap.get(g.id);
+  return ms != null && ms <= nowMs;
+}
+
+// Path to Victory for one player: are they mathematically alive, what does
+// their own best case look like, and which still-open games do they
+// actually need.
+function computePathToVictory(games, results, players, gameGroupStartMap, targetName) {
+  const target = players.find(p => p.name === targetName);
+  if (!target) return null;
+
+  const nowMs = Date.now();
+  const isFinal = (g) => !!results[g.id]?.winner;
+  const isRevealed = (g) => gameIsRevealed(gameGroupStartMap, g, nowMs);
+
+  const revealedRemaining = games.filter(g => !isFinal(g) && isRevealed(g));
+  const hiddenRemainingCount = games.filter(g => !isFinal(g) && !isRevealed(g)).length;
+
+  // A still-mid-partial-fill player doesn't have a well-defined best case
+  // yet for games that are already revealed but they haven't picked.
+  const incomplete = revealedRemaining.some(g => {
+    const v = target.picks?.[g.id];
+    return !(v === g.home || v === g.away);
+  });
+  if (incomplete) return { target, incomplete: true, hiddenRemainingCount };
+
+  // Hard, provable elimination: nobody's .points can ever go down, so once
+  // your max possible score can't clear a rival's already-locked score, it's
+  // over - no scenario search needed for this part.
+  const ceiling = target.points + revealedRemaining.length;
+  const bestRivalFloor = Math.max(0, ...players.filter(p => p.name !== targetName).map(p => p.points));
+  const eliminated = ceiling < bestRivalFloor;
+
+  const gdGame = games.find(x => x && x.gameday);
+  const gdFinal = gdGame ? isFinal(gdGame) : true;
+  const gdTotalRaw = gdGame ? results[gdGame.id]?.totalPoints : null;
+  const gdTotal = gdFinal && Number.isFinite(+gdTotalRaw) ? +gdTotalRaw : null;
+
+  // Recompute standings under a hypothetical outcome for every
+  // revealedRemaining game (defaulting to the target's own pick, i.e. their
+  // best case) - one real, self-consistent possible future, not a fiction.
+  function scenario(overrides) {
+    const rows = players.map(p => {
+      let pts = p.points;
+      for (const g of revealedRemaining) {
+        const winner = overrides.get(g.id) ?? target.picks[g.id];
+        const pick = p.picks?.[g.id];
+        if (pick && winner && pick === winner) pts++;
+      }
+      return { name: p.name, tb: p.tb, points: pts };
+    }).sort((a, b) => (b.points - a.points) || a.name.localeCompare(b.name));
+    applyWinnerTiebreak(rows, gdGame, gdTotal);
+    return rows;
+  }
+
+  const bestRows = scenario(new Map());
+  const bestTarget = bestRows.find(p => p.name === targetName);
+  const winsBestCase = !!bestTarget?.isWinner;
+
+  // "Games you need": flip just one revealed remaining game away from your
+  // pick (holding the rest at best-case) and see if you fall out of a
+  // winning/tied spot. Cheap - at most a handful of games x field size.
+  const mustWinGames = [];
+  const irrelevantGames = [];
+  if (winsBestCase) {
+    for (const g of revealedRemaining) {
+      const yourPick = target.picks[g.id];
+      const otherTeam = yourPick === g.home ? g.away : g.home;
+      const flippedTarget = scenario(new Map([[g.id, otherTeam]])).find(p => p.name === targetName);
+      (flippedTarget?.isWinner ? irrelevantGames : mustWinGames).push(g);
+    }
+  }
+
+  return {
+    target, incomplete: false, hiddenRemainingCount, eliminated, winsBestCase,
+    bestCasePoints: bestTarget?.points ?? target.points,
+    bestCaseNote: bestTarget?.winNote || null,
+    mustWinGames, irrelevantGames,
+  };
+}
+
+// Head-to-head compare: only games where A and B disagree can ever change
+// the gap between them, so the math reduces to "how many of the k
+// still-open disagreements does each side need" - exact, not a heuristic.
+function compareHeadToHead(games, results, gameGroupStartMap, players, aName, bName) {
+  const A = players.find(p => p.name === aName);
+  const B = players.find(p => p.name === bName);
+  if (!A || !B) return null;
+
+  const nowMs = Date.now();
+  const isFinal = (g) => !!results[g.id]?.winner;
+  const isRevealed = (g) => gameIsRevealed(gameGroupStartMap, g, nowMs);
+  const relevant = games.filter(isRevealed);
+  const hiddenRemainingCount = games.filter(g => !isFinal(g) && !isRevealed(g)).length;
+
+  const agree = [], disagree = [];
+  for (const g of relevant) {
+    const a = A.picks?.[g.id], b = B.picks?.[g.id];
+    if (!a || !b) continue; // one side hasn't picked it yet (mid partial-fill) - leave out of the math
+    (a === b ? agree : disagree).push(g);
+  }
+  const stillOpenDisagree = disagree.filter(g => !isFinal(g));
+  const margin = A.points - B.points; // already reflects decided disagreements
+  const k = stillOpenDisagree.length;
+  const aClinched = margin >= k;
+  const bClinched = margin <= -k;
+  const neededByA = Math.max(0, Math.min(k, Math.ceil((k - margin) / 2)));
+  const neededByB = Math.max(0, Math.min(k, Math.ceil((k + margin) / 2)));
+
+  return { A, B, margin, agree, disagree, stillOpenDisagree, aClinched, bClinched, neededByA, neededByB, hiddenRemainingCount };
 }
 
 // ---------- Import helpers (CFBD + ESPN with CORS fallback) ----------
@@ -2743,6 +2875,12 @@ useEffect(() => {
   // Only true once loadAll() below has computed real standings for the
   // currently selected week - gated behind LoadingGate until this settles.
   const [boardLoaded, setBoardLoaded] = useState(false);
+  // Path to Victory / Compare - name of the player the modal is open for, or
+  // null when closed; compareWith is the second player once "Compare
+  // against" is used inside that same modal.
+  const [ptvFor, setPtvFor] = useState(null);
+  const [compareWith, setCompareWith] = useState(null);
+  const weekAllFinal = games.length > 0 && games.every(g => !!results[g.id]?.winner);
 
   // Computed once and dropped into both of this page's return branches below
   // (the locked/minimal view and the full board) rather than duplicated -
@@ -3611,6 +3749,16 @@ while (i < seq.length) {
                         <span>
                           {p.isWinner && <span title={p.winNote || "Winner"} style={{ marginRight: 6 }}>🏆</span>}
                           {p.name}
+                          {!weekAllFinal && (
+                            <button
+                              type="button"
+                              title="Path to Victory"
+                              onClick={() => { setCompareWith(null); setPtvFor(p.name); }}
+                              style={{ marginLeft:6, background:"transparent", border:"none", padding:0, cursor:"pointer", fontSize:13, verticalAlign:"middle", lineHeight:1 }}
+                            >
+                              🎯
+                            </button>
+                          )}
                           {p.winNote && <div style={{ fontSize: 10, fontWeight: 400, opacity: 0.75, marginTop: 2 }}>{isMobile ? (p.winNoteShort || p.winNote) : p.winNote}</div>}
                         </span>
                       </span>
@@ -3659,6 +3807,118 @@ while (i < seq.length) {
 
 </Card>
       </LoadingGate>
+      {ptvFor && (() => {
+        const ptv = computePathToVictory(games, results, players, gameGroupStartMap, ptvFor);
+        if (!ptv) return null;
+        const cmp = compareWith ? compareHeadToHead(games, results, gameGroupStartMap, players, ptvFor, compareWith) : null;
+        const otherPlayers = players.filter(p => p.name !== ptvFor);
+        const closeModal = () => { setPtvFor(null); setCompareWith(null); };
+        return (
+          <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.6)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:9999, padding:16, boxSizing:"border-box" }}>
+            <div style={{ background:"#121a2b", border:"1px solid #1f2a44", borderRadius:16, padding:16, maxWidth:640, width:"90%", maxHeight:"85vh", boxShadow:"0 10px 24px rgba(0,0,0,.35)", display:"flex", flexDirection:"column" }}>
+              <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexShrink:0, marginBottom:8 }}>
+                <h3 style={{ margin:0 }}>🎯 {ptvFor}</h3>
+                <button type="button" onClick={closeModal} aria-label="Close" style={{ background:"transparent", border:"none", color:"#cfd8f0", cursor:"pointer", fontSize:18, padding:2, lineHeight:1 }}>✕</button>
+              </div>
+              <div style={{ overflowY:"auto", minHeight:0, fontSize:13.5, lineHeight:1.6 }}>
+                {!cmp ? (
+                  <>
+                    {ptv.incomplete ? (
+                      <div>Still filling in picks — check back once they finish this week's slate.</div>
+                    ) : (
+                      <>
+                        <div style={{ marginBottom:10 }}>
+                          <StatusBadge tone={ptv.eliminated ? "danger" : "success"}>
+                            {ptv.eliminated ? "Mathematically eliminated" : "Still alive"}
+                          </StatusBadge>
+                        </div>
+                        {!ptv.eliminated && (
+                          <div style={{ marginBottom:10 }}>
+                            <b>Best case:</b> if every pick below hits, finishes with <b>{ptv.bestCasePoints}</b> points
+                            {ptv.winsBestCase
+                              ? (ptv.bestCaseNote ? <> — {ptv.bestCaseNote.toLowerCase()}</> : <> — <b>wins outright</b></>)
+                              : <> — still not enough to win</>}.
+                          </div>
+                        )}
+                        {ptv.winsBestCase && ptv.mustWinGames.length > 0 && (
+                          <div style={{ marginBottom:10 }}>
+                            <div style={{ fontWeight:600, marginBottom:4 }}>Still need these to go their way:</div>
+                            <ul style={{ margin:0, paddingLeft:18 }}>
+                              {ptv.mustWinGames.map(g => {
+                                const need = ptv.target.picks[g.id];
+                                const other = need === g.home ? g.away : g.home;
+                                const needRank = need === g.home ? g.homeRank : g.awayRank;
+                                const otherRank = need === g.home ? g.awayRank : g.homeRank;
+                                return <li key={g.id}>{teamLabel(need, needRank)} over {teamLabel(other, otherRank)}</li>;
+                              })}
+                            </ul>
+                          </div>
+                        )}
+                        {ptv.winsBestCase && ptv.irrelevantGames.length > 0 && (
+                          <div style={{ opacity:.7, marginBottom:10 }}>
+                            {ptv.irrelevantGames.length} other remaining game{ptv.irrelevantGames.length === 1 ? "" : "s"} won't change this either way.
+                          </div>
+                        )}
+                        {ptv.hiddenRemainingCount > 0 && (
+                          <div style={{ opacity:.7, marginBottom:10 }}>
+                            {ptv.hiddenRemainingCount} more game{ptv.hiddenRemainingCount === 1 ? "" : "s"} later this week {ptv.hiddenRemainingCount === 1 ? "isn't" : "aren't"} revealed yet.
+                          </div>
+                        )}
+                      </>
+                    )}
+                    {otherPlayers.length > 0 && (
+                      <div style={{ marginTop:14, paddingTop:10, borderTop:"1px solid #1f2a44" }}>
+                        <label style={{ fontSize:12, color:"#9aa4c7" }}>Compare against</label>
+                        <select
+                          style={{ ...inputStyle, display:"block", width:"100%", marginTop:4 }}
+                          value=""
+                          onChange={e => e.target.value && setCompareWith(e.target.value)}
+                        >
+                          <option value="">Pick someone…</option>
+                          {otherPlayers.map(p => <option key={p.name} value={p.name}>{p.name}</option>)}
+                        </select>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <button type="button" onClick={() => setCompareWith(null)} style={{ background:"transparent", border:"none", color:"#6aa2ff", cursor:"pointer", fontSize:12, padding:0, marginBottom:10 }}>
+                      &larr; Back
+                    </button>
+                    <div style={{ marginBottom:10 }}>
+                      <b>{cmp.A.name}</b> {cmp.margin === 0 ? "is tied with" : cmp.margin > 0 ? "leads" : "trails"} <b>{cmp.B.name}</b>
+                      {cmp.margin !== 0 && ` by ${Math.abs(cmp.margin)}`} right now ({cmp.A.points}-{cmp.B.points}).
+                    </div>
+                    {cmp.stillOpenDisagree.length === 0 ? (
+                      <div style={{ marginBottom:10 }}>They don't have any different picks left that are still open — this margin is final.</div>
+                    ) : cmp.aClinched ? (
+                      <div style={{ marginBottom:10 }}>{cmp.A.name} already has this locked, regardless of the {cmp.stillOpenDisagree.length} game{cmp.stillOpenDisagree.length === 1 ? "" : "s"} they disagree on.</div>
+                    ) : cmp.bClinched ? (
+                      <div style={{ marginBottom:10 }}>{cmp.B.name} already has this locked, regardless of the {cmp.stillOpenDisagree.length} game{cmp.stillOpenDisagree.length === 1 ? "" : "s"} they disagree on.</div>
+                    ) : (
+                      <div style={{ marginBottom:10 }}>
+                        Of the <b>{cmp.stillOpenDisagree.length}</b> still-open games they disagree on, <b>{cmp.A.name}</b> needs at least <b>{cmp.neededByA}</b> and <b>{cmp.B.name}</b> needs at least <b>{cmp.neededByB}</b> to finish ahead (or tied).
+                      </div>
+                    )}
+                    {cmp.stillOpenDisagree.length > 0 && (
+                      <ul style={{ margin:"0 0 10px", paddingLeft:18 }}>
+                        {cmp.stillOpenDisagree.map(g => (
+                          <li key={g.id}>
+                            {g.away} @ {g.home} — {cmp.A.name.split(" ")[0]}: {teamLabel(cmp.A.picks[g.id], cmp.A.picks[g.id] === g.home ? g.homeRank : g.awayRank)}, {cmp.B.name.split(" ")[0]}: {teamLabel(cmp.B.picks[g.id], cmp.B.picks[g.id] === g.home ? g.homeRank : g.awayRank)}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    <div style={{ opacity:.7 }}>
+                      {cmp.agree.length} other game{cmp.agree.length === 1 ? "" : "s"} they picked the same way{cmp.hiddenRemainingCount > 0 ? `; ${cmp.hiddenRemainingCount} more later this week aren't revealed yet.` : "."}
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </Container>
   );
 }
