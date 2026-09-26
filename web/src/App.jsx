@@ -3858,53 +3858,95 @@ useEffect(() => {
       {chatNotifPopupEl}
       <LoadingGate ready={boardLoaded}>
       <Card>
-        <Row style={{ justifyContent:"space-between", alignItems:"flex-end" }}>
-          <Row style={{ gap:10, alignItems:"center" }}>
-            <h2 style={{ margin: 0 }}>CFB Pick'Ems {weekLabelFor(year, week)}</h2>
-            {winOdds && (
-              <button type="button" style={adminBtn("neutral")} onClick={() => setShowWinOdds(true)}>
-                🎲 Win Odds
-              </button>
-            )}
-          </Row>
-          <Row style={{ gap:8, alignItems:"flex-end" }}>
-            {yearsAvailable.length > 1 && (
-              <Field label="Season">
-                <select value={(year ?? '')} onChange={e => handleYearChange(Number(e.target.value))} style={inputStyle}>
-                  {yearsAvailable.map(y => (
-                    <option key={y} value={y}>{y}</option>
-                  ))}
-                </select>
-              </Field>
-            )}
-            <Field label="Previous weeks">
-              <select
-                value={(week ?? '')}
-                onChange={e => {
-                  // Drop boardLoaded here too, not just inside loadAll() -
-                  // otherwise this render (new week, but still last week's
-                  // games/standings since the data fetch hasn't started yet)
-                  // paints for a frame before the effect kicks off loadAll(),
-                  // which is the flicker of the old week that was reported.
-                  // Batching both updates in the same handler means the very
-                  // next paint goes straight to the Loading screen.
-                  setBoardLoaded(false);
-                  // Also record that the viewer picked a week themselves, so
-                  // the live-week default effect above can't clobber it if
-                  // its own (possibly slow, e.g. mobile) config/live fetch
-                  // is still in flight - see userChangedWeekRef.
-                  userChangedWeekRef.current = true;
-                  setWeek(Number(e.target.value));
-                }}
-                style={inputStyle}
-              >
-                {(weeksForYear.length ? weeksForYear : Array.from({ length: 21 }, (_, i) => i)).map(w => (
-                  <option key={w} value={w}>{weekLabelFor(year, w)}</option>
-                ))}
-              </select>
-            </Field>
-          </Row>
-        </Row>
+        {(() => {
+          // Shared week-select handler (mobile and desktop render separate
+          // <select> elements below, but must not diverge on this logic).
+          const onWeekChange = e => {
+            // Drop boardLoaded here too, not just inside loadAll() -
+            // otherwise this render (new week, but still last week's
+            // games/standings since the data fetch hasn't started yet)
+            // paints for a frame before the effect kicks off loadAll(),
+            // which is the flicker of the old week that was reported.
+            // Batching both updates in the same handler means the very
+            // next paint goes straight to the Loading screen.
+            setBoardLoaded(false);
+            // Also record that the viewer picked a week themselves, so
+            // the live-week default effect above can't clobber it if
+            // its own (possibly slow, e.g. mobile) config/live fetch
+            // is still in flight - see userChangedWeekRef.
+            userChangedWeekRef.current = true;
+            setWeek(Number(e.target.value));
+          };
+          const weekOptions = (weeksForYear.length ? weeksForYear : Array.from({ length: 21 }, (_, i) => i))
+            .map(w => <option key={w} value={w}>{weekLabelFor(year, w)}</option>);
+
+          if (isMobile) {
+            const compactInput = { ...inputStyle, padding:"5px 8px", fontSize:12.5, borderRadius:8 };
+            return (
+              <>
+                <h2 style={{ margin:0, fontSize:17 }}>CFB Pick'Ems {weekLabelFor(year, week)}</h2>
+                <Row style={{ gap:8, alignItems:"flex-end", marginTop:8 }}>
+                  {yearsAvailable.length > 1 && (
+                    <Field label="Season" style={{ fontSize:10.5 }}>
+                      <select value={(year ?? '')} onChange={e => handleYearChange(Number(e.target.value))} style={compactInput}>
+                        {yearsAvailable.map(y => (
+                          <option key={y} value={y}>{y}</option>
+                        ))}
+                      </select>
+                    </Field>
+                  )}
+                  <Field label="Previous weeks" style={{ fontSize:10.5 }}>
+                    <select value={(week ?? '')} onChange={onWeekChange} style={compactInput}>
+                      {weekOptions}
+                    </select>
+                  </Field>
+                </Row>
+                {winOdds && (
+                  <button
+                    type="button"
+                    onClick={() => setShowWinOdds(true)}
+                    style={{
+                      ...adminBtn("primary"),
+                      marginTop:10, width:"100%", padding:"14px 16px", fontSize:17, fontWeight:800,
+                      borderRadius:14, boxShadow:"0 6px 18px rgba(42,79,184,0.45)",
+                    }}
+                  >
+                    🎲 Win Odds
+                  </button>
+                )}
+              </>
+            );
+          }
+
+          return (
+            <Row style={{ justifyContent:"space-between", alignItems:"flex-end" }}>
+              <Row style={{ gap:10, alignItems:"center" }}>
+                <h2 style={{ margin: 0 }}>CFB Pick'Ems {weekLabelFor(year, week)}</h2>
+                {winOdds && (
+                  <button type="button" style={adminBtn("neutral")} onClick={() => setShowWinOdds(true)}>
+                    🎲 Win Odds
+                  </button>
+                )}
+              </Row>
+              <Row style={{ gap:8, alignItems:"flex-end" }}>
+                {yearsAvailable.length > 1 && (
+                  <Field label="Season">
+                    <select value={(year ?? '')} onChange={e => handleYearChange(Number(e.target.value))} style={inputStyle}>
+                      {yearsAvailable.map(y => (
+                        <option key={y} value={y}>{y}</option>
+                      ))}
+                    </select>
+                  </Field>
+                )}
+                <Field label="Previous weeks">
+                  <select value={(week ?? '')} onChange={onWeekChange} style={inputStyle}>
+                    {weekOptions}
+                  </select>
+                </Field>
+              </Row>
+            </Row>
+          );
+        })()}
         {isMobile && (
           <div style={{ fontSize:11, color:"#9aa4c7", margin:"6px 2px 0", textAlign:"center" }}>
             &harr; Swipe the table to see more games
