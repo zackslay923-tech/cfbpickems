@@ -1084,6 +1084,11 @@ function computePathToVictory(games, results, players, gameGroupStartMap, target
     bestCaseGap: !winsBestCase && bestRows[0] ? bestRows[0].points - (bestTarget?.points ?? target.points) : 0,
     remainingGames: revealedRemaining,
     mustWinGames, irrelevantGames,
+    // Exposed so the modal can let someone click through their own custom
+    // "what if this game goes this way instead" scenario and see it update
+    // live, reusing this exact same scoring/tiebreak logic rather than a
+    // second copy of it.
+    scenario,
   };
 }
 
@@ -2588,6 +2593,205 @@ const onSubmitPicks = async function(e){
 }
 
 // -------- LEADERBOARD (sticky first two columns, logos in headers + winners row) --------
+// One team's logo + name inside the Path to Victory "build your own path"
+// explorer - a real component (not redefined per game in a .map()) so each
+// button is a stable, reusable element.
+function PtvTeamButton({ team, rank, active, onClick }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        display:"flex", flexDirection:"column", alignItems:"center", gap:2, flex:1,
+        background: active ? "rgba(106,162,255,0.18)" : "transparent",
+        border: active ? "1px solid #6aa2ff" : "1px solid transparent",
+        borderRadius:8, padding:"5px 4px", cursor:"pointer", color:"inherit",
+      }}
+    >
+      <TeamLogo school={team} size={26} />
+      <span style={{ fontSize:10.5, fontWeight: active ? 700 : 500, textAlign:"center", lineHeight:1.15, maxWidth:92, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+        {teamLabelNoMascot(team, rank)}
+      </span>
+    </button>
+  );
+}
+
+// Path to Victory / Compare modal - a real component (not an inline IIFE)
+// because the "build your own path" explorer needs its own state
+// (whatIf overrides) that has to reset whenever a different player's modal
+// opens, which an IIFE re-run on every render can't hold.
+function PathToVictoryModal({ ptvFor, compareWith, setCompareWith, onClose, games, results, players, gameGroupStartMap, winOdds }) {
+  const ptv = useMemo(
+    () => computePathToVictory(games, results, players, gameGroupStartMap, ptvFor),
+    [games, results, players, gameGroupStartMap, ptvFor]
+  );
+  const cmp = compareWith ? compareHeadToHead(games, results, gameGroupStartMap, players, ptvFor, compareWith) : null;
+  const otherPlayers = players.filter(p => p.name !== ptvFor);
+
+  // Starts at the target's own best case (no overrides = their own pick
+  // wins every remaining game) and lets someone click through individual
+  // games to see the effect on the standings update live.
+  const [whatIf, setWhatIf] = useState(new Map());
+  useEffect(() => { setWhatIf(new Map()); }, [ptvFor]);
+  const hasCustomPicks = whatIf.size > 0;
+  const liveRows = (ptv && !ptv.incomplete) ? ptv.scenario(whatIf) : null;
+  const liveMe = liveRows ? liveRows.find(r => r.name === ptvFor) : null;
+  const liveRank = liveRows ? liveRows.findIndex(r => r.name === ptvFor) + 1 : null;
+
+  if (!ptv) return null;
+
+  return (
+    <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.65)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:9999, padding:16, boxSizing:"border-box" }}>
+      <div style={{ background:"linear-gradient(180deg,#161f38,#101827)", border:"1px solid #2a3655", borderRadius:16, padding:0, maxWidth:680, width:"92%", maxHeight:"88vh", boxShadow:"0 16px 40px rgba(0,0,0,.5)", display:"flex", flexDirection:"column", overflow:"hidden" }}>
+        <div style={{ padding:"16px 16px 12px", background:"linear-gradient(135deg, rgba(106,162,255,0.18), rgba(240,180,41,0.10))", borderBottom:"1px solid #2a3655", flexShrink:0 }}>
+          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+            <h3 style={{ margin:0, fontSize:19, letterSpacing:.3 }}>🎯 {ptvFor}</h3>
+            <button type="button" onClick={onClose} aria-label="Close" style={{ background:"transparent", border:"none", color:"#cfd8f0", cursor:"pointer", fontSize:18, padding:2, lineHeight:1 }}>✕</button>
+          </div>
+        </div>
+        <div style={{ overflowY:"auto", minHeight:0, fontSize:13.5, lineHeight:1.6, padding:16 }}>
+          {!cmp ? (
+            <>
+              {ptv.incomplete ? (
+                <div>Still filling in picks — check back once they finish this week's slate.</div>
+              ) : (
+                <>
+                  <div style={{ display:"flex", gap:8, flexWrap:"wrap", alignItems:"center", marginBottom:10 }}>
+                    <StatusBadge tone={ptv.eliminated ? "danger" : "success"}>
+                      {ptv.eliminated ? "Mathematically eliminated" : "Still alive"}
+                    </StatusBadge>
+                    {(() => {
+                      const pct = winOdds?.odds?.find(o => o.name === ptvFor)?.pct;
+                      return pct != null ? (
+                        <StatusBadge tone="neutral">🎲 ~{pct < 0.1 && pct > 0 ? "<0.1" : pct.toFixed(1)}% to win (simulated)</StatusBadge>
+                      ) : null;
+                    })()}
+                  </div>
+                  <div style={{ marginBottom:14 }}>
+                    Currently <b>#{ptv.currentRank}</b> of {ptv.totalPlayers}{ptv.pointsBack > 0 ? <> — {ptv.pointsBack} point{ptv.pointsBack === 1 ? "" : "s"} back from the lead</> : <> — in the lead</>}.
+                  </div>
+
+                  {!ptv.eliminated && liveMe && (
+                    <div style={{ marginBottom:14, padding:"10px 12px", borderRadius:10, background: liveMe.isWinner ? "rgba(62,207,142,0.12)" : "rgba(240,89,107,0.10)", border: `1px solid ${liveMe.isWinner ? "rgba(62,207,142,0.4)" : "rgba(240,89,107,0.35)"}` }}>
+                      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:6 }}>
+                        <div>
+                          <b>{hasCustomPicks ? "Your scenario:" : "Best case:"}</b> {liveMe.points} points, #{liveRank}
+                          {liveMe.isWinner
+                            ? <> — {liveMe.winNote ? liveMe.winNote.toLowerCase() : <b>wins outright</b>}</>
+                            : <> — {liveRows[0].points - liveMe.points} point{(liveRows[0].points - liveMe.points) === 1 ? "" : "s"} short of {liveRows[0].name}</>}
+                        </div>
+                        {hasCustomPicks && (
+                          <button type="button" onClick={() => setWhatIf(new Map())} style={{ ...adminBtn("neutral"), padding:"4px 10px", fontSize:11.5 }}>
+                            ↺ Reset to best case
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {!ptv.eliminated && liveRows && liveRows.length > 1 && (
+                    <div style={{ marginBottom:14, border:"1px solid #1f2a44", borderRadius:8, overflow:"hidden" }}>
+                      {liveRows.slice(0, 5).map((row, i) => (
+                        <div key={row.name} style={{
+                          display:"flex", justifyContent:"space-between", padding:"5px 8px", fontSize:12.5,
+                          background: row.name === ptvFor ? "rgba(106,162,255,0.15)" : "transparent",
+                          borderTop: i === 0 ? "none" : "1px solid #1f2a44",
+                          fontWeight: row.name === ptvFor ? 700 : 400,
+                        }}>
+                          <span>#{i + 1} {row.isWinner && "🏆"} {row.name}</span>
+                          <span>{row.points}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {ptv.remainingGames.length > 0 && (
+                    <div style={{ marginBottom:10 }}>
+                      <div style={{ fontWeight:600, marginBottom:6 }}>
+                        🔮 Build your own path — tap a team to try it:
+                      </div>
+                      <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                        {ptv.remainingGames.map(g => {
+                          const selected = whatIf.get(g.id) ?? ptv.target.picks[g.id];
+                          const isOverridden = whatIf.has(g.id) && whatIf.get(g.id) !== ptv.target.picks[g.id];
+                          const isMustWin = ptv.mustWinGames.some(m => m.id === g.id);
+                          return (
+                            <div key={g.id} style={{ display:"flex", alignItems:"center", gap:6, padding:"4px 6px", borderRadius:8, background: isOverridden ? "rgba(240,180,41,0.08)" : "transparent" }}>
+                              <PtvTeamButton team={g.away} rank={g.awayRank} active={selected === g.away} onClick={() => setWhatIf(m => { const next = new Map(m); next.set(g.id, g.away); return next; })} />
+                              <span style={{ opacity:.4, fontSize:10 }}>@</span>
+                              <PtvTeamButton team={g.home} rank={g.homeRank} active={selected === g.home} onClick={() => setWhatIf(m => { const next = new Map(m); next.set(g.id, g.home); return next; })} />
+                              {isMustWin && !isOverridden && <span style={{ fontSize:10, color:"#f0596b", marginLeft:4, flexShrink:0 }} title="Needed for their actual best case">🔒</span>}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                  {ptv.hiddenRemainingCount > 0 && (
+                    <div style={{ opacity:.7, marginBottom:10 }}>
+                      {ptv.hiddenRemainingCount} more game{ptv.hiddenRemainingCount === 1 ? "" : "s"} later this week {ptv.hiddenRemainingCount === 1 ? "isn't" : "aren't"} revealed yet.
+                    </div>
+                  )}
+                </>
+              )}
+              {otherPlayers.length > 0 && (
+                <div style={{ marginTop:14, paddingTop:10, borderTop:"1px solid #1f2a44" }}>
+                  <label style={{ fontSize:12, color:"#9aa4c7" }}>Compare against</label>
+                  <select
+                    style={{ ...inputStyle, display:"block", width:"100%", marginTop:4 }}
+                    value=""
+                    onChange={e => e.target.value && setCompareWith(e.target.value)}
+                  >
+                    <option value="">Pick someone…</option>
+                    {otherPlayers.map(p => <option key={p.name} value={p.name}>{p.name}</option>)}
+                  </select>
+                </div>
+              )}
+            </>
+          ) : (
+            <>
+              <button type="button" onClick={() => setCompareWith(null)} style={{ background:"transparent", border:"none", color:"#6aa2ff", cursor:"pointer", fontSize:12, padding:0, marginBottom:10 }}>
+                &larr; Back
+              </button>
+              <div style={{ marginBottom:10 }}>
+                <b>{cmp.A.name}</b> {cmp.margin === 0 ? "is tied with" : cmp.margin > 0 ? "leads" : "trails"} <b>{cmp.B.name}</b>
+                {cmp.margin !== 0 && ` by ${Math.abs(cmp.margin)}`} right now ({cmp.A.points}-{cmp.B.points}).
+              </div>
+              {cmp.stillOpenDisagree.length === 0 ? (
+                <div style={{ marginBottom:10 }}>They don't have any different picks left that are still open — this margin is final.</div>
+              ) : cmp.aClinched ? (
+                <div style={{ marginBottom:10 }}>{cmp.A.name} already has this locked, regardless of the {cmp.stillOpenDisagree.length} game{cmp.stillOpenDisagree.length === 1 ? "" : "s"} they disagree on.</div>
+              ) : cmp.bClinched ? (
+                <div style={{ marginBottom:10 }}>{cmp.B.name} already has this locked, regardless of the {cmp.stillOpenDisagree.length} game{cmp.stillOpenDisagree.length === 1 ? "" : "s"} they disagree on.</div>
+              ) : (
+                <div style={{ marginBottom:10 }}>
+                  Of the <b>{cmp.stillOpenDisagree.length}</b> still-open games they disagree on, <b>{cmp.A.name}</b> needs at least <b>{cmp.neededByA}</b> and <b>{cmp.B.name}</b> needs at least <b>{cmp.neededByB}</b> to finish ahead (or tied).
+                </div>
+              )}
+              {cmp.stillOpenDisagree.length > 0 && (
+                <div style={{ display:"flex", flexDirection:"column", gap:4, marginBottom:10 }}>
+                  {cmp.stillOpenDisagree.map(g => (
+                    <div key={g.id} style={{ display:"flex", alignItems:"center", gap:6, fontSize:12.5 }}>
+                      <TeamLogo school={cmp.A.picks[g.id]} size={20} />
+                      <span style={{ opacity:.85 }}>{cmp.A.name.split(" ")[0]}: {teamLabel(cmp.A.picks[g.id], cmp.A.picks[g.id] === g.home ? g.homeRank : g.awayRank)}</span>
+                      <span style={{ opacity:.4 }}>vs</span>
+                      <TeamLogo school={cmp.B.picks[g.id]} size={20} />
+                      <span style={{ opacity:.85 }}>{cmp.B.name.split(" ")[0]}: {teamLabel(cmp.B.picks[g.id], cmp.B.picks[g.id] === g.home ? g.homeRank : g.awayRank)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div style={{ opacity:.7 }}>
+                {cmp.agree.length} other game{cmp.agree.length === 1 ? "" : "s"} they picked the same way{cmp.hiddenRemainingCount > 0 ? `; ${cmp.hiddenRemainingCount} more later this week aren't revealed yet.` : "."}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function LeaderboardPage({ user, isAdmin, setPage }) {  // DEV: CFBD diagnostics — verify token retrieval/log (no CFBD API calls)
   const isMobile = useIsMobile();
 
@@ -3869,154 +4073,19 @@ while (i < seq.length) {
 
 </Card>
       </LoadingGate>
-      {ptvFor && (() => {
-        const ptv = computePathToVictory(games, results, players, gameGroupStartMap, ptvFor);
-        if (!ptv) return null;
-        const cmp = compareWith ? compareHeadToHead(games, results, gameGroupStartMap, players, ptvFor, compareWith) : null;
-        const otherPlayers = players.filter(p => p.name !== ptvFor);
-        const closeModal = () => { setPtvFor(null); setCompareWith(null); };
-        return (
-          <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.6)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:9999, padding:16, boxSizing:"border-box" }}>
-            <div style={{ background:"#121a2b", border:"1px solid #1f2a44", borderRadius:16, padding:16, maxWidth:640, width:"90%", maxHeight:"85vh", boxShadow:"0 10px 24px rgba(0,0,0,.35)", display:"flex", flexDirection:"column" }}>
-              <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexShrink:0, marginBottom:8 }}>
-                <h3 style={{ margin:0 }}>🎯 {ptvFor}</h3>
-                <button type="button" onClick={closeModal} aria-label="Close" style={{ background:"transparent", border:"none", color:"#cfd8f0", cursor:"pointer", fontSize:18, padding:2, lineHeight:1 }}>✕</button>
-              </div>
-              <div style={{ overflowY:"auto", minHeight:0, fontSize:13.5, lineHeight:1.6 }}>
-                {!cmp ? (
-                  <>
-                    {ptv.incomplete ? (
-                      <div>Still filling in picks — check back once they finish this week's slate.</div>
-                    ) : (
-                      <>
-                        <div style={{ display:"flex", gap:8, flexWrap:"wrap", alignItems:"center", marginBottom:10 }}>
-                          <StatusBadge tone={ptv.eliminated ? "danger" : "success"}>
-                            {ptv.eliminated ? "Mathematically eliminated" : "Still alive"}
-                          </StatusBadge>
-                          {(() => {
-                            const pct = winOdds?.odds?.find(o => o.name === ptvFor)?.pct;
-                            return pct != null ? (
-                              <StatusBadge tone="neutral">
-                                🎲 ~{pct < 0.1 && pct > 0 ? "<0.1" : pct.toFixed(1)}% to win (simulated)
-                              </StatusBadge>
-                            ) : null;
-                          })()}
-                        </div>
-                        <div style={{ marginBottom:10 }}>
-                          Currently <b>#{ptv.currentRank}</b> of {ptv.totalPlayers}{ptv.pointsBack > 0 ? <> — {ptv.pointsBack} point{ptv.pointsBack === 1 ? "" : "s"} back from the lead</> : <> — in the lead</>}.
-                        </div>
-                        {!ptv.eliminated && (
-                          <div style={{ marginBottom:6 }}>
-                            <b>Best case:</b> if every pick below hits, finishes with <b>{ptv.bestCasePoints}</b> points
-                            {ptv.winsBestCase
-                              ? (ptv.bestCaseNote ? <> — {ptv.bestCaseNote.toLowerCase()}</> : <> — <b>wins outright</b></>)
-                              : <> — still short of the lead</>}.
-                          </div>
-                        )}
-                        {!ptv.eliminated && !ptv.winsBestCase && ptv.bestCaseLeader && (
-                          <div style={{ marginBottom:10, opacity:.85 }}>
-                            Even then, <b>{ptv.bestCaseLeader.name}</b> would lead with {ptv.bestCaseLeader.points} — {ptv.bestCaseGap} point{ptv.bestCaseGap === 1 ? "" : "s"} short.
-                          </div>
-                        )}
-                        {!ptv.eliminated && ptv.bestCaseStandings.length > 1 && (
-                          <div style={{ marginBottom:10, border:"1px solid #1f2a44", borderRadius:8, overflow:"hidden" }}>
-                            {ptv.bestCaseStandings.map((row, i) => (
-                              <div key={row.name} style={{
-                                display:"flex", justifyContent:"space-between", padding:"5px 8px", fontSize:12.5,
-                                background: row.name === ptvFor ? "rgba(106,162,255,0.15)" : "transparent",
-                                borderTop: i === 0 ? "none" : "1px solid #1f2a44",
-                                fontWeight: row.name === ptvFor ? 700 : 400,
-                              }}>
-                                <span>#{i + 1} {row.isWinner && "🏆"} {row.name}</span>
-                                <span>{row.points}</span>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                        {ptv.remainingGames.length > 0 && (
-                          <div style={{ marginBottom:10 }}>
-                            <div style={{ fontWeight:600, marginBottom:4 }}>
-                              {ptv.winsBestCase ? "Remaining games:" : "Their remaining picks:"}
-                            </div>
-                            <ul style={{ margin:0, paddingLeft:18 }}>
-                              {ptv.remainingGames.map(g => {
-                                const need = ptv.target.picks[g.id];
-                                const other = need === g.home ? g.away : g.home;
-                                const needRank = need === g.home ? g.homeRank : g.awayRank;
-                                const otherRank = need === g.home ? g.awayRank : g.homeRank;
-                                const isMustWin = ptv.mustWinGames.some(m => m.id === g.id);
-                                return (
-                                  <li key={g.id} style={{ opacity: ptv.winsBestCase && !isMustWin ? 0.55 : 1 }}>
-                                    {teamLabel(need, needRank)} over {teamLabel(other, otherRank)}
-                                    {ptv.winsBestCase && (isMustWin
-                                      ? <span style={{ color:"#f0596b", fontWeight:600 }}> — needs this</span>
-                                      : <span style={{ fontSize:11 }}> — doesn't matter</span>)}
-                                  </li>
-                                );
-                              })}
-                            </ul>
-                          </div>
-                        )}
-                        {ptv.hiddenRemainingCount > 0 && (
-                          <div style={{ opacity:.7, marginBottom:10 }}>
-                            {ptv.hiddenRemainingCount} more game{ptv.hiddenRemainingCount === 1 ? "" : "s"} later this week {ptv.hiddenRemainingCount === 1 ? "isn't" : "aren't"} revealed yet.
-                          </div>
-                        )}
-                      </>
-                    )}
-                    {otherPlayers.length > 0 && (
-                      <div style={{ marginTop:14, paddingTop:10, borderTop:"1px solid #1f2a44" }}>
-                        <label style={{ fontSize:12, color:"#9aa4c7" }}>Compare against</label>
-                        <select
-                          style={{ ...inputStyle, display:"block", width:"100%", marginTop:4 }}
-                          value=""
-                          onChange={e => e.target.value && setCompareWith(e.target.value)}
-                        >
-                          <option value="">Pick someone…</option>
-                          {otherPlayers.map(p => <option key={p.name} value={p.name}>{p.name}</option>)}
-                        </select>
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  <>
-                    <button type="button" onClick={() => setCompareWith(null)} style={{ background:"transparent", border:"none", color:"#6aa2ff", cursor:"pointer", fontSize:12, padding:0, marginBottom:10 }}>
-                      &larr; Back
-                    </button>
-                    <div style={{ marginBottom:10 }}>
-                      <b>{cmp.A.name}</b> {cmp.margin === 0 ? "is tied with" : cmp.margin > 0 ? "leads" : "trails"} <b>{cmp.B.name}</b>
-                      {cmp.margin !== 0 && ` by ${Math.abs(cmp.margin)}`} right now ({cmp.A.points}-{cmp.B.points}).
-                    </div>
-                    {cmp.stillOpenDisagree.length === 0 ? (
-                      <div style={{ marginBottom:10 }}>They don't have any different picks left that are still open — this margin is final.</div>
-                    ) : cmp.aClinched ? (
-                      <div style={{ marginBottom:10 }}>{cmp.A.name} already has this locked, regardless of the {cmp.stillOpenDisagree.length} game{cmp.stillOpenDisagree.length === 1 ? "" : "s"} they disagree on.</div>
-                    ) : cmp.bClinched ? (
-                      <div style={{ marginBottom:10 }}>{cmp.B.name} already has this locked, regardless of the {cmp.stillOpenDisagree.length} game{cmp.stillOpenDisagree.length === 1 ? "" : "s"} they disagree on.</div>
-                    ) : (
-                      <div style={{ marginBottom:10 }}>
-                        Of the <b>{cmp.stillOpenDisagree.length}</b> still-open games they disagree on, <b>{cmp.A.name}</b> needs at least <b>{cmp.neededByA}</b> and <b>{cmp.B.name}</b> needs at least <b>{cmp.neededByB}</b> to finish ahead (or tied).
-                      </div>
-                    )}
-                    {cmp.stillOpenDisagree.length > 0 && (
-                      <ul style={{ margin:"0 0 10px", paddingLeft:18 }}>
-                        {cmp.stillOpenDisagree.map(g => (
-                          <li key={g.id}>
-                            {g.away} @ {g.home} — {cmp.A.name.split(" ")[0]}: {teamLabel(cmp.A.picks[g.id], cmp.A.picks[g.id] === g.home ? g.homeRank : g.awayRank)}, {cmp.B.name.split(" ")[0]}: {teamLabel(cmp.B.picks[g.id], cmp.B.picks[g.id] === g.home ? g.homeRank : g.awayRank)}
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                    <div style={{ opacity:.7 }}>
-                      {cmp.agree.length} other game{cmp.agree.length === 1 ? "" : "s"} they picked the same way{cmp.hiddenRemainingCount > 0 ? `; ${cmp.hiddenRemainingCount} more later this week aren't revealed yet.` : "."}
-                    </div>
-                  </>
-                )}
-              </div>
-            </div>
-          </div>
-        );
-      })()}
+      {ptvFor && (
+        <PathToVictoryModal
+          ptvFor={ptvFor}
+          compareWith={compareWith}
+          setCompareWith={setCompareWith}
+          onClose={() => { setPtvFor(null); setCompareWith(null); }}
+          games={games}
+          results={results}
+          players={players}
+          gameGroupStartMap={gameGroupStartMap}
+          winOdds={winOdds}
+        />
+      )}
       {showWinOdds && winOdds && (
         <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.65)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:9999, padding:16, boxSizing:"border-box" }}>
           <div style={{ background:"linear-gradient(180deg,#161f38,#101827)", border:"1px solid #2a3655", borderRadius:16, padding:0, maxWidth:480, width:"90%", maxHeight:"85vh", boxShadow:"0 16px 40px rgba(0,0,0,.5)", display:"flex", flexDirection:"column", overflow:"hidden" }}>
