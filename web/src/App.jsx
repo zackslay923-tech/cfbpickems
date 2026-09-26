@@ -1210,8 +1210,22 @@ function homeWinProbFor(g) {
   return spreadToHomeWinProb(g?.spread);
 }
 
-// Compact "Spread · ML · O/U" label for a game, from whatever odds fields
-// are currently synced onto it - null if nothing's been synced at all.
+// When a game's odds were last synced, formatted the same way as the
+// leaderboard's own "Last updated" clock - lets someone looking at Build
+// Your Own Path judge for themselves how fresh (or stale/pregame-only) a
+// given number is, instead of just taking it on faith.
+function formatOddsSyncTime(ts) {
+  if (!ts) return null;
+  try {
+    const d = typeof ts?.toDate === "function" ? ts.toDate() : (ts?.seconds != null ? new Date(ts.seconds * 1000) : new Date(ts));
+    if (isNaN(+d)) return null;
+    return new Intl.DateTimeFormat("en-US", { hour:"numeric", minute:"2-digit", hour12:true, timeZone:"America/New_York" }).format(d);
+  } catch { return null; }
+}
+
+// Compact "Spread · ML · O/U · synced H:MM" label for a game, from whatever
+// odds fields are currently synced onto it - null if nothing's been synced
+// at all.
 function formatGameOdds(g) {
   const parts = [];
   if (g?.formattedSpread) parts.push(g.formattedSpread);
@@ -1222,7 +1236,10 @@ function formatGameOdds(g) {
     parts.push(`ML ${fmt(mlAway)}/${fmt(mlHome)}`);
   }
   if (Number.isFinite(+g?.overUnder)) parts.push(`O/U ${+g.overUnder}`);
-  return parts.length ? parts.join(" · ") : null;
+  if (!parts.length) return null;
+  const syncTime = formatOddsSyncTime(g?.oddsUpdatedAt);
+  if (syncTime) parts.push(`synced ${syncTime}`);
+  return parts.join(" · ");
 }
 
 // Standard-normal sample via Box-Muller, used below to project the GameDay
