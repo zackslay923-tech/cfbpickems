@@ -4364,6 +4364,15 @@ while (i < seq.length) {
                   const widthPct = maxPct > 0 ? Math.max(4, (o.pct / maxPct) * 100) : 0;
                   const medal = i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : null;
                   const barColor = i === 0 ? "240,180,41" : i === 1 ? "203,213,225" : i === 2 ? "205,127,50" : "106,162,255";
+                  const isElim = eliminatedNames.has(o.name);
+                  // A simulated 0.0% for someone who isn't actually
+                  // eliminated just means they never happened to win in any
+                  // trial, not that it's provably impossible (that's what
+                  // "Out" is for) - "<0.0%" makes that distinction visible
+                  // instead of looking identical to a hard elimination.
+                  const pctLabel = o.pct <= 0
+                    ? (isElim ? "0.0" : "<0.0")
+                    : (o.pct < 0.1 ? "<0.1" : o.pct.toFixed(1));
                   return (
                     <div
                       key={o.name}
@@ -4383,13 +4392,13 @@ while (i < seq.length) {
                         <span style={{ display:"flex", alignItems:"center", gap:6, flexShrink:0, marginLeft:8 }}>
                           <span style={{
                             fontSize:9.5, fontWeight:700, padding:"2px 6px", borderRadius:999, whiteSpace:"nowrap",
-                            background: eliminatedNames.has(o.name) ? "rgba(240,89,107,0.18)" : "rgba(62,207,142,0.18)",
-                            color: eliminatedNames.has(o.name) ? "#f0596b" : "#3ecf8e",
-                            border: `1px solid ${eliminatedNames.has(o.name) ? "rgba(240,89,107,0.45)" : "rgba(62,207,142,0.45)"}`,
+                            background: isElim ? "rgba(240,89,107,0.18)" : "rgba(62,207,142,0.18)",
+                            color: isElim ? "#f0596b" : "#3ecf8e",
+                            border: `1px solid ${isElim ? "rgba(240,89,107,0.45)" : "rgba(62,207,142,0.45)"}`,
                           }}>
-                            {eliminatedNames.has(o.name) ? "Out" : "Alive"}
+                            {isElim ? "Out" : "Alive"}
                           </span>
-                          <span style={{ fontWeight:800 }}>{o.pct < 0.1 && o.pct > 0 ? "<0.1" : o.pct.toFixed(1)}%</span>
+                          <span style={{ fontWeight:800 }}>{pctLabel}%</span>
                         </span>
                       </div>
                     </div>
