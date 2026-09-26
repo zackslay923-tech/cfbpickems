@@ -4824,6 +4824,25 @@ function ChatThreadBody({ deviceId, identity, isAdmin, fillHeight }) {
     } catch (e) { alert(e?.message || "Couldn't delete."); }
   };
 
+  // A touch-originated click's `.detail` never climbs past 1 on iOS Safari
+  // (unlike a real mouse), so the old `e.detail === 3` check for the
+  // triple-click-to-delete gesture silently never fired on iPhone - count
+  // rapid taps ourselves by wall-clock time instead, which works the same
+  // for touch and mouse everywhere.
+  const deleteTapRef = useRef({ id: null, count: 0, lastTime: 0 });
+  const handleAdminDeleteTap = (id) => {
+    if (!isAdmin) return;
+    const now = Date.now();
+    const t = deleteTapRef.current;
+    if (t.id === id && now - t.lastTime < 600) t.count++;
+    else { t.id = id; t.count = 1; }
+    t.lastTime = now;
+    if (t.count >= 3) {
+      t.count = 0;
+      remove(id);
+    }
+  };
+
   // Reactions key off name (not deviceId), same reasoning as "mine" above -
   // reacting from your phone should show as already-reacted on your
   // computer too. Uses arrayUnion/arrayRemove (not a read-modify-write) so
@@ -4879,8 +4898,8 @@ function ChatThreadBody({ deviceId, identity, isAdmin, fillHeight }) {
             return (
               <div key={m.id} style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 6, margin: "10px 0" }}>
                 <div
-                  onClick={e => { if (isAdmin && e.detail === 3) remove(m.id); }}
-                  title={isAdmin ? "Triple-click to delete" : undefined}
+                  onClick={() => handleAdminDeleteTap(m.id)}
+                  title={isAdmin ? "Triple-click/tap to delete" : undefined}
                   style={{
                     display: "flex", alignItems: "center", gap: 8, background: "#141a30", border: "1px solid #2a3655",
                     borderRadius: 14, padding: "8px 14px",
@@ -4903,8 +4922,8 @@ function ChatThreadBody({ deviceId, identity, isAdmin, fillHeight }) {
             return (
               <div key={m.id} style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 6, margin: "10px 0" }}>
                 <div
-                  onClick={e => { if (isAdmin && e.detail === 3) remove(m.id); }}
-                  title={isAdmin ? "Triple-click to delete" : undefined}
+                  onClick={() => handleAdminDeleteTap(m.id)}
+                  title={isAdmin ? "Triple-click/tap to delete" : undefined}
                   style={{
                     background: "#141a30", border: "1px solid #2a3655", color: "#9aa4c7",
                     fontSize: 11.5, fontWeight: 600, padding: "5px 12px", borderRadius: 999, textAlign: "center",
@@ -4940,8 +4959,8 @@ function ChatThreadBody({ deviceId, identity, isAdmin, fillHeight }) {
                 <div style={{ display: "flex", alignItems: "flex-end", gap: 6, marginBottom: totalReactions > 0 ? 10 : 0 }}>
                   <div style={{ position: "relative" }}>
                     <div
-                      onClick={e => { if (isAdmin && e.detail === 3) remove(m.id); }}
-                      title={isAdmin ? "Triple-click to delete" : undefined}
+                      onClick={() => handleAdminDeleteTap(m.id)}
+                      title={isAdmin ? "Triple-click/tap to delete" : undefined}
                       style={{
                         background: m.mine ? "#2a4fb8" : "#1c2544",
                         color: "#fff",
