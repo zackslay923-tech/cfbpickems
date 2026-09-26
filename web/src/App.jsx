@@ -1030,6 +1030,10 @@ function computePathToVictory(games, results, players, gameGroupStartMap, target
   const bestRivalFloor = Math.max(0, ...players.filter(p => p.name !== targetName).map(p => p.points));
   const eliminated = ceiling < bestRivalFloor;
 
+  const sortedNow = [...players].sort((a, b) => b.points - a.points || a.name.localeCompare(b.name));
+  const currentRank = sortedNow.findIndex(p => p.name === targetName) + 1;
+  const pointsBack = Math.max(0, (sortedNow[0]?.points ?? target.points) - target.points);
+
   const gdGame = games.find(x => x && x.gameday);
   const gdFinal = gdGame ? isFinal(gdGame) : true;
   const gdTotalRaw = gdGame ? results[gdGame.id]?.totalPoints : null;
@@ -1072,8 +1076,13 @@ function computePathToVictory(games, results, players, gameGroupStartMap, target
 
   return {
     target, incomplete: false, hiddenRemainingCount, eliminated, winsBestCase,
+    currentRank, totalPlayers: players.length, pointsBack,
     bestCasePoints: bestTarget?.points ?? target.points,
     bestCaseNote: bestTarget?.winNote || null,
+    bestCaseStandings: bestRows.slice(0, 5),
+    bestCaseLeader: !winsBestCase ? bestRows[0] : null,
+    bestCaseGap: !winsBestCase && bestRows[0] ? bestRows[0].points - (bestTarget?.points ?? target.points) : 0,
+    remainingGames: revealedRemaining,
     mustWinGames, irrelevantGames,
   };
 }
@@ -1107,6 +1116,44 @@ function compareHeadToHead(games, results, gameGroupStartMap, players, aName, bN
   const neededByB = Math.max(0, Math.min(k, Math.ceil((k + margin) / 2)));
 
   return { A, B, margin, agree, disagree, stillOpenDisagree, aClinched, bClinched, neededByA, neededByB, hiddenRemainingCount };
+}
+
+// Whole-field "chance to win the pot" - there's no real odds/spread data
+// anywhere in this app, so this is a Monte Carlo estimate that treats every
+// still-open, revealed game as a 50/50 coin flip, not a Vegas-accurate
+// prediction. Each trial picks a random winner for every such game, scores
+// everyone, and splits credit evenly across however many players tie for
+// the lead in that trial (mirrors the real pot-split rule - there's no
+// model here for the GameDay tiebreaker score itself). Percentages are an
+// estimate, not exact math like Path to Victory/Compare above.
+function computeFieldWinProbabilities(games, results, players, gameGroupStartMap, trials = 8000) {
+  const nowMs = Date.now();
+  const isFinal = (g) => !!results[g.id]?.winner;
+  const isRevealed = (g) => gameIsRevealed(gameGroupStartMap, g, nowMs);
+  const revealedRemaining = games.filter(g => !isFinal(g) && isRevealed(g));
+  const hiddenRemainingCount = games.filter(g => !isFinal(g) && !isRevealed(g)).length;
+
+  const credit = new Map(players.map(p => [p.name, 0]));
+  for (let t = 0; t < trials; t++) {
+    const winners = new Map();
+    for (const g of revealedRemaining) winners.set(g.id, Math.random() < 0.5 ? g.home : g.away);
+    let top = -Infinity;
+    const scores = players.map(p => {
+      let pts = p.points;
+      for (const g of revealedRemaining) {
+        if (p.picks?.[g.id] && p.picks[g.id] === winners.get(g.id)) pts++;
+      }
+      if (pts > top) top = pts;
+      return { name: p.name, pts };
+    });
+    const leaders = scores.filter(s => s.pts === top);
+    const share = 1 / leaders.length;
+    for (const l of leaders) credit.set(l.name, credit.get(l.name) + share);
+  }
+  const results_ = players
+    .map(p => ({ name: p.name, pct: (credit.get(p.name) / trials) * 100 }))
+    .sort((a, b) => b.pct - a.pct || a.name.localeCompare(b.name));
+  return { odds: results_, hiddenRemainingCount };
 }
 
 // ---------- Import helpers (CFBD + ESPN with CORS fallback) ----------
@@ -2881,6 +2928,22 @@ useEffect(() => {
   const [ptvFor, setPtvFor] = useState(null);
   const [compareWith, setCompareWith] = useState(null);
   const weekAllFinal = games.length > 0 && games.every(g => !!results[g.id]?.winner);
+  // Admin off-switch for Path to Victory / Compare / Win Odds (config/app.pathToVictoryDisabled) -
+  // admins still see all three regardless, so they can check the toggle actually works. Declared
+  // here (ahead of its own onSnapshot subscription further down) so ptvEnabled below - and
+  // everything derived from it - doesn't read it before it's initialized.
+  const [pathToVictoryDisabled, setPathToVictoryDisabled] = useState(false);
+  // Admins always see Path to Victory / Compare / Win Odds, so the toggle
+  // itself is checkable without switching accounts.
+  const ptvEnabled = isAdmin || !pathToVictoryDisabled;
+  // Whole-field win-odds pop-up - only recomputed when the underlying data
+  // actually changes (not on every click/render), since it's a randomized
+  // simulation and re-running it on every paint would make the numbers jitter.
+  const [showWinOdds, setShowWinOdds] = useState(false);
+  const winOdds = useMemo(
+    () => (weekAllFinal || !players.length || !ptvEnabled ? null : computeFieldWinProbabilities(games, results, players, gameGroupStartMap)),
+    [games, results, players, gameGroupStartMap, weekAllFinal, ptvEnabled]
+  );
 
   // Computed once and dropped into both of this page's return branches below
   // (the locked/minimal view and the full board) rather than duplicated -
@@ -2925,11 +2988,13 @@ useEffect(() => {
   const loadAllSeqRef = useRef(0);
   // Pickems Coach: public picks flag (read-only)
   const [lbPicksPublic, setLbPicksPublic] = useState(null);
-  
+
   const [cfgLoaded, setCfgLoaded] = useState(false);useEffect(() => {
     const unsub = onSnapshot(doc(db, "config", "app"), (s) => {
       const d = s?.data?.() || {};
-      setLbPicksPublic(!!d.leaderboardPicksPublic); setCfgLoaded(true);
+      setLbPicksPublic(!!d.leaderboardPicksPublic);
+      setPathToVictoryDisabled(!!d.pathToVictoryDisabled);
+      setCfgLoaded(true);
     });
     return () => unsub();
   }, []);// [{name,email,points,picks:{gameId:choice}}]
@@ -3466,7 +3531,14 @@ useEffect(() => {
       <LoadingGate ready={boardLoaded}>
       <Card>
         <Row style={{ justifyContent:"space-between", alignItems:"flex-end" }}>
-          <h2 style={{ margin: 0 }}>CFB Pick'Ems {weekLabelFor(year, week)}</h2>
+          <Row style={{ gap:10, alignItems:"center" }}>
+            <h2 style={{ margin: 0 }}>CFB Pick'Ems {weekLabelFor(year, week)}</h2>
+            {winOdds && (
+              <button type="button" style={adminBtn("neutral")} onClick={() => setShowWinOdds(true)}>
+                🎲 Win Odds
+              </button>
+            )}
+          </Row>
           <Row style={{ gap:8, alignItems:"flex-end" }}>
             {yearsAvailable.length > 1 && (
               <Field label="Season">
@@ -3749,7 +3821,7 @@ while (i < seq.length) {
                         <span>
                           {p.isWinner && <span title={p.winNote || "Winner"} style={{ marginRight: 6 }}>🏆</span>}
                           {p.name}
-                          {!weekAllFinal && (
+                          {!weekAllFinal && ptvEnabled && (
                             <button
                               type="button"
                               title="Path to Victory"
@@ -3827,36 +3899,72 @@ while (i < seq.length) {
                       <div>Still filling in picks — check back once they finish this week's slate.</div>
                     ) : (
                       <>
-                        <div style={{ marginBottom:10 }}>
+                        <div style={{ display:"flex", gap:8, flexWrap:"wrap", alignItems:"center", marginBottom:10 }}>
                           <StatusBadge tone={ptv.eliminated ? "danger" : "success"}>
                             {ptv.eliminated ? "Mathematically eliminated" : "Still alive"}
                           </StatusBadge>
+                          {(() => {
+                            const pct = winOdds?.odds?.find(o => o.name === ptvFor)?.pct;
+                            return pct != null ? (
+                              <StatusBadge tone="neutral">
+                                🎲 ~{pct < 0.1 && pct > 0 ? "<0.1" : pct.toFixed(1)}% to win (simulated)
+                              </StatusBadge>
+                            ) : null;
+                          })()}
+                        </div>
+                        <div style={{ marginBottom:10 }}>
+                          Currently <b>#{ptv.currentRank}</b> of {ptv.totalPlayers}{ptv.pointsBack > 0 ? <> — {ptv.pointsBack} point{ptv.pointsBack === 1 ? "" : "s"} back from the lead</> : <> — in the lead</>}.
                         </div>
                         {!ptv.eliminated && (
-                          <div style={{ marginBottom:10 }}>
+                          <div style={{ marginBottom:6 }}>
                             <b>Best case:</b> if every pick below hits, finishes with <b>{ptv.bestCasePoints}</b> points
                             {ptv.winsBestCase
                               ? (ptv.bestCaseNote ? <> — {ptv.bestCaseNote.toLowerCase()}</> : <> — <b>wins outright</b></>)
-                              : <> — still not enough to win</>}.
+                              : <> — still short of the lead</>}.
                           </div>
                         )}
-                        {ptv.winsBestCase && ptv.mustWinGames.length > 0 && (
+                        {!ptv.eliminated && !ptv.winsBestCase && ptv.bestCaseLeader && (
+                          <div style={{ marginBottom:10, opacity:.85 }}>
+                            Even then, <b>{ptv.bestCaseLeader.name}</b> would lead with {ptv.bestCaseLeader.points} — {ptv.bestCaseGap} point{ptv.bestCaseGap === 1 ? "" : "s"} short.
+                          </div>
+                        )}
+                        {!ptv.eliminated && ptv.bestCaseStandings.length > 1 && (
+                          <div style={{ marginBottom:10, border:"1px solid #1f2a44", borderRadius:8, overflow:"hidden" }}>
+                            {ptv.bestCaseStandings.map((row, i) => (
+                              <div key={row.name} style={{
+                                display:"flex", justifyContent:"space-between", padding:"5px 8px", fontSize:12.5,
+                                background: row.name === ptvFor ? "rgba(106,162,255,0.15)" : "transparent",
+                                borderTop: i === 0 ? "none" : "1px solid #1f2a44",
+                                fontWeight: row.name === ptvFor ? 700 : 400,
+                              }}>
+                                <span>#{i + 1} {row.isWinner && "🏆"} {row.name}</span>
+                                <span>{row.points}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {ptv.remainingGames.length > 0 && (
                           <div style={{ marginBottom:10 }}>
-                            <div style={{ fontWeight:600, marginBottom:4 }}>Still need these to go their way:</div>
+                            <div style={{ fontWeight:600, marginBottom:4 }}>
+                              {ptv.winsBestCase ? "Remaining games:" : "Their remaining picks:"}
+                            </div>
                             <ul style={{ margin:0, paddingLeft:18 }}>
-                              {ptv.mustWinGames.map(g => {
+                              {ptv.remainingGames.map(g => {
                                 const need = ptv.target.picks[g.id];
                                 const other = need === g.home ? g.away : g.home;
                                 const needRank = need === g.home ? g.homeRank : g.awayRank;
                                 const otherRank = need === g.home ? g.awayRank : g.homeRank;
-                                return <li key={g.id}>{teamLabel(need, needRank)} over {teamLabel(other, otherRank)}</li>;
+                                const isMustWin = ptv.mustWinGames.some(m => m.id === g.id);
+                                return (
+                                  <li key={g.id} style={{ opacity: ptv.winsBestCase && !isMustWin ? 0.55 : 1 }}>
+                                    {teamLabel(need, needRank)} over {teamLabel(other, otherRank)}
+                                    {ptv.winsBestCase && (isMustWin
+                                      ? <span style={{ color:"#f0596b", fontWeight:600 }}> — needs this</span>
+                                      : <span style={{ fontSize:11 }}> — doesn't matter</span>)}
+                                  </li>
+                                );
                               })}
                             </ul>
-                          </div>
-                        )}
-                        {ptv.winsBestCase && ptv.irrelevantGames.length > 0 && (
-                          <div style={{ opacity:.7, marginBottom:10 }}>
-                            {ptv.irrelevantGames.length} other remaining game{ptv.irrelevantGames.length === 1 ? "" : "s"} won't change this either way.
                           </div>
                         )}
                         {ptv.hiddenRemainingCount > 0 && (
@@ -3919,6 +4027,44 @@ while (i < seq.length) {
           </div>
         );
       })()}
+      {showWinOdds && winOdds && (
+        <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.65)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:9999, padding:16, boxSizing:"border-box" }}>
+          <div style={{ background:"linear-gradient(180deg,#161f38,#101827)", border:"1px solid #2a3655", borderRadius:16, padding:0, maxWidth:480, width:"90%", maxHeight:"85vh", boxShadow:"0 16px 40px rgba(0,0,0,.5)", display:"flex", flexDirection:"column", overflow:"hidden" }}>
+            <div style={{ padding:"16px 16px 12px", background:"linear-gradient(135deg, rgba(240,180,41,0.18), rgba(106,162,255,0.10))", borderBottom:"1px solid #2a3655", flexShrink:0 }}>
+              <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+                <h3 style={{ margin:0, fontSize:19, letterSpacing:.3 }}>🎲 Win Odds</h3>
+                <button type="button" onClick={() => setShowWinOdds(false)} aria-label="Close" style={{ background:"transparent", border:"none", color:"#cfd8f0", cursor:"pointer", fontSize:18, padding:2, lineHeight:1 }}>✕</button>
+              </div>
+              <p style={{ margin:"6px 0 0", fontSize:11.5, color:"#9aa4c7", lineHeight:1.5 }}>
+                Simulated assuming every remaining game is a coin flip — not real odds, not a prediction. Ties split the odds evenly.
+                {winOdds.hiddenRemainingCount > 0 && ` ${winOdds.hiddenRemainingCount} game${winOdds.hiddenRemainingCount === 1 ? "" : "s"} later this week aren't revealed yet.`}
+              </p>
+            </div>
+            <div style={{ overflowY:"auto", minHeight:0, padding:12 }}>
+              {(() => {
+                const maxPct = winOdds.odds[0]?.pct || 1;
+                return winOdds.odds.map((o, i) => {
+                  const widthPct = maxPct > 0 ? Math.max(4, (o.pct / maxPct) * 100) : 0;
+                  const medal = i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : null;
+                  const barColor = i === 0 ? "240,180,41" : i === 1 ? "203,213,225" : i === 2 ? "205,127,50" : "106,162,255";
+                  return (
+                    <div key={o.name} style={{ position:"relative", padding:"8px 10px", marginBottom:6, borderRadius:9, overflow:"hidden", background:"#0e1730", border:"1px solid #1f2a44" }}>
+                      <div style={{ position:"absolute", inset:0, width:`${widthPct}%`, background:`linear-gradient(90deg, rgba(${barColor},0.32), rgba(${barColor},0.06))`, transition:"width 400ms ease" }} />
+                      <div style={{ position:"relative", display:"flex", justifyContent:"space-between", alignItems:"center", fontSize:13.5 }}>
+                        <span style={{ display:"flex", alignItems:"center", gap:6, minWidth:0 }}>
+                          {medal ? <span style={{ fontSize:15 }}>{medal}</span> : <span style={{ opacity:.5, fontSize:11, width:16, textAlign:"right" }}>{i + 1}</span>}
+                          <span style={{ fontWeight: i < 3 ? 700 : 500, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{o.name}</span>
+                        </span>
+                        <span style={{ fontWeight:800, flexShrink:0, marginLeft:8 }}>{o.pct < 0.1 && o.pct > 0 ? "<0.1" : o.pct.toFixed(1)}%</span>
+                      </div>
+                    </div>
+                  );
+                });
+              })()}
+            </div>
+          </div>
+        </div>
+      )}
     </Container>
   );
 }
@@ -7764,7 +7910,7 @@ function AdminPage({ user, isAdmin, setPage }) {
   const [weeksForYear, setWeeksForYear] = useState([]);
   const [apiKey, setApiKey] = useState("");
   const [showApiKey, setShowApiKey] = useState(false);
-  const [appCfg, setAppCfg] = useState({ leaderboardLocked: false, leaderboardPicksPublic: false, picksLocked: false, potHidden: false });
+  const [appCfg, setAppCfg] = useState({ leaderboardLocked: false, leaderboardPicksPublic: false, picksLocked: false, potHidden: false, pathToVictoryDisabled: false });
   const pot = useMemo(() => (pickCount * 5), [pickCount]);
 
   // Subscribe to config/live (drives the "Current Week" display and Sync GameDay)
@@ -7861,6 +8007,7 @@ function AdminPage({ user, isAdmin, setPage }) {
         leaderboardPicksPublic: !!d.leaderboardPicksPublic,
         picksLocked: !!d.picksLocked,
         potHidden: !!d.potHidden,
+        pathToVictoryDisabled: !!d.pathToVictoryDisabled,
         scoreboard: { ...defSb, ...(d.scoreboard || {}) }
       });
     });
@@ -7871,6 +8018,15 @@ function AdminPage({ user, isAdmin, setPage }) {
     try {
       await setDoc(doc(db, "config", "app"), { potHidden: !appCfg.potHidden, updatedAt: serverTimestamp() }, { merge: true });
       setMsg(`Pot ${appCfg.potHidden ? "shown" : "hidden"} for everyone but admins.`);
+    } catch (e) {
+      setMsg("Failed to save: " + (e?.message || String(e)));
+    }
+  };
+
+  const togglePathToVictory = async () => {
+    try {
+      await setDoc(doc(db, "config", "app"), { pathToVictoryDisabled: !appCfg.pathToVictoryDisabled, updatedAt: serverTimestamp() }, { merge: true });
+      setMsg(`Path to Victory turned ${appCfg.pathToVictoryDisabled ? "ON" : "OFF"}.`);
     } catch (e) {
       setMsg("Failed to save: " + (e?.message || String(e)));
     }
@@ -8319,6 +8475,12 @@ await setDoc(doc(db,"config","app"), { currentYear: year, currentWeek: week, upd
             description="Turn off to hide the pot amount from everyone except admins."
             checked={!appCfg.potHidden}
             onChange={togglePotHidden}
+          />
+          <AdminToggleRow
+            label="Path to Victory"
+            description="The 🎯 button, Compare, and Win Odds on the leaderboard. Turn off to hide all three from everyone but admins."
+            checked={!appCfg.pathToVictoryDisabled}
+            onChange={togglePathToVictory}
           />
         </AdminSection>
 
