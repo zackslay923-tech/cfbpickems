@@ -3020,17 +3020,10 @@ function PathToVictoryModal({ ptvFor, compareWith, setCompareWith, onClose, game
                     const loser = winner === eliminationGame.home ? eliminationGame.away : eliminationGame.home;
                     const winnerPts = winner === eliminationGame.home ? r?.homePoints : r?.awayPoints;
                     const loserPts = winner === eliminationGame.home ? r?.awayPoints : r?.homePoints;
-                    const dateLabel = (() => {
-                      try {
-                        const d = new Date(eliminationGame.startTimeStr);
-                        return isNaN(+d) ? null : new Intl.DateTimeFormat("en-US", { weekday:"short", month:"numeric", day:"numeric", timeZone:"America/New_York" }).format(d);
-                      } catch { return null; }
-                    })();
                     return (
                       <div style={{ marginBottom:14, fontSize:12.5, color:"#9aa4c7" }}>
                         Eliminated when <b style={{ color:"#cfd8f0" }}>{winner}</b> beat {loser}
-                        {Number.isFinite(winnerPts) && Number.isFinite(loserPts) ? ` ${winnerPts}-${loserPts}` : ""}
-                        {dateLabel ? ` (${dateLabel})` : ""}.
+                        {Number.isFinite(winnerPts) && Number.isFinite(loserPts) ? ` ${winnerPts}-${loserPts}` : ""}.
                       </div>
                     );
                   })()}
