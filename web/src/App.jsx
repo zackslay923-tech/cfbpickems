@@ -2949,7 +2949,7 @@ function PathToVictoryModal({ ptvFor, compareWith, setCompareWith, onClose, game
           </div>
           {!cmp && !ptv.incomplete && (
             <p style={{ margin:"6px 0 0", fontSize:11.5, color:"#9aa4c7", lineHeight:1.5 }}>
-              🔒 next to a game below means it's a must-win for {ptvFor}'s best-case path — flipping it away from their real pick knocks them out of first (or a tie).
+              🔒 = must-win for {ptvFor}'s best case.
             </p>
           )}
         </div>
@@ -2957,7 +2957,7 @@ function PathToVictoryModal({ ptvFor, compareWith, setCompareWith, onClose, game
           {!cmp ? (
             <>
               {ptv.incomplete ? (
-                <div>Still filling in picks — check back once they finish this week's slate.</div>
+                <div>Still filling in picks.</div>
               ) : (
                 <>
                   <div style={{ display:"flex", gap:8, flexWrap:"wrap", alignItems:"center", marginBottom:10 }}>
@@ -3049,7 +3049,7 @@ function PathToVictoryModal({ ptvFor, compareWith, setCompareWith, onClose, game
                   )}
                   {ptv.hiddenRemainingCount > 0 && (
                     <div style={{ opacity:.7, marginBottom:10 }}>
-                      {ptv.hiddenRemainingCount} more game{ptv.hiddenRemainingCount === 1 ? "" : "s"} later this week {ptv.hiddenRemainingCount === 1 ? "isn't" : "aren't"} revealed yet.
+                      +{ptv.hiddenRemainingCount} game{ptv.hiddenRemainingCount === 1 ? "" : "s"} not revealed yet.
                     </div>
                   )}
                 </>
@@ -3099,8 +3099,8 @@ function PathToVictoryModal({ ptvFor, compareWith, setCompareWith, onClose, game
                 &larr; Back
               </button>
               <div style={{ marginBottom:10, fontSize:12.5 }}>
-                Showing the <b>{cmp.rows.length}</b> game{cmp.rows.length === 1 ? "" : "s"} where these {cmp.selected.length} don't all agree
-                {cmp.hiddenRemainingCount > 0 ? ` (${cmp.hiddenRemainingCount} more later this week aren't revealed yet)` : ""}.
+                <b>{cmp.rows.length}</b> game{cmp.rows.length === 1 ? "" : "s"} where they disagree
+                {cmp.hiddenRemainingCount > 0 ? ` (${cmp.hiddenRemainingCount} not revealed yet)` : ""}.
               </div>
               {cmp.rows.length === 0 ? (
                 <div style={{ opacity:.7 }}>Every revealed pick lines up the same way for this group.</div>
@@ -4524,8 +4524,8 @@ while (i < seq.length) {
                 <button type="button" onClick={() => setShowWinOdds(false)} aria-label="Close" style={{ background:"transparent", border:"none", color:"#cfd8f0", cursor:"pointer", fontSize:18, padding:2, lineHeight:1 }}>✕</button>
               </div>
               <p style={{ margin:"6px 0 0", fontSize:11.5, color:"#9aa4c7", lineHeight:1.5 }}>
-                Simulated from pregame odds, switching to ESPN's own live win-probability model (or our own score/clock-based estimate if that's not ready yet) once a game kicks off — an estimate, not a prediction. A tie for 1st is resolved by the GameDay tiebreaker, same as the real pot.
-                {winOdds.hiddenRemainingCount > 0 && ` ${winOdds.hiddenRemainingCount} game${winOdds.hiddenRemainingCount === 1 ? "" : "s"} later this week aren't revealed yet.`}
+                Simulated odds, live once games kick off. Ties go to the GameDay tiebreaker.
+                {winOdds.hiddenRemainingCount > 0 && ` +${winOdds.hiddenRemainingCount} game${winOdds.hiddenRemainingCount === 1 ? "" : "s"} not revealed yet.`}
               </p>
             </div>
             <div style={{ overflowY:"auto", minHeight:0, padding:12 }}>
@@ -9014,7 +9014,7 @@ await setDoc(doc(db,"config","app"), { currentYear: year, currentWeek: week, upd
           />
           <AdminToggleRow
             label="Path to Victory"
-            description="The Path to Victory button and Compare on the leaderboard. Turn off to hide both from everyone but admins."
+            description="Hides Path to Victory and Compare from non-admins."
             checked={!appCfg.pathToVictoryDisabled}
             onChange={togglePathToVictory}
           />
