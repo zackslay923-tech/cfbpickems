@@ -1001,6 +1001,37 @@ function gameIsRevealed(gameGroupStartMap, g, nowMs) {
   return ms != null && ms <= nowMs;
 }
 
+// Same team-name matching the Scorebug's own computeLiveForGame uses to
+// look a game up in the live map (exact key first, then a same-school
+// -prefix fallback, since the live feed's keys carry the mascot too while
+// our game docs only store the school) - a standalone copy so it's usable
+// from plain data (see gamesLive in LeaderboardPage) rather than only from
+// inside that component's own closures.
+function findLiveEntry(uiMap, away, home) {
+  if (!uiMap || !uiMap.get) return null;
+  const norm = (s) => {
+    if (!s) return "";
+    let t = String(s).toLowerCase();
+    t = t.replace(/\ba\s*&\s*m\b|\ba\s*and\s*m\b/gi, "a&m");
+    t = t.normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9 ]/g, "").replace(/\s+/g, " ");
+    return t.replace(/\s+/g, "");
+  };
+  const awayKey = norm(away), homeKey = norm(home);
+  const key = awayKey + "__" + homeKey;
+  let entry = uiMap.get(key);
+  if (!entry && uiMap.size) {
+    const keys = Array.from(uiMap.keys());
+    const guess = keys.find(k => {
+      const sep = k.indexOf("__");
+      if (sep === -1) return false;
+      const aPart = k.slice(0, sep), hPart = k.slice(sep + 2);
+      return aPart.startsWith(awayKey) && hPart.startsWith(homeKey);
+    });
+    if (guess) entry = uiMap.get(guess);
+  }
+  return entry || null;
+}
+
 // Same "can this player ever actually win" check computePathToVictory does
 // for one person, run for every player at once - reuses that function
 // directly (rather than a separate copy of the math) so the Win Odds list's
@@ -1210,6 +1241,71 @@ function homeWinProbFor(g) {
   return spreadToHomeWinProb(g?.spread);
 }
 
+// A regulation CFB game is four 15-minute quarters. Used to turn a live
+// period/clock into "how much of the game is left" for the projections
+// below - real game time, not real-world elapsed time (commercial breaks
+// etc. don't count).
+const CFB_QUARTER_SECONDS = 15 * 60;
+const CFB_GAME_SECONDS = CFB_QUARTER_SECONDS * 4;
+// Never let a projection claim near-certainty just because the clock's
+// almost out - a lead can still flip in the final seconds, so this floors
+// how much "time left" the model ever treats a live game as having.
+const MIN_REMAINING_FRACTION = 0.02;
+
+// Parses ESPN's live "M:SS" / "MM:SS" display clock into seconds left in
+// the current quarter. Anything else (halftime, "END", missing) -> null.
+function parseClockSeconds(clock) {
+  if (!clock) return null;
+  const m = String(clock).trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  return (+m[1]) * 60 + (+m[2]);
+}
+
+// How much of regulation is left and how the game stands right now, from
+// whatever live score/period/clock is merged onto the game (see gamesLive
+// in LeaderboardPage). Null if there's nothing live to go on - game hasn't
+// kicked off yet, or is already final (final games use the real result
+// directly elsewhere, never a projection).
+function liveGameProjection(g) {
+  const hp = g?.liveHomePoints, ap = g?.liveAwayPoints, period = g?.livePeriod;
+  if (!Number.isFinite(hp) || !Number.isFinite(ap) || !Number.isFinite(period) || period < 1) return null;
+  let elapsed;
+  if (period > 4) {
+    // CFB overtime has no game clock (each side just gets a possession) -
+    // treat regulation as fully elapsed so the model leans almost entirely
+    // on the current score.
+    elapsed = CFB_GAME_SECONDS;
+  } else {
+    const secLeftInPeriod = parseClockSeconds(g?.liveClock);
+    // Unparseable clock (halftime, "END", etc.) - assume the quarter just
+    // finished rather than guessing where mid-quarter it might be.
+    const elapsedInPeriod = secLeftInPeriod != null ? (CFB_QUARTER_SECONDS - secLeftInPeriod) : CFB_QUARTER_SECONDS;
+    elapsed = (period - 1) * CFB_QUARTER_SECONDS + elapsedInPeriod;
+  }
+  elapsed = Math.min(Math.max(elapsed, 0), CFB_GAME_SECONDS);
+  const remainingFraction = Math.max(1 - elapsed / CFB_GAME_SECONDS, 0);
+  return { remainingFraction, currentMargin: hp - ap, currentTotal: hp + ap };
+}
+
+// Live-aware version of homeWinProbFor. Prefers ESPN's own play-by-play win
+// -probability model (liveHomeWinPct, synced by syncLiveWinProbForWeek in
+// functions/index.js while a game is in progress) when we've got a recent
+// reading - a real trained model, not an approximation. Falls back to
+// blending the market's pregame expected margin with how the game has
+// actually gone so far, weighted by how much time is left (early on, the
+// pregame line still dominates; late in the game, the real score does) -
+// our own calculation from the score for whenever ESPN's reading isn't
+// available yet. Either way, still an estimate, not a prediction.
+function liveHomeWinProbFor(g) {
+  if (Number.isFinite(+g?.liveHomeWinPct)) return +g.liveHomeWinPct;
+  const proj = liveGameProjection(g);
+  if (!proj) return homeWinProbFor(g);
+  const pregameMargin = Number.isFinite(+g?.spread) ? -(+g.spread) : 0;
+  const projectedFinalMargin = proj.currentMargin + proj.remainingFraction * pregameMargin;
+  const sigma = 13.5 * Math.sqrt(Math.max(proj.remainingFraction, MIN_REMAINING_FRACTION));
+  return normalCdf(projectedFinalMargin / sigma);
+}
+
 // When a game's odds were last synced, formatted the same way as the
 // leaderboard's own "Last updated" clock - lets someone looking at Build
 // Your Own Path judge for themselves how fresh (or stale/pregame-only) a
@@ -1240,6 +1336,24 @@ function formatGameOdds(g) {
   const syncTime = formatOddsSyncTime(g?.oddsUpdatedAt);
   if (syncTime) parts.push(`synced ${syncTime}`);
   return parts.join(" · ");
+}
+
+// "Away 20 - Home 10 · Q4 4:45 · Home 99.9% to win" for a game with live
+// score data merged onto it - the actual input liveHomeWinProbFor uses
+// (ESPN's own live win-probability reading when we have one, our own
+// score/clock projection otherwise), shown so that number is verifiable
+// instead of just taken on faith, same idea as ESPN's own live gamecast.
+function formatLiveScoreLabel(g) {
+  if (!Number.isFinite(g?.liveHomePoints) || !Number.isFinite(g?.liveAwayPoints) || !Number.isFinite(g?.livePeriod)) return null;
+  const period = g.livePeriod;
+  const periodLabel = period > 4 ? (period === 5 ? "OT" : `${period - 4}OT`) : `Q${period}`;
+  const clock = g.livePeriod <= 4 ? parseClockSeconds(g.liveClock) : null;
+  const clockLabel = clock != null ? ` ${g.liveClock}` : "";
+  const pHome = liveHomeWinProbFor(g);
+  const winPctLabel = Number.isFinite(pHome)
+    ? ` · ${pHome >= 0.5 ? g.home : g.away} ${((pHome >= 0.5 ? pHome : 1 - pHome) * 100).toFixed(1)}% to win`
+    : "";
+  return `${g.away} ${g.liveAwayPoints} - ${g.home} ${g.liveHomePoints} · ${periodLabel}${clockLabel}${winPctLabel}`;
 }
 
 // Standard-normal sample via Box-Muller, used below to project the GameDay
@@ -1293,13 +1407,28 @@ function computeFieldWinProbabilities(games, results, players, gameGroupStartMap
   const isRevealed = (g) => gameIsRevealed(gameGroupStartMap, g, nowMs);
   const revealedRemaining = games.filter(g => !isFinal(g) && isRevealed(g));
   const hiddenRemainingCount = games.filter(g => !isFinal(g) && !isRevealed(g)).length;
-  const homeWinProb = new Map(revealedRemaining.map(g => [g.id, homeWinProbFor(g) ?? 0.5]));
+  const homeWinProb = new Map(revealedRemaining.map(g => [g.id, liveHomeWinProbFor(g) ?? 0.5]));
 
   const gdGame = games.find(g => g && g.gameday);
   const gdFinal = gdGame ? isFinal(gdGame) : false;
   const gdTotalRaw = gdFinal ? results[gdGame.id]?.totalPoints : null;
   const gdTotalFixed = Number.isFinite(+gdTotalRaw) ? +gdTotalRaw : null;
   const gdOU = (!gdFinal && gdGame && Number.isFinite(+gdGame.overUnder)) ? +gdGame.overUnder : null;
+  // Once GameDay is actually underway, project its final total from the
+  // score it's already put up plus what the pregame total implies for
+  // however much time is left - not just the frozen pregame number the
+  // whole game through.
+  const gdProj = (!gdFinal && gdGame) ? liveGameProjection(gdGame) : null;
+  function sampleGdTotal() {
+    if (gdTotalFixed != null) return gdTotalFixed;
+    if (gdOU == null) return null;
+    if (gdProj) {
+      const projectedFinalTotal = gdProj.currentTotal + gdProj.remainingFraction * gdOU;
+      const sigma = GD_TOTAL_SIGMA * Math.sqrt(Math.max(gdProj.remainingFraction, MIN_REMAINING_FRACTION));
+      return sampleNormal(projectedFinalTotal, sigma);
+    }
+    return sampleNormal(gdOU, GD_TOTAL_SIGMA);
+  }
 
   const credit = new Map(players.map(p => [p.name, 0]));
   for (let t = 0; t < trials; t++) {
@@ -1315,8 +1444,7 @@ function computeFieldWinProbabilities(games, results, players, gameGroupStartMap
       return { p, pts };
     });
     const leaders = scores.filter(s => s.pts === top).map(s => s.p);
-    const gdTotalThisTrial = gdTotalFixed != null ? gdTotalFixed : (gdOU != null ? sampleNormal(gdOU, GD_TOTAL_SIGMA) : null);
-    const shares = resolveTiebreakShares(leaders, gdTotalThisTrial);
+    const shares = resolveTiebreakShares(leaders, sampleGdTotal());
     for (const [name, share] of shares) credit.set(name, credit.get(name) + share);
   }
   const results_ = players
@@ -2896,6 +3024,7 @@ function PathToVictoryModal({ ptvFor, compareWith, setCompareWith, onClose, game
                           const isOverridden = whatIf.has(g.id) && whatIf.get(g.id) !== ptv.target.picks[g.id];
                           const isMustWin = ptv.mustWinGames.some(m => m.id === g.id);
                           const oddsLabel = formatGameOdds(g);
+                          const liveLabel = formatLiveScoreLabel(g);
                           return (
                             <div key={g.id} style={{ padding:"4px 6px", borderRadius:8, background: isOverridden ? "rgba(240,180,41,0.08)" : "transparent" }}>
                               <div style={{ display:"flex", alignItems:"center", gap:6 }}>
@@ -2904,6 +3033,11 @@ function PathToVictoryModal({ ptvFor, compareWith, setCompareWith, onClose, game
                                 <PtvTeamButton team={g.home} rank={g.homeRank} active={selected === g.home} onClick={() => setWhatIf(m => { const next = new Map(m); next.set(g.id, g.home); return next; })} />
                                 {isMustWin && !isOverridden && <span style={{ fontSize:10, color:"#f0596b", marginLeft:4, flexShrink:0 }} title="Needed for their actual best case">🔒</span>}
                               </div>
+                              {liveLabel && (
+                                <div style={{ textAlign:"center", fontSize:10.5, color:"#f0596b", marginTop:2, fontWeight:600 }}>
+                                  🔴 {liveLabel}
+                                </div>
+                              )}
                               {oddsLabel && (
                                 <div style={{ textAlign:"center", fontSize:10, color:"#7d8ab8", marginTop:2 }}>
                                   {g.gameday && <span title="GameDay tiebreaker game">🎓 </span>}{oddsLabel}
@@ -3304,6 +3438,24 @@ useEffect(() => {
     }
   }, [live]);
   const [games, setGames] = useState([]);
+  // games, with whatever live score/period/clock is currently on file
+  // merged onto each entry (live* fields) - feeds Path to Victory/Win Odds'
+  // own live win-probability model (liveHomeWinProbFor), so it can lean on
+  // the actual game state instead of just the frozen pregame line once a
+  // game is underway. Memoized on uiScoreMap (not recomputed every render)
+  // so the Monte Carlo simulation downstream doesn't re-run and jitter on
+  // every paint - only when the live scores actually change.
+  const gamesLive = useMemo(() => games.map(g => {
+    const entry = findLiveEntry(uiScoreMap, g.away, g.home);
+    if (!entry || (!Number.isFinite(entry.homePoints) && !Number.isFinite(entry.awayPoints))) return g;
+    return {
+      ...g,
+      liveHomePoints: Number.isFinite(entry.homePoints) ? entry.homePoints : null,
+      liveAwayPoints: Number.isFinite(entry.awayPoints) ? entry.awayPoints : null,
+      livePeriod: Number.isFinite(entry.period) ? entry.period : null,
+      liveClock: entry.clock ?? null,
+    };
+  }), [games, uiScoreMap]);
   const [pickCount, setPickCount] = useState(0);
 const pot = useMemo(() => (pickCount * 5), [pickCount]);
 
@@ -3375,8 +3527,8 @@ useEffect(() => {
   // simulation and re-running it on every paint would make the numbers jitter.
   const [showWinOdds, setShowWinOdds] = useState(false);
   const winOdds = useMemo(
-    () => (weekAllFinal || !players.length || !ptvEnabled ? null : computeFieldWinProbabilities(games, results, players, gameGroupStartMap)),
-    [games, results, players, gameGroupStartMap, weekAllFinal, ptvEnabled]
+    () => (weekAllFinal || !players.length || !ptvEnabled ? null : computeFieldWinProbabilities(gamesLive, results, players, gameGroupStartMap)),
+    [gamesLive, results, players, gameGroupStartMap, weekAllFinal, ptvEnabled]
   );
   // Same hard, provable elimination check as computePathToVictory's - who's
   // still mathematically alive, so the Win Odds list can badge names without
@@ -4358,7 +4510,7 @@ while (i < seq.length) {
           compareWith={compareWith}
           setCompareWith={setCompareWith}
           onClose={() => { setPtvFor(null); setCompareWith([]); }}
-          games={games}
+          games={gamesLive}
           results={results}
           players={players}
           gameGroupStartMap={gameGroupStartMap}
@@ -4374,7 +4526,7 @@ while (i < seq.length) {
                 <button type="button" onClick={() => setShowWinOdds(false)} aria-label="Close" style={{ background:"transparent", border:"none", color:"#cfd8f0", cursor:"pointer", fontSize:18, padding:2, lineHeight:1 }}>✕</button>
               </div>
               <p style={{ margin:"6px 0 0", fontSize:11.5, color:"#9aa4c7", lineHeight:1.5 }}>
-                Simulated using live betting odds where available (coin flip otherwise) — an estimate, not a prediction. A tie for 1st is resolved by the GameDay tiebreaker, same as the real pot.
+                Simulated from pregame odds, switching to ESPN's own live win-probability model (or our own score/clock-based estimate if that's not ready yet) once a game kicks off — an estimate, not a prediction. A tie for 1st is resolved by the GameDay tiebreaker, same as the real pot.
                 {winOdds.hiddenRemainingCount > 0 && ` ${winOdds.hiddenRemainingCount} game${winOdds.hiddenRemainingCount === 1 ? "" : "s"} later this week aren't revealed yet.`}
               </p>
             </div>

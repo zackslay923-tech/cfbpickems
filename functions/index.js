@@ -462,6 +462,60 @@ async function syncOddsForWeek(db, year, week) {
   return written;
 }
 
+// Pulls ESPN's own play-by-play win-probability model for every currently
+// in-progress game and writes the latest reading onto games/{id} as
+// liveHomeWinPct - this is ESPN's real, trained model (visible on their own
+// gamecast), not an estimate we're deriving ourselves, so it's used as the
+// client's first choice for a live game's win odds (see liveHomeWinProbFor
+// in App.jsx), falling back to our own score/clock-based projection only
+// when ESPN doesn't have a reading yet. Only called for games ESPN reports
+// as "in_progress" (espnMap, already fetched this cycle by publishLiveMap)
+// - pregame and final games don't need this extra per-game fetch, since
+// pregame odds and final results are already covered elsewhere. Best
+// -effort: never throws past its own caller.
+async function syncLiveWinProbForWeek(db, year, week, espnMap) {
+  if (!Number.isFinite(year) || !Number.isFinite(week)) return 0;
+  const liveEntries = Object.entries(espnMap || {}).filter(([, e]) => e?.status === "in_progress" && e?.id);
+  if (!liveEntries.length) return 0;
+
+  const gamesSnap = await db.collection("games")
+    .where("year", "==", year)
+    .where("week", "==", week)
+    .get();
+  if (gamesSnap.empty) return 0;
+  const byKey = new Map(gamesSnap.docs.map(d => [toKey(d.data().away, d.data().home), d.id]));
+
+  const results = await Promise.all(liveEntries.map(async ([key, entry]) => {
+    const gameId = byKey.get(key);
+    if (!gameId) return null;
+    try {
+      const res = await fetch(`https://site.api.espn.com/apis/site/v2/sports/football/college-football/summary?event=${entry.id}`);
+      if (!res.ok) return null;
+      const json = await res.json();
+      const wp = Array.isArray(json?.winprobability) ? json.winprobability : [];
+      const last = wp.length ? wp[wp.length - 1] : null;
+      const homeWinPct = last && Number.isFinite(+last.homeWinPercentage) ? +last.homeWinPercentage : null;
+      return homeWinPct == null ? null : { gameId, homeWinPct };
+    } catch (e) {
+      logger.warn(`syncLiveWinProbForWeek: summary fetch failed for event ${entry.id}`, e?.message || e);
+      return null;
+    }
+  }));
+
+  const batch = db.batch();
+  let written = 0;
+  for (const r of results) {
+    if (!r) continue;
+    batch.set(db.collection("games").doc(r.gameId), {
+      liveHomeWinPct: r.homeWinPct,
+      liveWinPctUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+    written++;
+  }
+  if (written) await batch.commit();
+  return written;
+}
+
 // How long CFBD fetches need to be failing in a row before alerting the
 // admin (bad/expired API key, CFBD outage, etc.) rather than a single
 // transient blip.
@@ -1118,6 +1172,15 @@ exports.publishLiveMap = onSchedule(
       }
     } catch (e) {
       logger.warn("publishLiveMap: ESPN fetch failed", e?.message || e);
+    }
+
+    // Same gate as live scores/odds above (only while something's actually
+    // live) - never awaited, so a slow or failing ESPN summary fetch can't
+    // hold up the score poll that actually matters most.
+    if (espnOk) {
+      syncLiveWinProbForWeek(db, liveYear, liveWeek, espnMap).catch(e => {
+        logger.warn("publishLiveMap: live win-prob sync failed", e?.message || e);
+      });
     }
 
     const missing = expectedKeys.filter(k => !espnMap[k]);
