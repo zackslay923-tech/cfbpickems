@@ -2847,14 +2847,18 @@ function PathToVictoryModal({ ptvFor, compareWith, setCompareWith, onClose, game
                     Currently <b>#{ptv.currentRank}</b> of {ptv.totalPlayers}{ptv.pointsBack > 0 ? <> — {ptv.pointsBack} point{ptv.pointsBack === 1 ? "" : "s"} back from the lead</> : <> — in the lead</>}.
                   </div>
 
-                  {!ptv.eliminated && liveMe && (
+                  {liveMe && (
                     <div style={{ marginBottom:14, padding:"10px 12px", borderRadius:10, background: liveMe.isWinner ? "rgba(62,207,142,0.12)" : "rgba(240,89,107,0.10)", border: `1px solid ${liveMe.isWinner ? "rgba(62,207,142,0.4)" : "rgba(240,89,107,0.35)"}` }}>
                       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:6 }}>
                         <div>
                           <b>{hasCustomPicks ? "Your scenario:" : "Best case:"}</b> {liveMe.points} points, #{liveRank}
-                          {liveMe.isWinner
-                            ? <> — {liveMe.winNote ? liveMe.winNote.toLowerCase() : <b>wins outright</b>}</>
-                            : <> — {liveRows[0].points - liveMe.points} point{(liveRows[0].points - liveMe.points) === 1 ? "" : "s"} short of {liveRows[0].name}</>}
+                          {liveMe.isWinner ? (
+                            <> — {liveMe.winNote ? liveMe.winNote.toLowerCase() : <b>wins outright</b>}</>
+                          ) : liveMe.points === liveRows[0].points ? (
+                            <> — tied with {liveRows[0].name} at {liveMe.points}, but <b>loses the GameDay tiebreaker</b></>
+                          ) : (
+                            <> — {liveRows[0].points - liveMe.points} point{(liveRows[0].points - liveMe.points) === 1 ? "" : "s"} short of {liveRows[0].name}</>
+                          )}
                         </div>
                         {hasCustomPicks && (
                           <button type="button" onClick={() => setWhatIf(new Map())} style={{ ...adminBtn("neutral"), padding:"4px 10px", fontSize:11.5 }}>
@@ -2865,7 +2869,7 @@ function PathToVictoryModal({ ptvFor, compareWith, setCompareWith, onClose, game
                     </div>
                   )}
 
-                  {!ptv.eliminated && liveRows && liveRows.length > 1 && (
+                  {liveRows && liveRows.length > 1 && (
                     <div style={{ marginBottom:14, border:"1px solid #1f2a44", borderRadius:8, overflow:"hidden" }}>
                       {liveRows.slice(0, 5).map((row, i) => (
                         <div key={row.name} style={{
