@@ -4530,8 +4530,18 @@ while (i < seq.length) {
             </div>
             <div style={{ overflowY:"auto", minHeight:0, padding:12 }}>
               {(() => {
-                const maxPct = winOdds.odds[0]?.pct || 1;
-                return winOdds.odds.map((o, i) => {
+                // Alive always sorts above Out, even when both show ~0% -
+                // "Out" means provably no path exists at all, which is a
+                // stronger, different claim than "hasn't won a simulated
+                // trial yet" (see the <0.0% vs 0.0% distinction below), so
+                // it shouldn't just fall out of a plain percentage sort.
+                const sortedOdds = [...winOdds.odds].sort((a, b) => {
+                  const aElim = eliminatedNames.has(a.name), bElim = eliminatedNames.has(b.name);
+                  if (aElim !== bElim) return aElim ? 1 : -1;
+                  return b.pct - a.pct || a.name.localeCompare(b.name);
+                });
+                const maxPct = sortedOdds[0]?.pct || 1;
+                return sortedOdds.map((o, i) => {
                   const widthPct = maxPct > 0 ? Math.max(4, (o.pct / maxPct) * 100) : 0;
                   const medal = i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : null;
                   const barColor = i === 0 ? "240,180,41" : i === 1 ? "203,213,225" : i === 2 ? "205,127,50" : "106,162,255";
