@@ -1001,21 +1001,18 @@ function gameIsRevealed(gameGroupStartMap, g, nowMs) {
   return ms != null && ms <= nowMs;
 }
 
-// Same hard, provable elimination check as computePathToVictory below, for
-// every player at once - nobody's .points can ever go down, so once a
-// player's max possible score can't clear some rival's already-locked
-// score, they're out, no scenario search needed. Used to badge the Win
-// Odds list without running the full per-player computation for everyone.
+// Same "can this player ever actually win" check computePathToVictory does
+// for one person, run for every player at once - reuses that function
+// directly (rather than a separate copy of the math) so the Win Odds list's
+// Out badge can never drift out of sync with what a player's own Path to
+// Victory screen says. A still-mid-partial-fill player has no well-defined
+// best case yet, so they're left off the eliminated set (shown "Alive")
+// until they finish, same as their own PTV screen would show them.
 function computeEliminatedNames(games, results, players, gameGroupStartMap) {
-  const nowMs = Date.now();
-  const isFinal = (g) => !!results[g.id]?.winner;
-  const isRevealed = (g) => gameIsRevealed(gameGroupStartMap, g, nowMs);
-  const revealedRemainingCount = games.filter(g => !isFinal(g) && isRevealed(g)).length;
   const eliminated = new Set();
   for (const p of players) {
-    const ceiling = p.points + revealedRemainingCount;
-    const bestRivalFloor = Math.max(0, ...players.filter(x => x.name !== p.name).map(x => x.points));
-    if (ceiling < bestRivalFloor) eliminated.add(p.name);
+    const ptv = computePathToVictory(games, results, players, gameGroupStartMap, p.name);
+    if (ptv && !ptv.incomplete && ptv.eliminated) eliminated.add(p.name);
   }
   return eliminated;
 }
@@ -1041,13 +1038,6 @@ function computePathToVictory(games, results, players, gameGroupStartMap, target
     return !(v === g.home || v === g.away);
   });
   if (incomplete) return { target, incomplete: true, hiddenRemainingCount };
-
-  // Hard, provable elimination: nobody's .points can ever go down, so once
-  // your max possible score can't clear a rival's already-locked score, it's
-  // over - no scenario search needed for this part.
-  const ceiling = target.points + revealedRemaining.length;
-  const bestRivalFloor = Math.max(0, ...players.filter(p => p.name !== targetName).map(p => p.points));
-  const eliminated = ceiling < bestRivalFloor;
 
   const sortedNow = [...players].sort((a, b) => b.points - a.points || a.name.localeCompare(b.name));
   const currentRank = sortedNow.findIndex(p => p.name === targetName) + 1;
@@ -1075,9 +1065,19 @@ function computePathToVictory(games, results, players, gameGroupStartMap, target
     return rows;
   }
 
+  // Provable elimination: the scenario above already assumes every one of
+  // target's own remaining picks comes true, which is the ONE outcome that
+  // maximizes their own points (any other outcome only ever scores them the
+  // same or fewer). So if target doesn't win even there, no other outcome
+  // ever lets them win either - this is exact, not a shortcut. (A cheaper
+  // ceiling-vs-current-leader check used to stand in for this, but it
+  // ignored that rivals who share target's own remaining picks gain points
+  // right alongside them in this same scenario, understating how far ahead
+  // the field actually ends up - undercounting real eliminations.)
   const bestRows = scenario(new Map());
   const bestTarget = bestRows.find(p => p.name === targetName);
   const winsBestCase = !!bestTarget?.isWinner;
+  const eliminated = !winsBestCase;
 
   // "Games you need": flip just one revealed remaining game away from your
   // pick (holding the rest at best-case) and see if you fall out of a
