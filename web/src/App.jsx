@@ -1123,6 +1123,31 @@ function compareHeadToHead(games, results, gameGroupStartMap, players, aName, bN
   return { A, B, margin, agree, disagree, stillOpenDisagree, aClinched, bClinched, neededByA, neededByB, hiddenRemainingCount };
 }
 
+// Grid-style comparison across 2-5 players: one row per revealed game where
+// the selected players didn't all pick the same team (agreement games carry
+// no information for telling them apart, so they're left out, same
+// principle as compareHeadToHead's `disagree` split above).
+function compareMultiple(games, results, gameGroupStartMap, players, names) {
+  const selected = names.map(n => players.find(p => p.name === n)).filter(Boolean);
+  if (selected.length < 2) return null;
+
+  const nowMs = Date.now();
+  const isFinal = (g) => !!results[g.id]?.winner;
+  const isRevealed = (g) => gameIsRevealed(gameGroupStartMap, g, nowMs);
+  const relevant = games.filter(isRevealed);
+  const hiddenRemainingCount = games.filter(g => !isFinal(g) && !isRevealed(g)).length;
+
+  const rows = [];
+  for (const g of relevant) {
+    const picks = selected.map(p => p.picks?.[g.id] || null);
+    const distinct = new Set(picks.map(p => p || "—"));
+    if (distinct.size <= 1) continue; // everyone (who's picked it) agrees - not interesting
+    rows.push({ game: g, picks, final: isFinal(g), winner: results[g.id]?.winner || null });
+  }
+
+  return { selected, rows, hiddenRemainingCount };
+}
+
 // Moneyline -> implied win probability (standard American-odds conversion),
 // de-vigged by normalizing both sides so they sum to 1 - a book's moneyline
 // pair always implies slightly over 100% between the two, since that margin
@@ -2670,8 +2695,15 @@ function PathToVictoryModal({ ptvFor, compareWith, setCompareWith, onClose, game
     () => computePathToVictory(games, results, players, gameGroupStartMap, ptvFor),
     [games, results, players, gameGroupStartMap, ptvFor]
   );
-  const cmp = compareWith ? compareHeadToHead(games, results, gameGroupStartMap, players, ptvFor, compareWith) : null;
+  const cmp = compareWith.length > 0 ? compareMultiple(games, results, gameGroupStartMap, players, [ptvFor, ...compareWith]) : null;
   const otherPlayers = players.filter(p => p.name !== ptvFor);
+  const MAX_COMPARE = 5;
+  const [pendingCompare, setPendingCompare] = useState([]);
+  useEffect(() => { setPendingCompare([]); }, [ptvFor]);
+  const togglePending = (name) => setPendingCompare(list =>
+    list.includes(name) ? list.filter(n => n !== name)
+      : (list.length + 1 < MAX_COMPARE ? [...list, name] : list)
+  );
 
   // Starts at the target's own best case (no overrides = their own pick
   // wins every remaining game) and lets someone click through individual
@@ -2693,6 +2725,11 @@ function PathToVictoryModal({ ptvFor, compareWith, setCompareWith, onClose, game
             <h3 style={{ margin:0, fontSize:19, letterSpacing:.3 }}>🎯 {ptvFor}</h3>
             <button type="button" onClick={onClose} aria-label="Close" style={{ background:"transparent", border:"none", color:"#cfd8f0", cursor:"pointer", fontSize:18, padding:2, lineHeight:1 }}>✕</button>
           </div>
+          {!cmp && !ptv.incomplete && (
+            <p style={{ margin:"6px 0 0", fontSize:11.5, color:"#9aa4c7", lineHeight:1.5 }}>
+              🔒 next to a game below means it's a must-win for {ptvFor}'s best-case path — flipping it away from their real pick knocks them out of first (or a tie).
+            </p>
+          )}
         </div>
         <div style={{ overflowY:"auto", minHeight:0, fontSize:13.5, lineHeight:1.6, padding:16 }}>
           {!cmp ? (
@@ -2781,54 +2818,95 @@ function PathToVictoryModal({ ptvFor, compareWith, setCompareWith, onClose, game
               )}
               {otherPlayers.length > 0 && (
                 <div style={{ marginTop:14, paddingTop:10, borderTop:"1px solid #1f2a44" }}>
-                  <label style={{ fontSize:12, color:"#9aa4c7" }}>Compare against</label>
-                  <select
-                    style={{ ...inputStyle, display:"block", width:"100%", marginTop:4 }}
-                    value=""
-                    onChange={e => e.target.value && setCompareWith(e.target.value)}
+                  <label style={{ fontSize:12, color:"#9aa4c7" }}>
+                    Compare against (up to {MAX_COMPARE - 1} others)
+                  </label>
+                  <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginTop:6, marginBottom:8 }}>
+                    {otherPlayers.map(p => {
+                      const on = pendingCompare.includes(p.name);
+                      const disabled = !on && pendingCompare.length + 1 >= MAX_COMPARE;
+                      return (
+                        <button
+                          key={p.name}
+                          type="button"
+                          disabled={disabled}
+                          onClick={() => togglePending(p.name)}
+                          style={{
+                            padding:"5px 10px", borderRadius:16, fontSize:12,
+                            border: on ? "1px solid #6aa2ff" : "1px solid #2a3655",
+                            background: on ? "rgba(106,162,255,0.18)" : "transparent",
+                            color: disabled ? "#5a6488" : "#cfd8f0",
+                            cursor: disabled ? "not-allowed" : "pointer",
+                          }}
+                        >
+                          {on ? "✓ " : ""}{p.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <button
+                    type="button"
+                    disabled={pendingCompare.length === 0}
+                    onClick={() => setCompareWith(pendingCompare)}
+                    style={{ ...adminBtn("primary"), opacity: pendingCompare.length === 0 ? .5 : 1, cursor: pendingCompare.length === 0 ? "not-allowed" : "pointer" }}
                   >
-                    <option value="">Pick someone…</option>
-                    {otherPlayers.map(p => <option key={p.name} value={p.name}>{p.name}</option>)}
-                  </select>
+                    Compare{pendingCompare.length > 0 ? ` (${pendingCompare.length + 1})` : ""}
+                  </button>
                 </div>
               )}
             </>
           ) : (
             <>
-              <button type="button" onClick={() => setCompareWith(null)} style={{ background:"transparent", border:"none", color:"#6aa2ff", cursor:"pointer", fontSize:12, padding:0, marginBottom:10 }}>
+              <button type="button" onClick={() => setCompareWith([])} style={{ background:"transparent", border:"none", color:"#6aa2ff", cursor:"pointer", fontSize:12, padding:0, marginBottom:10 }}>
                 &larr; Back
               </button>
-              <div style={{ marginBottom:10 }}>
-                <b>{cmp.A.name}</b> {cmp.margin === 0 ? "is tied with" : cmp.margin > 0 ? "leads" : "trails"} <b>{cmp.B.name}</b>
-                {cmp.margin !== 0 && ` by ${Math.abs(cmp.margin)}`} right now ({cmp.A.points}-{cmp.B.points}).
+              <div style={{ marginBottom:10, fontSize:12.5 }}>
+                Showing the <b>{cmp.rows.length}</b> game{cmp.rows.length === 1 ? "" : "s"} where these {cmp.selected.length} don't all agree
+                {cmp.hiddenRemainingCount > 0 ? ` (${cmp.hiddenRemainingCount} more later this week aren't revealed yet)` : ""}.
               </div>
-              {cmp.stillOpenDisagree.length === 0 ? (
-                <div style={{ marginBottom:10 }}>They don't have any different picks left that are still open — this margin is final.</div>
-              ) : cmp.aClinched ? (
-                <div style={{ marginBottom:10 }}>{cmp.A.name} already has this locked, regardless of the {cmp.stillOpenDisagree.length} game{cmp.stillOpenDisagree.length === 1 ? "" : "s"} they disagree on.</div>
-              ) : cmp.bClinched ? (
-                <div style={{ marginBottom:10 }}>{cmp.B.name} already has this locked, regardless of the {cmp.stillOpenDisagree.length} game{cmp.stillOpenDisagree.length === 1 ? "" : "s"} they disagree on.</div>
+              {cmp.rows.length === 0 ? (
+                <div style={{ opacity:.7 }}>Every revealed pick lines up the same way for this group.</div>
               ) : (
-                <div style={{ marginBottom:10 }}>
-                  Of the <b>{cmp.stillOpenDisagree.length}</b> still-open games they disagree on, <b>{cmp.A.name}</b> needs at least <b>{cmp.neededByA}</b> and <b>{cmp.B.name}</b> needs at least <b>{cmp.neededByB}</b> to finish ahead (or tied).
+                <div style={{ overflowX:"auto", border:"1px solid #1f2a44", borderRadius:8 }}>
+                  <table style={{ borderCollapse:"collapse", width:"100%", fontSize:12 }}>
+                    <thead>
+                      <tr>
+                        <th style={{ position:"sticky", left:0, background:"#0b1220", textAlign:"left", padding:"6px 8px", borderBottom:"1px solid #1f2a44", borderRight:"1px solid #1f2a44", whiteSpace:"nowrap" }}>Game</th>
+                        {cmp.selected.map(p => (
+                          <th key={p.name} style={{ background:"#0b1220", textAlign:"center", padding:"6px 8px", borderBottom:"1px solid #1f2a44", minWidth:84 }}>
+                            <div style={{ fontWeight:700, whiteSpace:"nowrap" }}>{p.name.split(" ")[0]} {p.name.split(" ").slice(1).join(" ")}</div>
+                            <div style={{ fontSize:10.5, color:"#9aa4c7", fontWeight:400 }}>{p.points} pts</div>
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {cmp.rows.map(({ game: g, picks, final, winner }, i) => (
+                        <tr key={g.id} style={{ background: i % 2 === 1 ? "rgba(255,255,255,0.02)" : "transparent" }}>
+                          <td style={{ position:"sticky", left:0, background: i % 2 === 1 ? "#0e1526" : "#0b1220", padding:"6px 8px", borderBottom:"1px solid #1f2a44", borderRight:"1px solid #1f2a44", whiteSpace:"nowrap", fontSize:11 }}>
+                            {teamLabelNoMascot(g.away, g.awayRank)} @ {teamLabelNoMascot(g.home, g.homeRank)}
+                          </td>
+                          {picks.map((pick, j) => (
+                            <td key={j} style={{ padding:"6px 8px", borderBottom:"1px solid #1f2a44", textAlign:"center" }}>
+                              {pick ? (
+                                <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:2 }}>
+                                  <TeamLogo school={pick} size={22} />
+                                  <span style={{
+                                    fontSize:10.5, whiteSpace:"nowrap",
+                                    color: final ? (pick === winner ? "#3ecf8e" : "#f0596b") : "#cfd8f0",
+                                  }}>
+                                    {teamLabelNoMascot(pick, pick === g.home ? g.homeRank : g.awayRank)}
+                                  </span>
+                                </div>
+                              ) : <span style={{ opacity:.4 }}>—</span>}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               )}
-              {cmp.stillOpenDisagree.length > 0 && (
-                <div style={{ display:"flex", flexDirection:"column", gap:4, marginBottom:10 }}>
-                  {cmp.stillOpenDisagree.map(g => (
-                    <div key={g.id} style={{ display:"flex", alignItems:"center", gap:6, fontSize:12.5 }}>
-                      <TeamLogo school={cmp.A.picks[g.id]} size={20} />
-                      <span style={{ opacity:.85 }}>{cmp.A.name.split(" ")[0]}: {teamLabel(cmp.A.picks[g.id], cmp.A.picks[g.id] === g.home ? g.homeRank : g.awayRank)}</span>
-                      <span style={{ opacity:.4 }}>vs</span>
-                      <TeamLogo school={cmp.B.picks[g.id]} size={20} />
-                      <span style={{ opacity:.85 }}>{cmp.B.name.split(" ")[0]}: {teamLabel(cmp.B.picks[g.id], cmp.B.picks[g.id] === g.home ? g.homeRank : g.awayRank)}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-              <div style={{ opacity:.7 }}>
-                {cmp.agree.length} other game{cmp.agree.length === 1 ? "" : "s"} they picked the same way{cmp.hiddenRemainingCount > 0 ? `; ${cmp.hiddenRemainingCount} more later this week aren't revealed yet.` : "."}
-              </div>
             </>
           )}
         </div>
@@ -3172,10 +3250,11 @@ useEffect(() => {
   // currently selected week - gated behind LoadingGate until this settles.
   const [boardLoaded, setBoardLoaded] = useState(false);
   // Path to Victory / Compare - name of the player the modal is open for, or
-  // null when closed; compareWith is the second player once "Compare
-  // against" is used inside that same modal.
+  // null when closed; compareWith is the (up to 4) other players once
+  // "Compare against" is used inside that same modal - empty when not
+  // comparing.
   const [ptvFor, setPtvFor] = useState(null);
-  const [compareWith, setCompareWith] = useState(null);
+  const [compareWith, setCompareWith] = useState([]);
   const weekAllFinal = games.length > 0 && games.every(g => !!results[g.id]?.winner);
   // Admin off-switch for Path to Victory / Compare / Win Odds (config/app.pathToVictoryDisabled) -
   // admins still see all three regardless, so they can check the toggle actually works. Declared
@@ -4123,7 +4202,7 @@ while (i < seq.length) {
           ptvFor={ptvFor}
           compareWith={compareWith}
           setCompareWith={setCompareWith}
-          onClose={() => { setPtvFor(null); setCompareWith(null); }}
+          onClose={() => { setPtvFor(null); setCompareWith([]); }}
           games={games}
           results={results}
           players={players}
@@ -4157,8 +4236,8 @@ while (i < seq.length) {
                       role="button"
                       tabIndex={0}
                       title={`${o.name} - Path to Victory`}
-                      onClick={() => { setShowWinOdds(false); setCompareWith(null); setPtvFor(o.name); }}
-                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setShowWinOdds(false); setCompareWith(null); setPtvFor(o.name); } }}
+                      onClick={() => { setShowWinOdds(false); setCompareWith([]); setPtvFor(o.name); }}
+                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setShowWinOdds(false); setCompareWith([]); setPtvFor(o.name); } }}
                       style={{ position:"relative", padding:"8px 10px", marginBottom:6, borderRadius:9, overflow:"hidden", background:"#0e1730", border:"1px solid #1f2a44", cursor:"pointer" }}
                     >
                       <div style={{ position:"absolute", inset:0, width:`${widthPct}%`, background:`linear-gradient(90deg, rgba(${barColor},0.32), rgba(${barColor},0.06))`, transition:"width 400ms ease" }} />
