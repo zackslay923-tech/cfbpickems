@@ -1142,6 +1142,41 @@ function computePathToVictory(games, results, players, gameGroupStartMap, target
   };
 }
 
+// For an eliminated player, finds the earliest-decided game (by kickoff
+// order) whose result already made elimination certain - replays
+// computePathToVictory's own elimination test against a snapshot of
+// results that only includes games decided up through each point in the
+// week, stopping at the first one where the same test says "eliminated."
+// Everything else (games decided later, in reality) reverts to "still
+// open" for that snapshot, same as it genuinely was at that moment. Only
+// called for someone already confirmed eliminated - returns null if
+// nothing pins it down (shouldn't happen once eliminated, but a partial
+// -slate/incomplete-picks edge case could still hit this).
+function findEliminationGame(games, results, players, gameGroupStartMap, targetName) {
+  const finalGames = games
+    .filter(g => !!results[g.id]?.winner)
+    .slice()
+    .sort((a, b) => new Date(a.startTimeStr || 0) - new Date(b.startTimeStr || 0));
+
+  for (let i = 0; i < finalGames.length; i++) {
+    const decided = finalGames.slice(0, i + 1);
+    const partialResults = {};
+    for (const g of decided) partialResults[g.id] = results[g.id];
+
+    const snapshotPlayers = players.map(p => {
+      let pts = 0;
+      for (const g of decided) {
+        if (partialResults[g.id]?.winner === p.picks?.[g.id]) pts++;
+      }
+      return { ...p, points: pts };
+    });
+
+    const ptv = computePathToVictory(games, partialResults, snapshotPlayers, gameGroupStartMap, targetName);
+    if (ptv && !ptv.incomplete && ptv.eliminated) return finalGames[i];
+  }
+  return null;
+}
+
 // Head-to-head compare: only games where A and B disagree can ever change
 // the gap between them, so the math reduces to "how many of the k
 // still-open disagreements does each side need" - exact, not a heuristic.
@@ -2917,6 +2952,10 @@ function PathToVictoryModal({ ptvFor, compareWith, setCompareWith, onClose, game
     () => computePathToVictory(games, results, players, gameGroupStartMap, ptvFor),
     [games, results, players, gameGroupStartMap, ptvFor]
   );
+  const eliminationGame = useMemo(
+    () => (ptv && !ptv.incomplete && ptv.eliminated) ? findEliminationGame(games, results, players, gameGroupStartMap, ptvFor) : null,
+    [ptv, games, results, players, gameGroupStartMap, ptvFor]
+  );
   const cmp = compareWith.length > 0 ? compareMultiple(games, results, gameGroupStartMap, players, [ptvFor, ...compareWith]) : null;
   const otherPlayers = players.filter(p => p.name !== ptvFor);
   const MAX_COMPARE = 5;
@@ -2974,6 +3013,27 @@ function PathToVictoryModal({ ptvFor, compareWith, setCompareWith, onClose, game
                   <div style={{ marginBottom:14 }}>
                     Currently <b>#{ptv.currentRank}</b> of {ptv.totalPlayers}{ptv.pointsBack > 0 ? <> — {ptv.pointsBack} point{ptv.pointsBack === 1 ? "" : "s"} back from the lead</> : <> — in the lead</>}.
                   </div>
+
+                  {ptv.eliminated && eliminationGame && (() => {
+                    const r = results[eliminationGame.id];
+                    const winner = r?.winner;
+                    const loser = winner === eliminationGame.home ? eliminationGame.away : eliminationGame.home;
+                    const winnerPts = winner === eliminationGame.home ? r?.homePoints : r?.awayPoints;
+                    const loserPts = winner === eliminationGame.home ? r?.awayPoints : r?.homePoints;
+                    const dateLabel = (() => {
+                      try {
+                        const d = new Date(eliminationGame.startTimeStr);
+                        return isNaN(+d) ? null : new Intl.DateTimeFormat("en-US", { weekday:"short", month:"numeric", day:"numeric", timeZone:"America/New_York" }).format(d);
+                      } catch { return null; }
+                    })();
+                    return (
+                      <div style={{ marginBottom:14, fontSize:12.5, color:"#9aa4c7" }}>
+                        Eliminated when <b style={{ color:"#cfd8f0" }}>{winner}</b> beat {loser}
+                        {Number.isFinite(winnerPts) && Number.isFinite(loserPts) ? ` ${winnerPts}-${loserPts}` : ""}
+                        {dateLabel ? ` (${dateLabel})` : ""}.
+                      </div>
+                    );
+                  })()}
 
                   {liveMe && (
                     <div style={{ marginBottom:14, padding:"10px 12px", borderRadius:10, background: liveMe.isWinner ? "rgba(62,207,142,0.12)" : "rgba(240,89,107,0.10)", border: `1px solid ${liveMe.isWinner ? "rgba(62,207,142,0.4)" : "rgba(240,89,107,0.35)"}` }}>
