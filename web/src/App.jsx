@@ -3821,16 +3821,6 @@ while (i < seq.length) {
                         <span>
                           {p.isWinner && <span title={p.winNote || "Winner"} style={{ marginRight: 6 }}>🏆</span>}
                           {p.name}
-                          {!weekAllFinal && ptvEnabled && (
-                            <button
-                              type="button"
-                              title="Path to Victory"
-                              onClick={() => { setCompareWith(null); setPtvFor(p.name); }}
-                              style={{ marginLeft:6, background:"transparent", border:"none", padding:0, cursor:"pointer", fontSize:13, verticalAlign:"middle", lineHeight:1 }}
-                            >
-                              🎯
-                            </button>
-                          )}
                           {p.winNote && <div style={{ fontSize: 10, fontWeight: 400, opacity: 0.75, marginTop: 2 }}>{isMobile ? (p.winNoteShort || p.winNote) : p.winNote}</div>}
                         </span>
                       </span>
@@ -4048,12 +4038,20 @@ while (i < seq.length) {
                   const medal = i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : null;
                   const barColor = i === 0 ? "240,180,41" : i === 1 ? "203,213,225" : i === 2 ? "205,127,50" : "106,162,255";
                   return (
-                    <div key={o.name} style={{ position:"relative", padding:"8px 10px", marginBottom:6, borderRadius:9, overflow:"hidden", background:"#0e1730", border:"1px solid #1f2a44" }}>
+                    <div
+                      key={o.name}
+                      role="button"
+                      tabIndex={0}
+                      title={`${o.name} - Path to Victory`}
+                      onClick={() => { setShowWinOdds(false); setCompareWith(null); setPtvFor(o.name); }}
+                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setShowWinOdds(false); setCompareWith(null); setPtvFor(o.name); } }}
+                      style={{ position:"relative", padding:"8px 10px", marginBottom:6, borderRadius:9, overflow:"hidden", background:"#0e1730", border:"1px solid #1f2a44", cursor:"pointer" }}
+                    >
                       <div style={{ position:"absolute", inset:0, width:`${widthPct}%`, background:`linear-gradient(90deg, rgba(${barColor},0.32), rgba(${barColor},0.06))`, transition:"width 400ms ease" }} />
                       <div style={{ position:"relative", display:"flex", justifyContent:"space-between", alignItems:"center", fontSize:13.5 }}>
                         <span style={{ display:"flex", alignItems:"center", gap:6, minWidth:0 }}>
                           {medal ? <span style={{ fontSize:15 }}>{medal}</span> : <span style={{ opacity:.5, fontSize:11, width:16, textAlign:"right" }}>{i + 1}</span>}
-                          <span style={{ fontWeight: i < 3 ? 700 : 500, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{o.name}</span>
+                          <span style={{ fontWeight: i < 3 ? 700 : 500, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", textDecoration:"underline", textDecorationColor:"rgba(255,255,255,.25)" }}>{o.name}</span>
                         </span>
                         <span style={{ fontWeight:800, flexShrink:0, marginLeft:8 }}>{o.pct < 0.1 && o.pct > 0 ? "<0.1" : o.pct.toFixed(1)}%</span>
                       </div>
