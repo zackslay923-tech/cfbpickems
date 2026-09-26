@@ -1306,54 +1306,16 @@ function liveHomeWinProbFor(g) {
   return normalCdf(projectedFinalMargin / sigma);
 }
 
-// When a game's odds were last synced, formatted the same way as the
-// leaderboard's own "Last updated" clock - lets someone looking at Build
-// Your Own Path judge for themselves how fresh (or stale/pregame-only) a
-// given number is, instead of just taking it on faith.
-function formatOddsSyncTime(ts) {
-  if (!ts) return null;
-  try {
-    const d = typeof ts?.toDate === "function" ? ts.toDate() : (ts?.seconds != null ? new Date(ts.seconds * 1000) : new Date(ts));
-    if (isNaN(+d)) return null;
-    return new Intl.DateTimeFormat("en-US", { hour:"numeric", minute:"2-digit", hour12:true, timeZone:"America/New_York" }).format(d);
-  } catch { return null; }
-}
-
-// Compact "Spread · ML · O/U · synced H:MM" label for a game, from whatever
-// odds fields are currently synced onto it - null if nothing's been synced
-// at all.
-function formatGameOdds(g) {
-  const parts = [];
-  if (g?.formattedSpread) parts.push(g.formattedSpread);
-  const mlHome = Number.isFinite(+g?.homeMoneyline) ? +g.homeMoneyline : null;
-  const mlAway = Number.isFinite(+g?.awayMoneyline) ? +g.awayMoneyline : null;
-  if (mlHome != null && mlAway != null) {
-    const fmt = (n) => (n > 0 ? `+${n}` : `${n}`);
-    parts.push(`ML ${fmt(mlAway)}/${fmt(mlHome)}`);
-  }
-  if (Number.isFinite(+g?.overUnder)) parts.push(`O/U ${+g.overUnder}`);
-  if (!parts.length) return null;
-  const syncTime = formatOddsSyncTime(g?.oddsUpdatedAt);
-  if (syncTime) parts.push(`synced ${syncTime}`);
-  return parts.join(" · ");
-}
-
-// "Away 20 - Home 10 · Q4 4:45 · Home 99.9% to win" for a game with live
-// score data merged onto it - the actual input liveHomeWinProbFor uses
-// (ESPN's own live win-probability reading when we have one, our own
-// score/clock projection otherwise), shown so that number is verifiable
-// instead of just taken on faith, same idea as ESPN's own live gamecast.
+// "Away 20 - Home 10 · Q4 4:45" for a game with live score data merged onto
+// it - win percentages are shown right on each team's logo instead (see
+// PtvTeamButton's winPct badge), so this is just the score/clock context.
 function formatLiveScoreLabel(g) {
   if (!Number.isFinite(g?.liveHomePoints) || !Number.isFinite(g?.liveAwayPoints) || !Number.isFinite(g?.livePeriod)) return null;
   const period = g.livePeriod;
   const periodLabel = period > 4 ? (period === 5 ? "OT" : `${period - 4}OT`) : `Q${period}`;
   const clock = g.livePeriod <= 4 ? parseClockSeconds(g.liveClock) : null;
   const clockLabel = clock != null ? ` ${g.liveClock}` : "";
-  const pHome = liveHomeWinProbFor(g);
-  const winPctLabel = Number.isFinite(pHome)
-    ? ` · ${pHome >= 0.5 ? g.home : g.away} ${((pHome >= 0.5 ? pHome : 1 - pHome) * 100).toFixed(1)}% to win`
-    : "";
-  return `${g.away} ${g.liveAwayPoints} - ${g.home} ${g.liveHomePoints} · ${periodLabel}${clockLabel}${winPctLabel}`;
+  return `${g.away} ${g.liveAwayPoints} - ${g.home} ${g.liveHomePoints} · ${periodLabel}${clockLabel}`;
 }
 
 // Standard-normal sample via Box-Muller, used below to project the GameDay
@@ -2888,7 +2850,7 @@ const onSubmitPicks = async function(e){
 // One team's logo + name inside the Path to Victory "build your own path"
 // explorer - a real component (not redefined per game in a .map()) so each
 // button is a stable, reusable element.
-function PtvTeamButton({ team, rank, active, onClick }) {
+function PtvTeamButton({ team, rank, active, onClick, winPct }) {
   return (
     <button
       type="button"
@@ -2900,8 +2862,20 @@ function PtvTeamButton({ team, rank, active, onClick }) {
         borderRadius:8, padding:"5px 4px", cursor:"pointer", color:"inherit",
       }}
     >
-      <TeamLogo school={team} size={26} />
-      <span style={{ fontSize:10.5, fontWeight: active ? 700 : 500, textAlign:"center", lineHeight:1.15, maxWidth:92, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+      <div style={{ position:"relative" }}>
+        <TeamLogo school={team} size={26} />
+        {Number.isFinite(winPct) && (
+          <span style={{
+            position:"absolute", bottom:-5, right:-9, fontSize:8.5, fontWeight:800, lineHeight:1,
+            padding:"1.5px 3px", borderRadius:6, whiteSpace:"nowrap",
+            background: winPct >= 0.5 ? "#1a6b46" : "#7a2530",
+            color:"#fff", border:"1px solid #0b1220",
+          }}>
+            {Math.round(winPct * 100)}%
+          </span>
+        )}
+      </div>
+      <span style={{ fontSize:10.5, fontWeight: active ? 700 : 500, textAlign:"center", lineHeight:1.15, maxWidth:92, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", marginTop: Number.isFinite(winPct) ? 3 : 0 }}>
         {teamLabelNoMascot(team, rank)}
       </span>
     </button>
@@ -3023,24 +2997,22 @@ function PathToVictoryModal({ ptvFor, compareWith, setCompareWith, onClose, game
                           const selected = whatIf.get(g.id) ?? ptv.target.picks[g.id];
                           const isOverridden = whatIf.has(g.id) && whatIf.get(g.id) !== ptv.target.picks[g.id];
                           const isMustWin = ptv.mustWinGames.some(m => m.id === g.id);
-                          const oddsLabel = formatGameOdds(g);
+                          const pHome = liveHomeWinProbFor(g);
+                          const awayPct = Number.isFinite(pHome) ? 1 - pHome : null;
+                          const homePct = Number.isFinite(pHome) ? pHome : null;
                           const liveLabel = formatLiveScoreLabel(g);
                           return (
                             <div key={g.id} style={{ padding:"4px 6px", borderRadius:8, background: isOverridden ? "rgba(240,180,41,0.08)" : "transparent" }}>
                               <div style={{ display:"flex", alignItems:"center", gap:6 }}>
-                                <PtvTeamButton team={g.away} rank={g.awayRank} active={selected === g.away} onClick={() => setWhatIf(m => { const next = new Map(m); next.set(g.id, g.away); return next; })} />
+                                <PtvTeamButton team={g.away} rank={g.awayRank} active={selected === g.away} winPct={awayPct} onClick={() => setWhatIf(m => { const next = new Map(m); next.set(g.id, g.away); return next; })} />
                                 <span style={{ opacity:.4, fontSize:10 }}>@</span>
-                                <PtvTeamButton team={g.home} rank={g.homeRank} active={selected === g.home} onClick={() => setWhatIf(m => { const next = new Map(m); next.set(g.id, g.home); return next; })} />
+                                <PtvTeamButton team={g.home} rank={g.homeRank} active={selected === g.home} winPct={homePct} onClick={() => setWhatIf(m => { const next = new Map(m); next.set(g.id, g.home); return next; })} />
                                 {isMustWin && !isOverridden && <span style={{ fontSize:10, color:"#f0596b", marginLeft:4, flexShrink:0 }} title="Needed for their actual best case">🔒</span>}
                               </div>
-                              {liveLabel && (
-                                <div style={{ textAlign:"center", fontSize:10.5, color:"#f0596b", marginTop:2, fontWeight:600 }}>
-                                  🔴 {liveLabel}
-                                </div>
-                              )}
-                              {oddsLabel && (
-                                <div style={{ textAlign:"center", fontSize:10, color:"#7d8ab8", marginTop:2 }}>
-                                  {g.gameday && <span title="GameDay tiebreaker game">🎓 </span>}{oddsLabel}
+                              {(liveLabel || g.gameday) && (
+                                <div style={{ textAlign:"center", fontSize:10.5, color: liveLabel ? "#f0596b" : "#7d8ab8", marginTop:2, fontWeight:600 }}>
+                                  {g.gameday && <span title="GameDay tiebreaker game">🎓 </span>}
+                                  {liveLabel ? <>🔴 {liveLabel}</> : "GameDay tiebreaker game"}
                                 </div>
                               )}
                             </div>
