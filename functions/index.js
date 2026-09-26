@@ -475,21 +475,32 @@ async function syncOddsForWeek(db, year, week) {
 // -effort: never throws past its own caller.
 async function syncLiveWinProbForWeek(db, year, week, espnMap) {
   if (!Number.isFinite(year) || !Number.isFinite(week)) return 0;
-  const liveEntries = Object.entries(espnMap || {}).filter(([, e]) => e?.status === "in_progress" && e?.id);
-  if (!liveEntries.length) return 0;
+  const hasLive = Object.values(espnMap || {}).some(e => e?.status === "in_progress");
+  if (!hasLive) return 0;
 
   const gamesSnap = await db.collection("games")
     .where("year", "==", year)
     .where("week", "==", week)
     .get();
   if (gamesSnap.empty) return 0;
-  const byKey = new Map(gamesSnap.docs.map(d => [toKey(d.data().away, d.data().home), d.id]));
 
-  const results = await Promise.all(liveEntries.map(async ([key, entry]) => {
-    const gameId = byKey.get(key);
-    if (!gameId) return null;
+  // Same findLiveGame() fallback matching autoWriteWinners/autoLockAtKickoff
+  // already rely on (our games collection stores short team names like
+  // "TCU"; ESPN's scoreboard returns full names like "TCU Horned Frogs" -
+  // an exact toKey() match between the two can never succeed) - reusing it
+  // here rather than a second, narrower lookup that would silently miss
+  // every game the same way the original bug this comment documents did.
+  const targets = [];
+  for (const d of gamesSnap.docs) {
+    const g = d.data();
+    const entry = findLiveGame(espnMap, g.away, g.home);
+    if (entry && entry.status === "in_progress" && entry.id) targets.push({ gameId: d.id, espnId: entry.id });
+  }
+  if (!targets.length) return 0;
+
+  const results = await Promise.all(targets.map(async ({ gameId, espnId }) => {
     try {
-      const res = await fetch(`https://site.api.espn.com/apis/site/v2/sports/football/college-football/summary?event=${entry.id}`);
+      const res = await fetch(`https://site.api.espn.com/apis/site/v2/sports/football/college-football/summary?event=${espnId}`);
       if (!res.ok) return null;
       const json = await res.json();
       const wp = Array.isArray(json?.winprobability) ? json.winprobability : [];
@@ -497,7 +508,7 @@ async function syncLiveWinProbForWeek(db, year, week, espnMap) {
       const homeWinPct = last && Number.isFinite(+last.homeWinPercentage) ? +last.homeWinPercentage : null;
       return homeWinPct == null ? null : { gameId, homeWinPct };
     } catch (e) {
-      logger.warn(`syncLiveWinProbForWeek: summary fetch failed for event ${entry.id}`, e?.message || e);
+      logger.warn(`syncLiveWinProbForWeek: summary fetch failed for event ${espnId}`, e?.message || e);
       return null;
     }
   }));
@@ -513,6 +524,7 @@ async function syncLiveWinProbForWeek(db, year, week, espnMap) {
     written++;
   }
   if (written) await batch.commit();
+  logger.info(`syncLiveWinProbForWeek: wrote ${written}/${targets.length} live win-prob readings`);
   return written;
 }
 
