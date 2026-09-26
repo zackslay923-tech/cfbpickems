@@ -1191,15 +1191,66 @@ function homeWinProbFor(g) {
   return spreadToHomeWinProb(g?.spread);
 }
 
+// Compact "Spread · ML · O/U" label for a game, from whatever odds fields
+// are currently synced onto it - null if nothing's been synced at all.
+function formatGameOdds(g) {
+  const parts = [];
+  if (g?.formattedSpread) parts.push(g.formattedSpread);
+  const mlHome = Number.isFinite(+g?.homeMoneyline) ? +g.homeMoneyline : null;
+  const mlAway = Number.isFinite(+g?.awayMoneyline) ? +g.awayMoneyline : null;
+  if (mlHome != null && mlAway != null) {
+    const fmt = (n) => (n > 0 ? `+${n}` : `${n}`);
+    parts.push(`ML ${fmt(mlAway)}/${fmt(mlHome)}`);
+  }
+  if (Number.isFinite(+g?.overUnder)) parts.push(`O/U ${+g.overUnder}`);
+  return parts.length ? parts.join(" · ") : null;
+}
+
+// Standard-normal sample via Box-Muller, used below to project the GameDay
+// game's final combined score around its live over/under line - the real
+// tiebreaker resolves ties by whoever's guess lands closest to that number,
+// so the simulation needs a plausible number to compare guesses against on
+// trials where the GameDay game hasn't finished yet.
+function sampleNormal(mean, sigma) {
+  let u = 0, v = 0;
+  while (u === 0) u = Math.random();
+  while (v === 0) v = Math.random();
+  const z = Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+  return mean + z * sigma;
+}
+// Typical standard deviation of a final CFB game's combined score around its
+// pregame total line - an approximation in the same spirit as the spread
+// model's sigma above, not a calibrated number.
+const GD_TOTAL_SIGMA = 16.5;
+
+// Resolves a tie for the pot exactly the way applyWinnerTiebreak does:
+// whoever's tiebreaker guess is closest to the GameDay game's combined score
+// wins outright (a tie in that distance still splits the pot evenly); with
+// no total to compare against, the whole group splits evenly, same as an
+// unresolved real tie.
+function resolveTiebreakShares(topGroup, gdTotal) {
+  if (topGroup.length === 1) return new Map([[topGroup[0].name, 1]]);
+  if (gdTotal == null) {
+    const share = 1 / topGroup.length;
+    return new Map(topGroup.map(p => [p.name, share]));
+  }
+  const diffOf = (p) => p.tb == null ? Infinity : Math.abs(p.tb - gdTotal);
+  const bestDiff = Math.min(...topGroup.map(diffOf));
+  const winners = topGroup.filter(p => diffOf(p) === bestDiff);
+  const share = 1 / winners.length;
+  return new Map(winners.map(p => [p.name, share]));
+}
+
 // Whole-field "chance to win the pot" - a Monte Carlo simulation over every
 // still-open, revealed game. Uses real market odds (moneyline, or spread as
 // a fallback) when a game has them synced, and a 50/50 coin flip for any
 // game that doesn't (small-conference games often have no posted line) -
 // still an estimate, not a Vegas-accurate prediction, since it's driven by
-// odds as of whenever they were last synced. Each trial scores everyone and
-// splits credit evenly across however many players tie for the lead in that
-// trial (mirrors the real pot-split rule - there's no model here for the
-// GameDay tiebreaker score itself).
+// odds as of whenever they were last synced. Each trial scores everyone and,
+// when more than one player ties for the lead, resolves it the same way the
+// real pot is resolved: via the GameDay tiebreaker (using its actual final
+// score once it's final, otherwise a number sampled around its live
+// over/under line every trial) rather than just splitting the tie evenly.
 function computeFieldWinProbabilities(games, results, players, gameGroupStartMap, trials = 8000) {
   const nowMs = Date.now();
   const isFinal = (g) => !!results[g.id]?.winner;
@@ -1207,6 +1258,12 @@ function computeFieldWinProbabilities(games, results, players, gameGroupStartMap
   const revealedRemaining = games.filter(g => !isFinal(g) && isRevealed(g));
   const hiddenRemainingCount = games.filter(g => !isFinal(g) && !isRevealed(g)).length;
   const homeWinProb = new Map(revealedRemaining.map(g => [g.id, homeWinProbFor(g) ?? 0.5]));
+
+  const gdGame = games.find(g => g && g.gameday);
+  const gdFinal = gdGame ? isFinal(gdGame) : false;
+  const gdTotalRaw = gdFinal ? results[gdGame.id]?.totalPoints : null;
+  const gdTotalFixed = Number.isFinite(+gdTotalRaw) ? +gdTotalRaw : null;
+  const gdOU = (!gdFinal && gdGame && Number.isFinite(+gdGame.overUnder)) ? +gdGame.overUnder : null;
 
   const credit = new Map(players.map(p => [p.name, 0]));
   for (let t = 0; t < trials; t++) {
@@ -1219,11 +1276,12 @@ function computeFieldWinProbabilities(games, results, players, gameGroupStartMap
         if (p.picks?.[g.id] && p.picks[g.id] === winners.get(g.id)) pts++;
       }
       if (pts > top) top = pts;
-      return { name: p.name, pts };
+      return { p, pts };
     });
-    const leaders = scores.filter(s => s.pts === top);
-    const share = 1 / leaders.length;
-    for (const l of leaders) credit.set(l.name, credit.get(l.name) + share);
+    const leaders = scores.filter(s => s.pts === top).map(s => s.p);
+    const gdTotalThisTrial = gdTotalFixed != null ? gdTotalFixed : (gdOU != null ? sampleNormal(gdOU, GD_TOTAL_SIGMA) : null);
+    const shares = resolveTiebreakShares(leaders, gdTotalThisTrial);
+    for (const [name, share] of shares) credit.set(name, credit.get(name) + share);
   }
   const results_ = players
     .map(p => ({ name: p.name, pct: (credit.get(p.name) / trials) * 100 }))
@@ -2797,12 +2855,20 @@ function PathToVictoryModal({ ptvFor, compareWith, setCompareWith, onClose, game
                           const selected = whatIf.get(g.id) ?? ptv.target.picks[g.id];
                           const isOverridden = whatIf.has(g.id) && whatIf.get(g.id) !== ptv.target.picks[g.id];
                           const isMustWin = ptv.mustWinGames.some(m => m.id === g.id);
+                          const oddsLabel = formatGameOdds(g);
                           return (
-                            <div key={g.id} style={{ display:"flex", alignItems:"center", gap:6, padding:"4px 6px", borderRadius:8, background: isOverridden ? "rgba(240,180,41,0.08)" : "transparent" }}>
-                              <PtvTeamButton team={g.away} rank={g.awayRank} active={selected === g.away} onClick={() => setWhatIf(m => { const next = new Map(m); next.set(g.id, g.away); return next; })} />
-                              <span style={{ opacity:.4, fontSize:10 }}>@</span>
-                              <PtvTeamButton team={g.home} rank={g.homeRank} active={selected === g.home} onClick={() => setWhatIf(m => { const next = new Map(m); next.set(g.id, g.home); return next; })} />
-                              {isMustWin && !isOverridden && <span style={{ fontSize:10, color:"#f0596b", marginLeft:4, flexShrink:0 }} title="Needed for their actual best case">🔒</span>}
+                            <div key={g.id} style={{ padding:"4px 6px", borderRadius:8, background: isOverridden ? "rgba(240,180,41,0.08)" : "transparent" }}>
+                              <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                                <PtvTeamButton team={g.away} rank={g.awayRank} active={selected === g.away} onClick={() => setWhatIf(m => { const next = new Map(m); next.set(g.id, g.away); return next; })} />
+                                <span style={{ opacity:.4, fontSize:10 }}>@</span>
+                                <PtvTeamButton team={g.home} rank={g.homeRank} active={selected === g.home} onClick={() => setWhatIf(m => { const next = new Map(m); next.set(g.id, g.home); return next; })} />
+                                {isMustWin && !isOverridden && <span style={{ fontSize:10, color:"#f0596b", marginLeft:4, flexShrink:0 }} title="Needed for their actual best case">🔒</span>}
+                              </div>
+                              {oddsLabel && (
+                                <div style={{ textAlign:"center", fontSize:10, color:"#7d8ab8", marginTop:2 }}>
+                                  {g.gameday && <span title="GameDay tiebreaker game">🎓 </span>}{oddsLabel}
+                                </div>
+                              )}
                             </div>
                           );
                         })}
@@ -4261,7 +4327,7 @@ while (i < seq.length) {
                 <button type="button" onClick={() => setShowWinOdds(false)} aria-label="Close" style={{ background:"transparent", border:"none", color:"#cfd8f0", cursor:"pointer", fontSize:18, padding:2, lineHeight:1 }}>✕</button>
               </div>
               <p style={{ margin:"6px 0 0", fontSize:11.5, color:"#9aa4c7", lineHeight:1.5 }}>
-                Simulated using live betting odds where available (coin flip otherwise) — an estimate, not a prediction. Ties split the odds evenly.
+                Simulated using live betting odds where available (coin flip otherwise) — an estimate, not a prediction. A tie for 1st is resolved by the GameDay tiebreaker, same as the real pot.
                 {winOdds.hiddenRemainingCount > 0 && ` ${winOdds.hiddenRemainingCount} game${winOdds.hiddenRemainingCount === 1 ? "" : "s"} later this week aren't revealed yet.`}
               </p>
             </div>
