@@ -2928,7 +2928,7 @@ function PtvTeamButton({ team, rank, active, onClick, winPct, hasPossession }) {
         {hasPossession && (
           <span title="Has possession" style={{
             position:"absolute", top:-7, left:-9, fontSize:12, lineHeight:1,
-            background:"#0b1220", borderRadius:"50%", border:"1px solid #f0b429",
+            background:"#0b1220", borderRadius:"50%",
             padding:2, boxShadow:"0 1px 4px rgba(0,0,0,.6)",
           }}>🏈</span>
         )}
