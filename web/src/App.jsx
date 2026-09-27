@@ -2911,7 +2911,7 @@ const onSubmitPicks = async function(e){
 // One team's logo + name inside the Path to Victory "build your own path"
 // explorer - a real component (not redefined per game in a .map()) so each
 // button is a stable, reusable element.
-function PtvTeamButton({ team, rank, active, onClick, winPct }) {
+function PtvTeamButton({ team, rank, active, onClick, winPct, hasPossession }) {
   return (
     <button
       type="button"
@@ -2925,6 +2925,9 @@ function PtvTeamButton({ team, rank, active, onClick, winPct }) {
     >
       <div style={{ position:"relative" }}>
         <TeamLogo school={team} size={26} />
+        {hasPossession && (
+          <span title="Has possession" style={{ position:"absolute", top:-6, left:-8, fontSize:11, lineHeight:1 }}>🏈</span>
+        )}
         {Number.isFinite(winPct) && (
           <span style={{
             position:"absolute", bottom:-5, right:-9, fontSize:8.5, fontWeight:800, lineHeight:1,
@@ -3083,9 +3086,9 @@ function PathToVictoryModal({ ptvFor, compareWith, setCompareWith, onClose, game
                           return (
                             <div key={g.id} style={{ padding:"4px 6px", borderRadius:8, background: isOverridden ? "rgba(240,180,41,0.08)" : "transparent" }}>
                               <div style={{ display:"flex", alignItems:"center", gap:6 }}>
-                                <PtvTeamButton team={g.away} rank={g.awayRank} active={selected === g.away} winPct={awayPct} onClick={() => setWhatIf(m => { const next = new Map(m); next.set(g.id, g.away); return next; })} />
+                                <PtvTeamButton team={g.away} rank={g.awayRank} active={selected === g.away} winPct={awayPct} hasPossession={g.livePossession === "away"} onClick={() => setWhatIf(m => { const next = new Map(m); next.set(g.id, g.away); return next; })} />
                                 <span style={{ opacity:.4, fontSize:10 }}>@</span>
-                                <PtvTeamButton team={g.home} rank={g.homeRank} active={selected === g.home} winPct={homePct} onClick={() => setWhatIf(m => { const next = new Map(m); next.set(g.id, g.home); return next; })} />
+                                <PtvTeamButton team={g.home} rank={g.homeRank} active={selected === g.home} winPct={homePct} hasPossession={g.livePossession === "home"} onClick={() => setWhatIf(m => { const next = new Map(m); next.set(g.id, g.home); return next; })} />
                                 {isMustWin && !isOverridden && <span style={{ fontSize:10, color:"#f0596b", marginLeft:4, flexShrink:0 }} title="Needed for their actual best case">🔒</span>}
                               </div>
                               {(liveLabel || g.gameday) && (
@@ -3505,6 +3508,7 @@ useEffect(() => {
       liveAwayPoints: Number.isFinite(entry.awayPoints) ? entry.awayPoints : null,
       livePeriod: Number.isFinite(entry.period) ? entry.period : null,
       liveClock: entry.clock ?? null,
+      livePossession: (entry.possession === "home" || entry.possession === "away") ? entry.possession : null,
     };
   }), [games, uiScoreMap]);
   const [pickCount, setPickCount] = useState(0);
