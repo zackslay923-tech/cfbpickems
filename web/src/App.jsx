@@ -2926,7 +2926,11 @@ function PtvTeamButton({ team, rank, active, onClick, winPct, hasPossession }) {
       <div style={{ position:"relative" }}>
         <TeamLogo school={team} size={26} />
         {hasPossession && (
-          <span title="Has possession" style={{ position:"absolute", top:-6, left:-8, fontSize:11, lineHeight:1 }}>🏈</span>
+          <span title="Has possession" style={{
+            position:"absolute", top:-7, left:-9, fontSize:12, lineHeight:1,
+            background:"#0b1220", borderRadius:"50%", border:"1px solid #f0b429",
+            padding:2, boxShadow:"0 1px 4px rgba(0,0,0,.6)",
+          }}>🏈</span>
         )}
         {Number.isFinite(winPct) && (
           <span style={{
@@ -3421,6 +3425,27 @@ useEffect(() => {
   const uiScoreMap = isAdmin ? sbMap : (publicLiveMap ?? new Map());
   try { window._uiScoreMap = uiScoreMap; } catch {}
 
+  // Always-on subscription to the ESPN-based live map (config/liveMap.map),
+  // regardless of admin status - used only by gamesLive below (Path to
+  // Victory's live win-probability model + possession football). An admin's
+  // Scorebug prefers a separate live CFBD poll (sbMap above) - CFBD's feed
+  // never reliably carries a possession field (confirmed: useScoreboard.js
+  // reads it as a plain "home"/"away" string CFBD's /scoreboard doesn't
+  // actually send), so an admin viewing Path to Victory was silently
+  // getting possession:null for every game while everyone else correctly
+  // saw it. This keeps the Scorebug's own admin-vs-public choice untouched
+  // and just gives this one feature its own reliable read.
+  const [liveMapForGamesLive, setLiveMapForGamesLive] = React.useState(new Map());
+  React.useEffect(() => {
+    const ref = doc(db, "config", "liveMap");
+    const unsub = onSnapshot(ref, (snap) => {
+      const data = snap.data?.() ?? snap.data();
+      const obj = (data && data.map) ? data.map : {};
+      setLiveMapForGamesLive(new Map(Object.entries(obj)));
+    });
+    return () => unsub && unsub();
+  }, []);
+
 useEffect(() => {
   try {
     window._lbDebug = window._lbDebug || {};
@@ -3496,11 +3521,11 @@ useEffect(() => {
   // merged onto each entry (live* fields) - feeds Path to Victory/Win Odds'
   // own live win-probability model (liveHomeWinProbFor), so it can lean on
   // the actual game state instead of just the frozen pregame line once a
-  // game is underway. Memoized on uiScoreMap (not recomputed every render)
-  // so the Monte Carlo simulation downstream doesn't re-run and jitter on
-  // every paint - only when the live scores actually change.
+  // game is underway. Memoized on liveMapForGamesLive (not recomputed every
+  // render) so the Monte Carlo simulation downstream doesn't re-run and
+  // jitter on every paint - only when the live scores actually change.
   const gamesLive = useMemo(() => games.map(g => {
-    const entry = findLiveEntry(uiScoreMap, g.away, g.home);
+    const entry = findLiveEntry(liveMapForGamesLive, g.away, g.home);
     if (!entry || (!Number.isFinite(entry.homePoints) && !Number.isFinite(entry.awayPoints))) return g;
     return {
       ...g,
@@ -3510,7 +3535,7 @@ useEffect(() => {
       liveClock: entry.clock ?? null,
       livePossession: (entry.possession === "home" || entry.possession === "away") ? entry.possession : null,
     };
-  }), [games, uiScoreMap]);
+  }), [games, liveMapForGamesLive]);
   const [pickCount, setPickCount] = useState(0);
 const pot = useMemo(() => (pickCount * 5), [pickCount]);
 
