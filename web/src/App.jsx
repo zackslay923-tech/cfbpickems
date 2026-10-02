@@ -328,22 +328,23 @@ function Header({ user, isAdmin, setPage }) {
       )}
       {isMobile && notifState === "on" && (
         <a href="#" style={linkStyle} onClick={async (e)=>{e.preventDefault();
-          let t = null; try { t = localStorage.getItem("pushToken"); } catch (err) {}
-          if (t) {
-            alert(`Notifications are ON for this device.\n\nDevice ID: ${t.slice(0, 24)}…\n\nShow this to Zack so he can match it in Manage Devices and label it as yours.`);
-            return;
-          }
-          // No token cached - retry registration right now, out loud this
-          // time, so a real failure (unsupported browser, iOS without
-          // home-screen install, etc.) is visible instead of silently
-          // swallowed like the background self-heal attempt.
+          // Always re-register, not just when no token is cached locally -
+          // this is also the self-heal for a silently-stale subscription.
+          // iOS in particular can rotate a home-screen app's underlying
+          // push subscription (e.g. after it gets reinstalled) with no
+          // local sign anything changed, leaving a dead token cached
+          // forever since nothing else ever re-checks it. getToken()
+          // returns the same still-valid token when nothing's changed, or
+          // a fresh one when it has, so redoing this is always safe - and
+          // surfaces a real failure out loud instead of swallowing it like
+          // the background self-heal effect does.
           try {
             const token = await enablePushNotifications({ isAdmin });
             alert(`Notifications are ON for this device.\n\nDevice ID: ${token.slice(0, 24)}…\n\nShow this to Zack so he can match it in Manage Devices and label it as yours.`);
           } catch (err) {
-            alert("Still couldn't register this device for notifications.\n\nReason: " + ((err && err.message) ? err.message : String(err)) + "\n\nIf you're on an iPhone, this usually means the app needs to be added to your home screen first (Share > Add to Home Screen), then opened from there.");
+            alert("Couldn't refresh this device's notification registration.\n\nReason: " + ((err && err.message) ? err.message : String(err)) + "\n\nIf you're on an iPhone, this usually means the app needs to be added to your home screen first (Share > Add to Home Screen), then opened from there.");
           }
-        }} title="Notifications are on — tap to see your device ID" aria-label="Notification status">🔔✅ Notifications on</a>
+        }} title="Notifications are on — tap to refresh registration and see your device ID" aria-label="Notification status">🔔✅ Notifications on</a>
       )}
       {user && <a href="#" style={linkStyle} onClick={(e)=>{e.preventDefault(); logout();}}>Sign out</a>}
     </>
