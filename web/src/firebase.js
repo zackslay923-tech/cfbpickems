@@ -1,6 +1,6 @@
 ﻿// web/src/firebase.js
 import { initializeApp } from "firebase/app";
-import { getFirestore, doc, setDoc, serverTimestamp } from "firebase/firestore";
+import { getFirestore, doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
 import {
   getAuth,
   GoogleAuthProvider,
@@ -79,9 +79,25 @@ export async function enablePushNotifications({ isAdmin = false } = {}) {
   // Tagging isAdmin here (only when actually signed in as admin) is what lets
   // admin-only alerts (e.g. a stuck game with no recorded winner) go to just
   // this device instead of broadcasting to the whole pool.
-  await setDoc(doc(db, "pushTokens", token), {
-    token, createdAt: serverTimestamp(), device: describeDevice(), ...(isAdmin ? { isAdmin: true } : {})
-  }, { merge: true });
+  //
+  // createdAt/device are only ever written on first registration. firestore
+  // .rules lets a non-admin-authenticated device update only name/
+  // chatNotifsEnabled on an *existing* doc - createdAt/device/token aren't
+  // sensitive, but are locked down the same as everything else from a
+  // session the rules can't verify as admin. Always re-writing createdAt (a
+  // fresh serverTimestamp() every call, so never equal to the stored value)
+  // made every re-registration of an already-known token get rejected by
+  // that rule with a bare "Missing or insufficient permissions" - this only
+  // ever worked before because this function used to run once per device,
+  // for a brand-new token, which is a create rather than an update.
+  const tokenRef = doc(db, "pushTokens", token);
+  const existing = await getDoc(tokenRef).catch(() => null);
+  const payload = { token, ...(isAdmin ? { isAdmin: true } : {}) };
+  if (!existing?.exists()) {
+    payload.createdAt = serverTimestamp();
+    payload.device = describeDevice();
+  }
+  await setDoc(tokenRef, payload, { merge: true });
   try { localStorage.setItem("pushToken", token); } catch (e) {}
 
   // Sent as a data-only message on purpose - see the matching comment in
