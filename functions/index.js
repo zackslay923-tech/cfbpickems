@@ -26,6 +26,38 @@ async function pruneUnregisteredTokens(tokens, responses) {
   return dead.length;
 }
 
+// FCM already tells us per-token, on every real send, whether it actually
+// went through - this was never being kept anywhere, so there was no way
+// to tell "nobody's complained" apart from "it's actually reaching
+// everyone." Records a lastDeliveredAt on success (clearing any prior
+// error), or a lastDeliveryError on failure, so the Devices tab can show
+// it and flag anyone who's gone quiet instead of waiting for them to
+// notice and ask. Skips tokens pruneUnregisteredTokens is about to delete
+// - no point recording an error on a doc that won't exist a moment later.
+// `tokens`/`responses` are expected to already be a single <=500 chunk
+// (every call site here already batches sends that way), so this never
+// needs its own internal chunking.
+async function recordDeliveryResults(tokens, responses) {
+  const batch = admin.firestore().batch();
+  let writes = 0;
+  responses.forEach((r, i) => {
+    const ref = admin.firestore().collection("pushTokens").doc(tokens[i]);
+    if (r.success) {
+      batch.set(ref, {
+        lastDeliveredAt: admin.firestore.FieldValue.serverTimestamp(),
+        lastDeliveryError: admin.firestore.FieldValue.delete()
+      }, { merge: true });
+      writes++;
+    } else if (r.error?.code !== "messaging/registration-token-not-registered") {
+      batch.set(ref, {
+        lastDeliveryError: { code: r.error?.code || "unknown", at: admin.firestore.FieldValue.serverTimestamp() }
+      }, { merge: true });
+      writes++;
+    }
+  });
+  if (writes) await batch.commit();
+}
+
 // Broadcast a push notification to every registered device that isn't
 // individually blocked by an admin, optionally skipping a specific set of
 // tokens too (e.g. people who've already submitted picks - see the reminder
@@ -48,6 +80,7 @@ async function sendPush({ title, body }, { excludeTokens } = {}) {
       const batch = tokens.slice(i, i + 500);
       const res = await admin.messaging().sendEachForMulticast({ tokens: batch, data: { title, body: body || "" } });
       logger.info(`sendPush: sent "${title}" to ${res.successCount}/${batch.length} device(s)`);
+      await recordDeliveryResults(batch, res.responses);
       await pruneUnregisteredTokens(batch, res.responses);
     }
   } catch (e) {
@@ -73,6 +106,7 @@ async function sendPushToAdmins({ title, body }) {
       const batch = tokens.slice(i, i + 500);
       const res = await admin.messaging().sendEachForMulticast({ tokens: batch, data: { title, body: body || "" } });
       logger.info(`sendPushToAdmins: sent "${title}" to ${res.successCount}/${batch.length} admin device(s)`);
+      await recordDeliveryResults(batch, res.responses);
       await pruneUnregisteredTokens(batch, res.responses);
     }
   } catch (e) {
@@ -167,10 +201,13 @@ exports.sendOutboxNotification = onDocumentCreated(
           data: { title: data.title, body: data.body || "" }
         });
         logger.info(`sendOutboxNotification: sent "${data.title}" to single device ${String(data.targetToken).slice(0, 12)}...`);
+        await recordDeliveryResults([data.targetToken], [{ success: true }]);
       } catch (e) {
         if (e?.code === "messaging/registration-token-not-registered") {
           await admin.firestore().collection("pushTokens").doc(data.targetToken).delete();
           logger.info(`pruned 1 stale device (targeted send failed): ${String(data.targetToken).slice(0, 10)}...`);
+        } else {
+          await recordDeliveryResults([data.targetToken], [{ success: false, error: { code: e?.code } }]);
         }
         logger.warn("sendOutboxNotification (targeted) failed:", e?.message || e);
       }
@@ -655,6 +692,7 @@ exports.sendChatNotification = onDocumentCreated(
         const batch = tokens.slice(i, i + 500);
         const res = await admin.messaging().sendEachForMulticast({ tokens: batch, data: { title: `💬 ${name}`, body } });
         logger.info(`sendChatNotification: sent to ${res.successCount}/${batch.length} device(s)`);
+        await recordDeliveryResults(batch, res.responses);
         await pruneUnregisteredTokens(batch, res.responses);
       }
     } catch (e) {

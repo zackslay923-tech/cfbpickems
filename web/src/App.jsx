@@ -7347,6 +7347,19 @@ function DevicesTab({ pushDevices, roster, rosterOptions, assignDeviceToPlayer, 
                     <div style={{ fontSize:11, color:"#9aa4c7" }}>
                       {d.device ? `${d.device} · ` : ""}Registered: {d.createdAt?.toDate ? d.createdAt.toDate().toLocaleString("en-US", { month:"short", day:"numeric", hour:"numeric", minute:"2-digit" }) : "unknown"}
                     </div>
+                    <div style={{ fontSize:11, marginTop:2, display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
+                      <span style={{ color: d.lastDeliveryError ? "#f0596b" : "#9aa4c7" }}>
+                        Last delivered: {d.lastDeliveredAt?.toDate ? d.lastDeliveredAt.toDate().toLocaleString("en-US", { month:"short", day:"numeric", hour:"numeric", minute:"2-digit" }) : "never"}
+                      </span>
+                      {d.lastDeliveryError && (
+                        <StatusBadge
+                          tone="danger"
+                          title={d.lastDeliveryError.at?.toDate ? `Failed ${d.lastDeliveryError.at.toDate().toLocaleString("en-US", { month:"short", day:"numeric", hour:"numeric", minute:"2-digit" })}` : undefined}
+                        >
+                          ⚠️ Last send failed ({(d.lastDeliveryError.code || "error").replace("messaging/", "")})
+                        </StatusBadge>
+                      )}
+                    </div>
                     <div style={{ marginTop:6, display:"flex", alignItems:"center", gap:6 }}>
                       <span style={{ fontSize:11, color:"#9aa4c7" }}>Notifies as:</span>
                       <select
