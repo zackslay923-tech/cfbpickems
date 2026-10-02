@@ -86,9 +86,19 @@ export async function enablePushNotifications({ isAdmin = false } = {}) {
 
   // Sent as a data-only message on purpose - see the matching comment in
   // firebase-messaging-sw.js for why (avoids a duplicate notification).
+  //
+  // Must go through the service worker's showNotification(), not `new
+  // Notification(...)` - the bare constructor throws (or is simply a no-op)
+  // on mobile browsers (Chrome for Android, iOS Safari/PWA), which only
+  // support notifications raised via a service worker registration. That
+  // made every foreground notification (tab open and focused) silently
+  // fail to appear on mobile, while the exact same message worked fine
+  // once the tab was backgrounded and firebase-messaging-sw.js's
+  // onBackgroundMessage handled it instead - on desktop both paths work,
+  // which is why this went unnoticed there.
   onMessage(messaging, (payload) => {
     const { title, body } = payload.data || {};
-    if (title) new Notification(title, { body, icon: "/icons/icon-192.png" });
+    if (title) registration.showNotification(title, { body, icon: "/icons/icon-192.png" });
   });
 
   return token;
