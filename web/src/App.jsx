@@ -284,28 +284,34 @@ function Header({ user, isAdmin, setPage }) {
       alert((e && e.message) ? e.message : "Couldn't enable notifications.");
     }
   }
-  // Covers signing in as admin *after* already enabling notifications on this
-  // device - retags the existing token so admin-only alerts still reach it.
-  useEffect(() => {
-    if (!isAdmin || notifState !== "on") return;
-    let token = null;
-    try { token = localStorage.getItem("pushToken"); } catch (e) {}
-    if (!token) return;
-    setDoc(doc(db, "pushTokens", token), { isAdmin: true }, { merge: true }).catch(() => {});
-  }, [isAdmin, notifState]);
-  // notifState "on" only reflects the browser's notification *permission* -
-  // it's possible to have permission granted but never actually finish
-  // registering a token (e.g. the page reloaded mid-flow, or permission was
-  // granted some other way). That leaves someone stuck: the app thinks
-  // they're done and hides the enable button, but no token was ever saved.
-  // Since permission is already granted, silently retry registration - this
-  // won't prompt the user again.
+  // Self-heals notification registration automatically, not just when
+  // there's no token cached locally at all. A push subscription can
+  // silently invalidate or rotate - an OS update, reinstalling the
+  // home-screen app, clearing site data, long inactivity - with zero
+  // local sign anything changed, since nothing else ever re-validates an
+  // existing cached token against reality; it just sits there looking
+  // "on" while quietly dead. This also covers what a separate, narrower
+  // effect used to handle (re-tagging admin status after signing in on an
+  // already-enabled device), since enablePushNotifications already
+  // includes the isAdmin flag in its own write - one self-heal instead of
+  // two overlapping ones.
+  //
+  // Throttled to roughly once a day per device (a timestamp in
+  // localStorage, separate from the cached token itself) so repeat page
+  // loads in the same session don't re-hit the network for no reason -
+  // this is a passive background check, not a user action, so failures
+  // are swallowed the same way the old version did; someone can still
+  // force an immediate refresh any time via "Notifications on" in the menu.
   useEffect(() => {
     if (notifState !== "on") return;
-    let existing = null;
-    try { existing = localStorage.getItem("pushToken"); } catch (e) {}
-    if (existing) return;
-    enablePushNotifications({ isAdmin }).catch(() => {});
+    const THROTTLE_MS = 20 * 60 * 60 * 1000; // ~20h - comfortably under a day
+    try {
+      const last = Number(localStorage.getItem("pushTokenVerifiedAt") || 0);
+      if (Date.now() - last < THROTTLE_MS) return;
+    } catch (e) {}
+    enablePushNotifications({ isAdmin })
+      .then(() => { try { localStorage.setItem("pushTokenVerifiedAt", String(Date.now())); } catch (e) {} })
+      .catch(() => {});
   }, [notifState, isAdmin]);
 
   // Same link set either way - inline on desktop, collapsed into the
