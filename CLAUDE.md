@@ -17,7 +17,7 @@ Weekly college-football pick'em pool (~30 players, $5 entry, winner-take-all). O
 - New submissions lock when the week's very first game kicks off (`autoLockAtKickoff` sets `config/app.picksLocked`, opens the leaderboard, makes picks public).
 - Games are grouped by calendar day (America/New_York) via `groupGamesByDate`. A whole day's games lock/reveal together at that day's first kickoff (`buildGameGroupStartMap`), not per game.
 - Every submission for a week with later-day games gets `editDeadline` (earliest kickoff of the later day). Until then the owner of a doc can keep editing later-day picks with their 6-digit code, even after `picksLocked`. The Firestore update rule enforces the deadline for the whole document; locking earlier-day picks is enforced only in the UI.
-- Partial slate is opt-in (`partial: true`): only the first day's games are required up front. If still incomplete after `editDeadline`, the entry is forfeited: excluded from the pot, standings, and Payment Tracking (`isForfeitedPick`, derived on the fly; nothing stored).
+- Partial slate is opt-in (`partial: true`): only the first day's games are required up front. If still incomplete after `editDeadline` with half or fewer of the games filled in, the entry is forfeited: excluded from the pot, standings, and Payment Tracking (`isForfeitedPick`, derived on the fly; nothing stored). More than half filled still plays, blanks count as misses.
 - The leaderboard shows 🔒 for a day's picks until that day's first kickoff (admins and past weeks see everything).
 
 ## Data model notes

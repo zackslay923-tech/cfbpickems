@@ -853,8 +853,10 @@ function picksDocId(year, week, email) {
 // finishing the rest later (see PicksPage's partialOptIn) - whether such a
 // doc still "counts" is always derived from games+picks rather than stored:
 // a doc is either complete (scores/counts like any normal submission) or,
-// once editDeadline has passed still incomplete, forfeited (excluded
-// everywhere, same as never having submitted - no pot credit, no $5 owed).
+// once editDeadline has passed still incomplete with half or fewer of the
+// games filled in, forfeited (excluded everywhere, same as never having
+// submitted - no pot credit, no $5 owed). More than half filled still plays,
+// blanks counted as misses.
 // Only ever forfeited if it was explicitly opted partial - a normal
 // submission is always required to be complete up front, so it never has
 // anything to forfeit.
@@ -885,11 +887,28 @@ function editDeadlineMs(picksDoc) {
   const d = new Date(dl);
   return isNaN(d) ? null : d.getTime();
 }
+// Share of the week's required games that have a valid pick on this doc.
+function pickFillFraction(games, picksDoc) {
+  const list = Array.isArray(games) ? games : [];
+  const byId = new Map(list.map(g => [g.id, g]));
+  const required = requiredGameIdsFor(games);
+  if (!required.length) return 1;
+  const filled = required.filter(id => {
+    const g = byId.get(id);
+    const v = picksDoc?.picks?.[id];
+    return !!g && (v === g.home || v === g.away);
+  }).length;
+  return filled / required.length;
+}
+// Past its deadline, an unfinished partial slate only forfeits if half or
+// fewer of the week's games are filled in - more than half still plays, with
+// the blanks counted as misses.
 function isForfeitedPick(games, picksDoc) {
   if (!picksDoc || picksDoc.partial !== true) return false;
   const ms = editDeadlineMs(picksDoc);
   if (ms == null || Date.now() < ms) return false;
-  return !isPickDocComplete(games, picksDoc);
+  if (isPickDocComplete(games, picksDoc)) return false;
+  return pickFillFraction(games, picksDoc) <= 0.5;
 }
 async function getPicksForWeek(year, week) {
   const y = Number(year), w = Number(week);
@@ -2616,7 +2635,7 @@ const onSubmitPicks = async function(e){
                 <div style={{ display:"flex", gap:8, alignItems:"flex-start", margin:"0 0 12px", padding:"8px 10px", borderRadius:10, background:"rgba(240,89,107,0.12)", border:"1px solid rgba(240,89,107,0.4)" }}>
                   <span aria-hidden="true">⚠️</span>
                   <span style={{ fontSize:12.5, color:"#f5b6be", lineHeight:1.4 }}>
-                    If it isn't finished in time, this week's entry won't count — and you won't owe the $5.
+                    If it isn't finished in time and half or fewer of the games are filled in, this week's entry won't count — and you won't owe the $5. Any games left blank on a bigger entry count as misses.
                   </span>
                 </div>
               )}
@@ -2818,7 +2837,7 @@ const onSubmitPicks = async function(e){
       together at that day's own first kickoff — so with your code, you can keep editing a later day's games right up until that day's first kickoff
       {laterGroupEarliestGame ? <> (this week, that's <strong>{kickoffLabel(laterGroupEarliestGame, { timeZone: "America/New_York" })}</strong> for the last day's games)</> : null}.
       Can't finish everything before the first kickoff? Check the Partial Slate box to submit what you have now and fill in the rest later with your code —
-      if it's still unfinished once its deadline passes, that entry doesn't count for the pot and you won't owe the $5.
+      if it's still unfinished once its deadline passes, any games left blank count as misses — unless half or fewer of the games are filled in, in which case that entry doesn't count for the pot and you won't owe the $5.
     </li>
     <li><strong>Payment:</strong> Venmo <strong>$5</strong> each week to <strong>@ZackSlay</strong> (Zack Slay).</li>
     <li><strong>Payout:</strong> <strong>Winner-take-all.</strong> The highest score wins the entire pot. If there's a tie on points, the tiebreaker decides; if still tied, the pot is split.</li>
