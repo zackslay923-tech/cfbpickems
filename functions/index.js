@@ -499,21 +499,19 @@ async function syncOddsForWeek(db, year, week) {
   return written;
 }
 
-// Pulls ESPN's own play-by-play win-probability model for every currently
-// in-progress game and writes the latest reading onto games/{id} as
-// liveHomeWinPct - this is ESPN's real, trained model (visible on their own
-// gamecast), not an estimate we're deriving ourselves, so it's used as the
-// client's first choice for a live game's win odds (see liveHomeWinProbFor
-// in App.jsx), falling back to our own score/clock-based projection only
-// when ESPN doesn't have a reading yet. Only called for games ESPN reports
-// as "in_progress" (espnMap, already fetched this cycle by publishLiveMap)
-// - pregame and final games don't need this extra per-game fetch, since
-// pregame odds and final results are already covered elsewhere. Best
-// -effort: never throws past its own caller.
+// Pulls ESPN's own win probability for every in-progress and not-yet-started
+// game and writes it onto games/{id} as liveHomeWinPct (a 0-1 fraction) -
+// the client's only source for game odds (see liveHomeWinProbFor in
+// App.jsx). In-progress games use ESPN's play-by-play win-probability model
+// (re-read every cycle); games that haven't kicked off use ESPN's pregame
+// Matchup Predictor, which barely moves, so it's only re-read every
+// PREGAME_WINPROB_REFRESH_MS to keep the per-game fetch count down. Final
+// games don't need one. Best-effort: never throws past its own caller.
+const PREGAME_WINPROB_REFRESH_MS = 30 * 60 * 1000;
 async function syncLiveWinProbForWeek(db, year, week, espnMap) {
   if (!Number.isFinite(year) || !Number.isFinite(week)) return 0;
-  const hasLive = Object.values(espnMap || {}).some(e => e?.status === "in_progress");
-  if (!hasLive) return 0;
+  const hasOpen = Object.values(espnMap || {}).some(e => e?.status === "in_progress" || e?.status === "scheduled");
+  if (!hasOpen) return 0;
 
   const gamesSnap = await db.collection("games")
     .where("year", "==", year)
@@ -531,7 +529,15 @@ async function syncLiveWinProbForWeek(db, year, week, espnMap) {
   for (const d of gamesSnap.docs) {
     const g = d.data();
     const entry = findLiveGame(espnMap, g.away, g.home);
-    if (entry && entry.status === "in_progress" && entry.id) targets.push({ gameId: d.id, espnId: entry.id });
+    if (!entry || !entry.id) continue;
+    if (entry.status === "in_progress") {
+      targets.push({ gameId: d.id, espnId: entry.id });
+    } else if (entry.status === "scheduled") {
+      const lastMs = g.liveWinPctUpdatedAt?.toMillis?.() ?? 0;
+      if (!Number.isFinite(g.liveHomeWinPct) || Date.now() - lastMs >= PREGAME_WINPROB_REFRESH_MS) {
+        targets.push({ gameId: d.id, espnId: entry.id });
+      }
+    }
   }
   if (!targets.length) return 0;
 
@@ -542,7 +548,13 @@ async function syncLiveWinProbForWeek(db, year, week, espnMap) {
       const json = await res.json();
       const wp = Array.isArray(json?.winprobability) ? json.winprobability : [];
       const last = wp.length ? wp[wp.length - 1] : null;
-      const homeWinPct = last && Number.isFinite(+last.homeWinPercentage) ? +last.homeWinPercentage : null;
+      let homeWinPct = last && Number.isFinite(+last.homeWinPercentage) ? +last.homeWinPercentage : null;
+      if (homeWinPct == null) {
+        // No play-by-play reading (pregame, or a game that just kicked off):
+        // ESPN's Matchup Predictor, which is a percent string like "74.3".
+        const proj = json?.predictor?.homeTeam?.gameProjection;
+        if (proj != null && proj !== "" && Number.isFinite(+proj)) homeWinPct = +proj / 100;
+      }
       return homeWinPct == null ? null : { gameId, homeWinPct };
     } catch (e) {
       logger.warn(`syncLiveWinProbForWeek: summary fetch failed for event ${espnId}`, e?.message || e);

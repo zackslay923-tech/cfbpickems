@@ -1240,72 +1240,6 @@ function compareMultiple(games, results, gameGroupStartMap, players, names) {
   return { selected, rows, hiddenRemainingCount };
 }
 
-// Moneyline -> implied win probability (standard American-odds conversion),
-// de-vigged by normalizing both sides so they sum to 1 - a book's moneyline
-// pair always implies slightly over 100% between the two, since that margin
-// (the vig) is how the book makes money, not a real edge either team has.
-function impliedProbFromMoneyline(ml) {
-  if (ml == null || !Number.isFinite(ml)) return null;
-  return ml < 0 ? (-ml) / (-ml + 100) : 100 / (ml + 100);
-}
-// Point spread -> win probability, via the standard normal-distribution
-// model sports-analytics sites use (sigma = the roughly-13.5-point typical
-// college football scoring-margin standard deviation). Only used as a
-// fallback when a game has a spread but no moneyline posted.
-function erf(x) {
-  const sign = x < 0 ? -1 : 1;
-  x = Math.abs(x);
-  const a1 = 0.254829592, a2 = -0.284496736, a3 = 1.421413741, a4 = -1.453152027, a5 = 1.061405429, p = 0.3275911;
-  const t = 1 / (1 + p * x);
-  const y = 1 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * Math.exp(-x * x);
-  return sign * y;
-}
-function normalCdf(z) { return 0.5 * (1 + erf(z / Math.SQRT2)); }
-// Inverse standard-normal CDF (probit), Peter Acklam's rational
-// approximation - lets the live blend below turn a win probability (from
-// homeWinProbFor - moneyline first, spread as its own fallback) back into
-// an equivalent margin on this same normal model, instead of re-deriving a
-// margin straight from the spread field and silently ignoring moneyline.
-function invNormalCdf(p) {
-  if (!(p > 0) || !(p < 1)) return p <= 0 ? -Infinity : Infinity;
-  const a = [-3.969683028665376e+01, 2.209460984245205e+02, -2.759285104469687e+02, 1.383577518672690e+02, -3.066479806614716e+01, 2.506628277459239e+00];
-  const b = [-5.447609879822406e+01, 1.615858368580409e+02, -1.556989798598866e+02, 6.680131188771972e+01, -1.328068155288572e+01];
-  const c = [-7.784894002430293e-03, -3.223964580411365e-01, -2.400758277161838e+00, -2.549732539343734e+00, 4.374664141464968e+00, 2.938163982698783e+00];
-  const d = [7.784695709041462e-03, 3.224671290700398e-01, 2.445134137142996e+00, 3.754408661907416e+00];
-  const pLow = 0.02425, pHigh = 1 - pLow;
-  if (p < pLow) {
-    const q = Math.sqrt(-2 * Math.log(p));
-    return (((((c[0]*q+c[1])*q+c[2])*q+c[3])*q+c[4])*q+c[5]) / ((((d[0]*q+d[1])*q+d[2])*q+d[3])*q+1);
-  }
-  if (p <= pHigh) {
-    const q = p - 0.5, r = q*q;
-    return (((((a[0]*r+a[1])*r+a[2])*r+a[3])*r+a[4])*r+a[5])*q / (((((b[0]*r+b[1])*r+b[2])*r+b[3])*r+b[4])*r+1);
-  }
-  const q = Math.sqrt(-2 * Math.log(1 - p));
-  return -(((((c[0]*q+c[1])*q+c[2])*q+c[3])*q+c[4])*q+c[5]) / ((((d[0]*q+d[1])*q+d[2])*q+d[3])*q+1);
-}
-// This project's `spread` field is CFBD's convention: positive means the
-// AWAY team is favored by that many points, negative means the HOME team
-// is (confirmed against real synced games - e.g. "NC State -14" at home
-// stores as spread: -14). So the home team's expected margin is -spread.
-function spreadToHomeWinProb(spread, sigma = 13.5) {
-  if (spread == null || !Number.isFinite(spread)) return null;
-  return normalCdf(-spread / sigma);
-}
-// Best-available home-win probability for a game: moneyline first (a direct
-// market price), spread as a fallback, else null (caller defaults to 50/50).
-function homeWinProbFor(g) {
-  const viaMoneyline = (() => {
-    const pHome = impliedProbFromMoneyline(g?.homeMoneyline);
-    const pAway = impliedProbFromMoneyline(g?.awayMoneyline);
-    if (pHome == null || pAway == null) return null;
-    const total = pHome + pAway;
-    return total > 0 ? pHome / total : null;
-  })();
-  if (viaMoneyline != null) return viaMoneyline;
-  return spreadToHomeWinProb(g?.spread);
-}
-
 // A regulation CFB game is four 15-minute quarters. Used to turn a live
 // period/clock into "how much of the game is left" for the projections
 // below - real game time, not real-world elapsed time (commercial breaks
@@ -1352,26 +1286,14 @@ function liveGameProjection(g) {
   return { remainingFraction, currentMargin: hp - ap, currentTotal: hp + ap };
 }
 
-// Live-aware version of homeWinProbFor. Prefers ESPN's own play-by-play win
-// -probability model (liveHomeWinPct, synced by syncLiveWinProbForWeek in
-// functions/index.js while a game is in progress) when we've got a recent
-// reading - a real trained model, not an approximation. Falls back to
-// blending the market's pregame win probability (homeWinProbFor - moneyline
-// first, spread only as its own fallback, exactly what the logo badges show
-// pregame) with how the game has actually gone so far, weighted by how much
-// time is left (early on, the pregame number still dominates; late in the
-// game, the real score does) - our own calculation for whenever ESPN's
-// reading isn't available yet. Either way, still an estimate, not a
-// prediction.
+// Home team's win probability for a game, straight from ESPN and nothing
+// else: its pregame Matchup Predictor before kickoff, its play-by-play win
+// probability once live (both synced onto games/{id}.liveHomeWinPct by
+// syncLiveWinProbForWeek in functions/index.js). Null when ESPN hasn't
+// published a number for the game yet; callers treat that as a coin flip.
 function liveHomeWinProbFor(g) {
-  if (Number.isFinite(+g?.liveHomeWinPct)) return +g.liveHomeWinPct;
-  const proj = liveGameProjection(g);
-  if (!proj) return homeWinProbFor(g);
-  const pPregame = homeWinProbFor(g);
-  const pregameMargin = pPregame != null ? 13.5 * invNormalCdf(pPregame) : 0;
-  const projectedFinalMargin = proj.currentMargin + proj.remainingFraction * pregameMargin;
-  const sigma = 13.5 * Math.sqrt(Math.max(proj.remainingFraction, MIN_REMAINING_FRACTION));
-  return normalCdf(projectedFinalMargin / sigma);
+  const p = g?.liveHomeWinPct;
+  return typeof p === "number" && Number.isFinite(p) ? Math.min(1, Math.max(0, p)) : null;
 }
 
 // "Away 20 - Home 10 · Q4 4:45" for a game with live score data merged onto
@@ -1422,11 +1344,11 @@ function resolveTiebreakShares(topGroup, gdTotal) {
 }
 
 // Whole-field "chance to win the pot" - a Monte Carlo simulation over every
-// still-open, revealed game. Uses real market odds (moneyline, or spread as
-// a fallback) when a game has them synced, and a 50/50 coin flip for any
-// game that doesn't (small-conference games often have no posted line) -
-// still an estimate, not a Vegas-accurate prediction, since it's driven by
-// odds as of whenever they were last synced. Each trial scores everyone and,
+// still-open, revealed game. Each game's win probability is ESPN's own
+// (pregame Matchup Predictor, then live win probability - see
+// liveHomeWinProbFor), with a 50/50 coin flip for any game ESPN has no
+// number for yet - still an estimate, as of whenever it was last synced.
+// Each trial scores everyone and,
 // when more than one player ties for the lead, resolves it the same way the
 // real pot is resolved: via the GameDay tiebreaker (using its actual final
 // score once it's final, otherwise a number sampled around its live
