@@ -1114,15 +1114,7 @@ function computePathToVictory(games, results, players, gameGroupStartMap, target
   // the field actually ends up - undercounting real eliminations.)
   const bestRows = scenario(new Map());
   const bestTarget = bestRows.find(p => p.name === targetName);
-  // While any game is still unrevealed, the scenario above is missing games
-  // that are still worth points, so "doesn't win it" proves nothing. The only
-  // thing provable from public info is the ceiling check: even if target hits
-  // every remaining game (revealed or not), they still finish below the
-  // current leader's already-locked points. Uses nobody's hidden picks.
-  const hasHidden = hiddenRemainingCount > 0;
-  const leaderPoints = sortedNow[0]?.points ?? target.points;
-  const ceiling = target.points + revealedRemaining.length + hiddenRemainingCount;
-  const winsBestCase = hasHidden ? !(ceiling < leaderPoints) : !!bestTarget?.isWinner;
+  const winsBestCase = !!bestTarget?.isWinner;
   const eliminated = !winsBestCase;
 
   // "Games you need": flip just one revealed remaining game away from your
@@ -1130,7 +1122,7 @@ function computePathToVictory(games, results, players, gameGroupStartMap, target
   // winning/tied spot. Cheap - at most a handful of games x field size.
   const mustWinGames = [];
   const irrelevantGames = [];
-  if (winsBestCase && !hasHidden) {
+  if (winsBestCase) {
     for (const g of revealedRemaining) {
       const yourPick = target.picks[g.id];
       const otherTeam = yourPick === g.home ? g.away : g.home;
@@ -1140,13 +1132,13 @@ function computePathToVictory(games, results, players, gameGroupStartMap, target
   }
 
   return {
-    target, incomplete: false, hiddenRemainingCount, hasHidden, eliminated, winsBestCase,
+    target, incomplete: false, hiddenRemainingCount, eliminated, winsBestCase,
     currentRank, totalPlayers: players.length, pointsBack,
     bestCasePoints: bestTarget?.points ?? target.points,
     bestCaseNote: bestTarget?.winNote || null,
     bestCaseStandings: bestRows.slice(0, 5),
-    bestCaseLeader: !winsBestCase && !hasHidden ? bestRows[0] : null,
-    bestCaseGap: !winsBestCase && !hasHidden && bestRows[0] ? bestRows[0].points - (bestTarget?.points ?? target.points) : 0,
+    bestCaseLeader: !winsBestCase ? bestRows[0] : null,
+    bestCaseGap: !winsBestCase && bestRows[0] ? bestRows[0].points - (bestTarget?.points ?? target.points) : 0,
     remainingGames: revealedRemaining,
     mustWinGames, irrelevantGames,
     // Exposed so the modal can let someone click through their own custom
@@ -1445,10 +1437,6 @@ function computeFieldWinProbabilities(games, results, players, gameGroupStartMap
   const isRevealed = (g) => gameIsRevealed(gameGroupStartMap, g, nowMs);
   const revealedRemaining = games.filter(g => !isFinal(g) && isRevealed(g));
   const hiddenRemainingCount = games.filter(g => !isFinal(g) && !isRevealed(g)).length;
-  // Simulating only the revealed games would end the week early and hand the
-  // pot to whoever leads (or to the best tiebreaker guess), so no percentages
-  // until every remaining game is revealed.
-  if (hiddenRemainingCount > 0) return { odds: null, pending: true, hiddenRemainingCount };
   const homeWinProb = new Map(revealedRemaining.map(g => [g.id, liveHomeWinProbFor(g) ?? 0.5]));
 
   const gdGame = games.find(g => g && g.gameday);
@@ -2998,12 +2986,8 @@ function PathToVictoryModal({ ptvFor, compareWith, setCompareWith, onClose, game
   const [whatIf, setWhatIf] = useState(new Map());
   useEffect(() => { setWhatIf(new Map()); }, [ptvFor]);
   const hasCustomPicks = whatIf.size > 0;
-  const liveRows = (ptv && !ptv.incomplete)
-    ? (ptv.hasHidden
-      ? [...players].sort((a, b) => b.points - a.points || a.name.localeCompare(b.name))
-      : ptv.scenario(whatIf))
-    : null;
-  const liveMe = liveRows && !ptv?.hasHidden ? liveRows.find(r => r.name === ptvFor) : null;
+  const liveRows = (ptv && !ptv.incomplete) ? ptv.scenario(whatIf) : null;
+  const liveMe = liveRows ? liveRows.find(r => r.name === ptvFor) : null;
   const liveRank = liveRows ? liveRows.findIndex(r => r.name === ptvFor) + 1 : null;
 
   if (!ptv) return null;
@@ -3080,12 +3064,6 @@ function PathToVictoryModal({ ptvFor, compareWith, setCompareWith, onClose, game
                     </div>
                   )}
 
-                  {ptv.hasHidden && (
-                    <div style={{ marginBottom:14, padding:"10px 12px", borderRadius:10, background:"rgba(106,162,255,0.10)", border:"1px solid rgba(106,162,255,0.3)", fontSize:12.5 }}>
-                      Best case and odds unlock once the rest of this week's games are revealed. Until then this shows current standings, and only marks someone out if they can't catch the leader even by winning every remaining game.
-                    </div>
-                  )}
-
                   {liveRows && liveRows.length > 1 && (
                     <div style={{ marginBottom:14, border:"1px solid #1f2a44", borderRadius:8, overflow:"hidden" }}>
                       {liveRows.slice(0, 5).map((row, i) => (
@@ -3102,7 +3080,7 @@ function PathToVictoryModal({ ptvFor, compareWith, setCompareWith, onClose, game
                     </div>
                   )}
 
-                  {ptv.remainingGames.length > 0 && !ptv.hasHidden && (
+                  {ptv.remainingGames.length > 0 && (
                     <div style={{ marginBottom:10 }}>
                       <div style={{ fontWeight:600, marginBottom:6 }}>
                         🔮 Build your own path — tap a team to try it:
@@ -4635,9 +4613,8 @@ while (i < seq.length) {
                 <button type="button" onClick={() => setShowWinOdds(false)} aria-label="Close" style={{ background:"transparent", border:"none", color:"#cfd8f0", cursor:"pointer", fontSize:18, padding:2, lineHeight:1 }}>✕</button>
               </div>
               <p style={{ margin:"6px 0 0", fontSize:11.5, color:"#9aa4c7", lineHeight:1.5 }}>
-                {winOdds.pending
-                  ? `Win odds unlock once the rest of the week's games are revealed (${winOdds.hiddenRemainingCount} not revealed yet). Showing current points; "Out" only means they can't catch the leader even winning every remaining game.`
-                  : "Simulated odds, live once games kick off. Ties go to the GameDay tiebreaker."}
+                Simulated odds, live once games kick off. Ties go to the GameDay tiebreaker.
+                {winOdds.hiddenRemainingCount > 0 && ` +${winOdds.hiddenRemainingCount} game${winOdds.hiddenRemainingCount === 1 ? "" : "s"} not revealed yet.`}
               </p>
             </div>
             <div style={{ overflowY:"auto", minHeight:0, padding:12 }}>
@@ -4647,23 +4624,14 @@ while (i < seq.length) {
                 // stronger, different claim than "hasn't won a simulated
                 // trial yet" (see the <0.0% vs 0.0% distinction below), so
                 // it shouldn't just fall out of a plain percentage sort.
-                const pendingOdds = winOdds.pending;
-                const sortedOdds = pendingOdds
-                  ? [...players].map(p => ({ name: p.name, pct: 0, points: p.points })).sort((a, b) => {
-                      const aElim = eliminatedNames.has(a.name), bElim = eliminatedNames.has(b.name);
-                      if (aElim !== bElim) return aElim ? 1 : -1;
-                      return b.points - a.points || a.name.localeCompare(b.name);
-                    })
-                  : [...winOdds.odds].sort((a, b) => {
-                      const aElim = eliminatedNames.has(a.name), bElim = eliminatedNames.has(b.name);
-                      if (aElim !== bElim) return aElim ? 1 : -1;
-                      return b.pct - a.pct || a.name.localeCompare(b.name);
-                    });
-                const maxPct = pendingOdds ? (sortedOdds[0]?.points || 1) : (sortedOdds[0]?.pct || 1);
+                const sortedOdds = [...winOdds.odds].sort((a, b) => {
+                  const aElim = eliminatedNames.has(a.name), bElim = eliminatedNames.has(b.name);
+                  if (aElim !== bElim) return aElim ? 1 : -1;
+                  return b.pct - a.pct || a.name.localeCompare(b.name);
+                });
+                const maxPct = sortedOdds[0]?.pct || 1;
                 return sortedOdds.map((o, i) => {
-                  const widthPct = pendingOdds
-                    ? Math.max(4, (o.points / maxPct) * 100)
-                    : (maxPct > 0 ? Math.max(4, (o.pct / maxPct) * 100) : 0);
+                  const widthPct = maxPct > 0 ? Math.max(4, (o.pct / maxPct) * 100) : 0;
                   const medal = i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : null;
                   const barColor = i === 0 ? "240,180,41" : i === 1 ? "203,213,225" : i === 2 ? "205,127,50" : "106,162,255";
                   const isElim = eliminatedNames.has(o.name);
@@ -4700,7 +4668,7 @@ while (i < seq.length) {
                           }}>
                             {isElim ? "Out" : "Alive"}
                           </span>
-                          <span style={{ fontWeight:800 }}>{pendingOdds ? `${o.points} pt${o.points === 1 ? "" : "s"}` : `${pctLabel}%`}</span>
+                          <span style={{ fontWeight:800 }}>{pctLabel}%</span>
                         </span>
                       </div>
                     </div>
