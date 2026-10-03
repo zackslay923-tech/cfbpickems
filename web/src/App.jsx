@@ -4263,7 +4263,7 @@ useEffect(() => {
                       borderRadius:14, boxShadow:"0 6px 18px rgba(42,79,184,0.45)",
                     }}
                   >
-                    🏆 Path to Victory
+                    🏆 Path to Victory{isAdmin && pathToVictoryDisabled ? " (Hidden from players)" : ""}
                   </button>
                 )}
               </>
@@ -4276,7 +4276,7 @@ useEffect(() => {
                 <h2 style={{ margin: 0 }}>CFB Pick'Ems {weekLabelFor(year, week)}</h2>
                 {winOdds && (
                   <button type="button" style={adminBtn("neutral")} onClick={() => setShowWinOdds(true)}>
-                    🏆 Path to Victory
+                    🏆 Path to Victory{isAdmin && pathToVictoryDisabled ? " (Hidden from players)" : ""}
                   </button>
                 )}
               </Row>
@@ -4609,7 +4609,7 @@ while (i < seq.length) {
           <div style={{ background:"linear-gradient(180deg,#161f38,#101827)", border:"1px solid #2a3655", borderRadius:16, padding:0, maxWidth:480, width:"90%", maxHeight:"85vh", boxShadow:"0 16px 40px rgba(0,0,0,.5)", display:"flex", flexDirection:"column", overflow:"hidden" }}>
             <div style={{ padding:"16px 16px 12px", background:"linear-gradient(135deg, rgba(240,180,41,0.18), rgba(106,162,255,0.10))", borderBottom:"1px solid #2a3655", flexShrink:0 }}>
               <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
-                <h3 style={{ margin:0, fontSize:19, letterSpacing:.3 }}>🏆 Path to Victory</h3>
+                <h3 style={{ margin:0, fontSize:19, letterSpacing:.3 }}>🏆 Path to Victory{isAdmin && pathToVictoryDisabled ? <span style={{ fontSize:12, fontWeight:600, color:"#f0b429", marginLeft:8 }}>Hidden from players</span> : null}</h3>
                 <button type="button" onClick={() => setShowWinOdds(false)} aria-label="Close" style={{ background:"transparent", border:"none", color:"#cfd8f0", cursor:"pointer", fontSize:18, padding:2, lineHeight:1 }}>✕</button>
               </div>
               <p style={{ margin:"6px 0 0", fontSize:11.5, color:"#9aa4c7", lineHeight:1.5 }}>
