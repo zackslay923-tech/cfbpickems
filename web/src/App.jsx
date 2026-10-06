@@ -178,10 +178,15 @@ function LoadingGate({ ready, children, label = "Loading…" }) {
     </Card>
   );
 }
+const PAGE_TABS = [
+  { key: "picks", path: "/picks", label: "Picks", icon: "📝" },
+  { key: "leader", path: "/leader", label: "Leaderboard", icon: "🏆" },
+  { key: "myseason", path: "/myseason", label: "My Season", icon: "📅" },
+  { key: "overall", path: "/overall", label: "Overall", icon: "📊" },
+];
 function Header({ user, isAdmin, setPage }) {
   const isMobile = useIsMobile();
   const [chatOpen, setChatOpen] = useState(false);
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const onIOS = isIOSDevice();
   const onAndroid = isAndroidDevice();
   const showIOSSteps = onIOS || !onAndroid;
@@ -314,23 +319,39 @@ function Header({ user, isAdmin, setPage }) {
       .catch(() => {});
   }, [notifState, isAdmin]);
 
-  // Same link set either way - inline on desktop, collapsed into the
-  // hamburger dropdown on mobile - so there's one definition to keep in sync
-  // instead of two copies of every onClick. linkStyle differs per context
-  // (compact inline links on desktop vs. full-width tappable rows in the
-  // mobile dropdown) since both reuse this same function.
-  const renderNavLinks = (linkStyle) => (
+  // Same link set either way - text links on desktop, emoji-only icons in
+  // the mobile top bar (the four main pages live in the bottom tab bar
+  // there) - so there's one definition to keep in sync instead of two
+  // copies of every onClick.
+  // The bottom tab bar is fixed over the page, so leave room under the
+  // content (including the iPhone home-bar inset) while it's showing.
+  useEffect(() => {
+    if (!isMobile) return;
+    const prev = document.body.style.paddingBottom;
+    document.body.style.paddingBottom = "calc(60px + env(safe-area-inset-bottom, 0px))";
+    return () => { document.body.style.paddingBottom = prev; };
+  }, [isMobile]);
+  const activePageKey = (() => {
+    const p = (typeof window !== "undefined" ? window.location.pathname : "/").replace(/^\/|\/$/g, "");
+    return p === "" ? "picks" : p;
+  })();
+
+  const renderNavLinks = (linkStyle, { hideMain = false, iconOnly = false } = {}) => (
     <>
-      <a href="#" style={linkStyle} onClick={(e)=>{e.preventDefault(); history.pushState(null, "", "/picks"); setPage("picks");}}>Picks</a>
-      <a href="#" style={linkStyle} onClick={(e)=>{e.preventDefault(); history.pushState(null, "", "/leader"); setPage("leader");}}>Leaderboard</a>
-      <a href="#" style={linkStyle} onClick={(e)=>{e.preventDefault(); history.pushState(null, "", "/myseason"); setPage("myseason");}}>My Season</a>
-      <a href="#" style={linkStyle} onClick={(e)=>{e.preventDefault(); history.pushState(null, "", "/overall"); setPage("overall");}}>Overall</a>
-      {isAdmin && <a href="#" style={linkStyle} onClick={(e)=>{e.preventDefault(); history.pushState(null, "", "/admin"); setPage("admin");}}>Admin</a>}
+      {!hideMain && (
+        <>
+          <a href="#" style={linkStyle} onClick={(e)=>{e.preventDefault(); history.pushState(null, "", "/picks"); setPage("picks");}}>Picks</a>
+          <a href="#" style={linkStyle} onClick={(e)=>{e.preventDefault(); history.pushState(null, "", "/leader"); setPage("leader");}}>Leaderboard</a>
+          <a href="#" style={linkStyle} onClick={(e)=>{e.preventDefault(); history.pushState(null, "", "/myseason"); setPage("myseason");}}>My Season</a>
+          <a href="#" style={linkStyle} onClick={(e)=>{e.preventDefault(); history.pushState(null, "", "/overall"); setPage("overall");}}>Overall</a>
+        </>
+      )}
+      {isAdmin && <a href="#" style={linkStyle} onClick={(e)=>{e.preventDefault(); history.pushState(null, "", "/admin"); setPage("admin");}} title="Admin" aria-label="Admin">{iconOnly ? "⚙️" : "Admin"}</a>}
       {isMobile && !isStandaloneMode() && (
-        <a href="#" style={linkStyle} onClick={(e)=>{e.preventDefault(); setShowInstallModal(true);}} title="Add to home screen" aria-label="Add to home screen">📲 Add to home screen</a>
+        <a href="#" style={linkStyle} onClick={(e)=>{e.preventDefault(); setShowInstallModal(true);}} title="Add to home screen" aria-label="Add to home screen">{iconOnly ? "📲" : "📲 Add to home screen"}</a>
       )}
       {isMobile && notifState !== "on" && (
-        <a href="#" style={linkStyle} onClick={(e)=>{e.preventDefault(); setShowNotifModal(true);}} title="Enable notifications" aria-label="Enable notifications">🔔 Enable notifications</a>
+        <a href="#" style={linkStyle} onClick={(e)=>{e.preventDefault(); setShowNotifModal(true);}} title="Enable notifications" aria-label="Enable notifications">{iconOnly ? "🔔" : "🔔 Enable notifications"}</a>
       )}
       {isMobile && notifState === "on" && (
         <a href="#" style={linkStyle} onClick={async (e)=>{e.preventDefault();
@@ -350,9 +371,9 @@ function Header({ user, isAdmin, setPage }) {
           } catch (err) {
             alert("Couldn't refresh this device's notification registration.\n\nReason: " + ((err && err.message) ? err.message : String(err)) + "\n\nIf you're on an iPhone, this usually means the app needs to be added to your home screen first (Share > Add to Home Screen), then opened from there.");
           }
-        }} title="Notifications are on — tap to refresh registration and see your device ID" aria-label="Notification status">🔔✅ Notifications on</a>
+        }} title="Notifications are on — tap to refresh registration and see your device ID" aria-label="Notification status">{iconOnly ? "🔔✅" : "🔔✅ Notifications on"}</a>
       )}
-      {user && <a href="#" style={linkStyle} onClick={(e)=>{e.preventDefault(); logout();}}>Sign out</a>}
+      {user && <a href="#" style={linkStyle} onClick={(e)=>{e.preventDefault(); logout();}} title="Sign out" aria-label="Sign out">{iconOnly ? "🚪" : "Sign out"}</a>}
     </>
   );
 
@@ -369,32 +390,50 @@ function Header({ user, isAdmin, setPage }) {
           <WeekChat isAdmin={isAdmin} open={chatOpen} onOpenChange={setChatOpen} />
         </Row>
         {isMobile ? (
-          <button
-            type="button"
-            onClick={() => setMobileMenuOpen(v => !v)}
-            aria-label="Menu"
-            aria-expanded={mobileMenuOpen}
-            style={{ background: "transparent", border: "none", color: "#eef2ff", fontSize: 22, cursor: "pointer", padding: 4, lineHeight: 1 }}
-          >
-            {mobileMenuOpen ? "✕" : "☰"}
-          </button>
+          <nav style={{ display: "flex", alignItems: "center", gap: 4 }}>
+            {renderNavLinks({ fontSize: 22, lineHeight: 1, padding: "6px 7px", textDecoration: "none" }, { hideMain: true, iconOnly: true })}
+          </nav>
         ) : (
           <nav style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             {renderNavLinks()}
           </nav>
         )}
       </div>
-      {isMobile && mobileMenuOpen && (
-        <nav
-          onClick={() => setMobileMenuOpen(false)}
-          style={{
-            display: "flex", flexDirection: "column", gap: 2, marginTop: 10, paddingTop: 10, borderTop: "1px solid #1f2a44",
-          }}
-        >
-          {renderNavLinks({ padding: "10px 4px", fontSize: 15, borderRadius: 8, display: "block" })}
-        </nav>
-      )}
     </div>
+    {isMobile && (
+      <nav
+        aria-label="Pages"
+        style={{
+          position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 40,
+          display: "flex", justifyContent: "space-around", alignItems: "stretch",
+          height: "calc(60px + env(safe-area-inset-bottom, 0px))",
+          paddingBottom: "env(safe-area-inset-bottom, 0px)",
+          background: "rgba(11,18,32,0.95)", backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)",
+          borderTop: "1px solid #1f2a44",
+        }}
+      >
+        {PAGE_TABS.map(t => {
+          const active = activePageKey === t.key;
+          return (
+            <a
+              key={t.key}
+              href={t.path}
+              aria-current={active ? "page" : undefined}
+              onClick={(e)=>{e.preventDefault(); history.pushState(null, "", t.path); setPage(t.key);}}
+              style={{
+                flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 2,
+                fontSize: 11, fontWeight: active ? 700 : 500, textDecoration: "none",
+                color: active ? "#eef2ff" : "#8a96b8",
+                borderTop: active ? "2px solid #6aa2ff" : "2px solid transparent", marginTop: -1,
+              }}
+            >
+              <span aria-hidden="true" style={{ fontSize: 20, lineHeight: 1, opacity: active ? 1 : 0.7, filter: active ? "none" : "grayscale(0.6)" }}>{t.icon}</span>
+              <span>{t.label}</span>
+            </a>
+          );
+        })}
+      </nav>
+    )}
     {showWhatsNewModal && (
       <div style={{
         position:"fixed", inset:0, zIndex:100, background:"rgba(4,7,15,.72)",
@@ -2440,7 +2479,7 @@ const onSubmitPicks = async function(e){
     {week == null ? "" : ("Welcome to Week " + week + "!")}
   </div>
 </div>
-      <div style={{ marginTop:4, marginBottom:12, textAlign:"center" }}>
+      <div style={{ marginTop:14, marginBottom:12, textAlign:"center" }}>
         <button
           type="button"
           onClick={handleShare}
