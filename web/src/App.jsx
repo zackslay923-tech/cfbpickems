@@ -379,7 +379,14 @@ function Header({ user, isAdmin, setPage }) {
           } catch (err) {
             alert("Couldn't refresh this device's notification registration.\n\nReason: " + ((err && err.message) ? err.message : String(err)) + "\n\nIf you're on an iPhone, this usually means the app needs to be added to your home screen first (Share > Add to Home Screen), then opened from there.");
           }
-        }} title="Notifications are on — tap to refresh registration and see your device ID" aria-label="Notification status">{iconOnly ? "🔔✅" : "🔔✅ Notifications on"}</a>
+        }} title="Notifications are on — tap to refresh registration and see your device ID" aria-label="Notification status">{iconOnly ? (
+          <span style={{ position: "relative", display: "inline-block" }}>
+            🔔
+            <svg aria-hidden="true" viewBox="0 0 12 12" width="11" height="11" style={{ position: "absolute", left: -5, top: -3 }}>
+              <path d="M2 6.5 L5 9.5 L10.5 2.5" fill="none" stroke="#22c55e" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </span>
+        ) : "🔔✅ Notifications on"}</a>
       )}
       {user && <a href="#" style={linkStyle} onClick={(e)=>{e.preventDefault(); logout();}} title="Sign out" aria-label="Sign out">{iconOnly ? "🚪" : "Sign out"}</a>}
     </>
