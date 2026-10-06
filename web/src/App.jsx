@@ -355,7 +355,7 @@ function Header({ user, isAdmin, setPage }) {
         }}>📜</a>
       )}
       {isAdmin && <a href="#" style={linkStyle} onClick={(e)=>{e.preventDefault(); history.pushState(null, "", "/admin"); setPage("admin");}} title="Admin" aria-label="Admin">{iconOnly ? "⚙️" : "Admin"}</a>}
-      {isMobile && !isStandaloneMode() && (
+      {isMobile && !isStandaloneMode() && !(iconOnly && user) && (
         <a href="#" style={linkStyle} onClick={(e)=>{e.preventDefault(); setShowInstallModal(true);}} title="Add to home screen" aria-label="Add to home screen">{iconOnly ? "📲" : "📲 Add to home screen"}</a>
       )}
       {isMobile && notifState !== "on" && (
@@ -399,7 +399,7 @@ function Header({ user, isAdmin, setPage }) {
         </Row>
         {isMobile ? (
           <nav style={{ display: "flex", alignItems: "center", gap: 0, flexShrink: 0 }}>
-            {renderNavLinks({ fontSize: 19, lineHeight: 1, padding: "4px 5px", margin: 0, textDecoration: "none" }, { hideMain: true, iconOnly: true })}
+            {renderNavLinks({ fontSize: 20, lineHeight: 1, padding: "6px 8px", margin: 0, textDecoration: "none" }, { hideMain: true, iconOnly: true })}
           </nav>
         ) : (
           <nav style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
