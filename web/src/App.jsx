@@ -346,6 +346,14 @@ function Header({ user, isAdmin, setPage }) {
           <a href="#" style={linkStyle} onClick={(e)=>{e.preventDefault(); history.pushState(null, "", "/overall"); setPage("overall");}}>Overall</a>
         </>
       )}
+      {iconOnly && (
+        <a href="#" style={linkStyle} title="Rules" aria-label="Rules" onClick={(e)=>{
+          e.preventDefault();
+          if (activePageKey === "picks") { window.dispatchEvent(new Event("open-rules")); return; }
+          try { sessionStorage.setItem("openRulesOnPicks", "1"); } catch (err) {}
+          history.pushState(null, "", "/picks"); setPage("picks");
+        }}>📜</a>
+      )}
       {isAdmin && <a href="#" style={linkStyle} onClick={(e)=>{e.preventDefault(); history.pushState(null, "", "/admin"); setPage("admin");}} title="Admin" aria-label="Admin">{iconOnly ? "⚙️" : "Admin"}</a>}
       {isMobile && !isStandaloneMode() && (
         <a href="#" style={linkStyle} onClick={(e)=>{e.preventDefault(); setShowInstallModal(true);}} title="Add to home screen" aria-label="Add to home screen">{iconOnly ? "📲" : "📲 Add to home screen"}</a>
@@ -386,12 +394,12 @@ function Header({ user, isAdmin, setPage }) {
     }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <Row style={{ gap: 10, alignItems: "center" }}>
-          <h1 style={{ margin: 0, fontSize: 20, userSelect:"none" }} onClick={handleLogoTap}>CFB Pick'em</h1>
+          <h1 style={{ margin: 0, fontSize: 20, userSelect:"none", whiteSpace:"nowrap" }} onClick={handleLogoTap}>CFB Pick'em</h1>
           <WeekChat isAdmin={isAdmin} open={chatOpen} onOpenChange={setChatOpen} />
         </Row>
         {isMobile ? (
-          <nav style={{ display: "flex", alignItems: "center", gap: 4 }}>
-            {renderNavLinks({ fontSize: 22, lineHeight: 1, padding: "6px 7px", textDecoration: "none" }, { hideMain: true, iconOnly: true })}
+          <nav style={{ display: "flex", alignItems: "center", gap: 0, flexShrink: 0 }}>
+            {renderNavLinks({ fontSize: 19, lineHeight: 1, padding: "4px 5px", margin: 0, textDecoration: "none" }, { hideMain: true, iconOnly: true })}
           </nav>
         ) : (
           <nav style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -1932,6 +1940,21 @@ const [form, setForm] = useState({ firstName:"", lastName:"", email:"", phone:""
   const [errors, setErrors] = useState({});
   const [touchedSubmit, setTouchedSubmit] = useState(false);
   const [showRules, setShowRules] = useState(false);
+  const isPhone = useIsMobile();
+  // The phone top bar's 📜 (in Header, on every page) opens this modal -
+  // directly when already on Picks, via a one-shot flag after navigating
+  // here from any other page.
+  useEffect(() => {
+    try {
+      if (sessionStorage.getItem("openRulesOnPicks") === "1") {
+        sessionStorage.removeItem("openRulesOnPicks");
+        setShowRules(true);
+      }
+    } catch (e) {}
+    const open = () => setShowRules(true);
+    window.addEventListener("open-rules", open);
+    return () => window.removeEventListener("open-rules", open);
+  }, []);
   const [picks, setPicks] = useState({});
   useEffect(() => { window._picks = picks; window._setPicks = setPicks; }, [picks]);
   const [msg, setMsg] = useState("");
@@ -2469,11 +2492,11 @@ const onSubmitPicks = async function(e){
         ${pot.toLocaleString()} 💰
       </div>
     </>)}
-  </div><div style={{ position:"absolute", top:8, right:8, zIndex:2 }}>
+  </div>{!isPhone && (<div style={{ position:"absolute", top:8, right:8, zIndex:2 }}>
     <button onClick={()=>setShowRules(true)} type="button">Rules</button>
-  </div>
+  </div>)}
 <Row style={{ justifyContent: "space-between" }}>
-  <div style={{ margin:"20px 0 2px", lineHeight:1.25, textAlign:"center", padding:"20px 16px", width:"100%" , position:"relative", paddingBottom:0  }}>
+  <div style={{ margin: (isPhone && potHidden && !isAdmin) ? "0 0 2px" : "20px 0 2px", lineHeight:1.25, textAlign:"center", padding: (isPhone && potHidden && !isAdmin) ? "4px 16px 0" : "20px 16px 0", width:"100%" , position:"relative"  }}>
 <div style={{ minHeight: 40 }}>
   <div style={{ fontWeight:800, fontSize:30, textDecoration:"underline", opacity:(week==null?0:1), transition:"opacity 150ms ease" }}>
     {week == null ? "" : ("Welcome to Week " + week + "!")}
