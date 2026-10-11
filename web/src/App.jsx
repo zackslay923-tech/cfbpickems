@@ -1437,8 +1437,11 @@ function computeFieldWinProbabilities(games, results, players, gameGroupStartMap
   const gdGame = games.find(g => g && g.gameday);
   const gdFinal = gdGame ? isFinal(gdGame) : false;
   const gdTotalRaw = gdFinal ? results[gdGame.id]?.totalPoints : null;
-  const gdTotalFixed = Number.isFinite(+gdTotalRaw) ? +gdTotalRaw : null;
-  const gdOU = (!gdFinal && gdGame && Number.isFinite(+gdGame.overUnder)) ? +gdGame.overUnder : null;
+  // `+null` is 0 (finite), so a missing value has to be ruled out explicitly -
+  // otherwise an unfinished GameDay game was treated as having a final total
+  // of 0 and every tie went to the lowest tiebreaker guess.
+  const gdTotalFixed = (gdTotalRaw != null && Number.isFinite(+gdTotalRaw)) ? +gdTotalRaw : null;
+  const gdOU = (!gdFinal && gdGame && gdGame.overUnder != null && Number.isFinite(+gdGame.overUnder)) ? +gdGame.overUnder : null;
   // Once GameDay is actually underway, project its final total from the
   // score it's already put up plus what the pregame total implies for
   // however much time is left - not just the frozen pregame number the
@@ -2884,6 +2887,19 @@ const onSubmitPicks = async function(e){
           </div>
           )}
 
+          {isPhone && !editing && (
+            <div style={{ marginTop: 16, display:"flex", flexDirection:"column", alignItems:"stretch", gap:6 }}>
+              <a
+                href={`https://venmo.com/ZackSlay?txn=pay&amount=5.00&note=${encodeURIComponent("Pick'em Week " + week)}`}
+                target="_blank"
+                rel="noreferrer"
+                style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:8, padding:"11px 14px", borderRadius:12, background:"#3d95ce", color:"#fff", fontWeight:700, fontSize:15, textDecoration:"none" }}
+              >
+                <span aria-hidden="true">💸</span> Pay $5 on Venmo
+              </a>
+              <div style={{ fontSize:11.5, color:"#9aa4c7", textAlign:"center" }}>Opens Venmo with $5 and a note filled in. Come back and check the box below when it's sent.</div>
+            </div>
+          )}
           <Row style={{ justifyContent: "flex-end", marginTop: 12 }}><div style={{ marginRight:"auto", display:"flex", alignItems:"center", gap:12 }}><input type="checkbox" aria-label="venmo" checked={form.venmoConfirmed} onChange={e=>setForm({...form, venmoConfirmed:e.target.checked})} /><span style={{ fontSize:12 }}>By checking this box, I confirm I have sent $5 to @ZackSlay on Venmo</span></div>
             <div style={{color:"#c0392b",fontSize:12,margin:"8px 0"}} role="alert">{touchedSubmit && !isValid && (errors.picks || "Please complete all required fields and picks.")}</div>
 <button type="submit" disabled={!isValid || (picksLocked && !partialEditAllowed) || submitting}>{submitting ? "Saving…" : "Submit / Update Picks"}</button>
@@ -2971,7 +2987,7 @@ function PtvTeamButton({ team, rank, active, onClick, winPct, hasPossession }) {
 // because the "build your own path" explorer needs its own state
 // (whatIf overrides) that has to reset whenever a different player's modal
 // opens, which an IIFE re-run on every render can't hold.
-function PathToVictoryModal({ ptvFor, compareWith, setCompareWith, onClose, games, results, players, gameGroupStartMap, winOdds }) {
+function PathToVictoryModal({ ptvFor, compareWith, setCompareWith, onClose, games, results, players, gameGroupStartMap, winOdds, onRefresh, refreshing, updatedAt }) {
   const ptv = useMemo(
     () => computePathToVictory(games, results, players, gameGroupStartMap, ptvFor),
     [games, results, players, gameGroupStartMap, ptvFor]
@@ -3008,13 +3024,19 @@ function PathToVictoryModal({ ptvFor, compareWith, setCompareWith, onClose, game
         <div style={{ padding:"16px 16px 12px", background:"linear-gradient(135deg, rgba(106,162,255,0.18), rgba(240,180,41,0.10))", borderBottom:"1px solid #2a3655", flexShrink:0 }}>
           <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
             <h3 style={{ margin:0, fontSize:19, letterSpacing:.3 }}>🎯 {ptvFor}</h3>
-            <button type="button" onClick={onClose} aria-label="Close" style={{ background:"transparent", border:"none", color:"#cfd8f0", cursor:"pointer", fontSize:18, padding:2, lineHeight:1 }}>✕</button>
+            <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+              {onRefresh && (
+                <button type="button" onClick={onRefresh} disabled={refreshing} aria-label="Refresh" style={{ background:"transparent", border:"1px solid #2a3655", borderRadius:999, color:"#cfd8f0", cursor: refreshing ? "default" : "pointer", fontSize:12, fontWeight:600, padding:"3px 10px", lineHeight:1.2, opacity: refreshing ? 0.6 : 1 }}>
+                  {refreshing ? "Refreshing…" : "↻ Refresh"}
+                </button>
+              )}
+              <button type="button" onClick={onClose} aria-label="Close" style={{ background:"transparent", border:"none", color:"#cfd8f0", cursor:"pointer", fontSize:18, padding:2, lineHeight:1 }}>✕</button>
+            </div>
           </div>
-          {!cmp && !ptv.incomplete && (
-            <p style={{ margin:"6px 0 0", fontSize:11.5, color:"#9aa4c7", lineHeight:1.5 }}>
-              🔒 = must-win for {ptvFor}'s best case.
-            </p>
-          )}
+          <p style={{ margin:"6px 0 0", fontSize:11.5, color:"#9aa4c7", lineHeight:1.5 }}>
+            {!cmp && !ptv.incomplete ? <>🔒 = must-win for {ptvFor}'s best case. </> : null}
+            {updatedAt ? <>Last updated: {new Date(updatedAt).toLocaleTimeString("en-US", { hour:"numeric", minute:"2-digit", second:"2-digit" })}.</> : null}
+          </p>
         </div>
         <div style={{ overflowY:"auto", minHeight:0, fontSize:13.5, lineHeight:1.6, padding:16 }}>
           {!cmp ? (
@@ -3786,6 +3808,28 @@ useEffect(() => {
 
   
 const GAME_COL_W = 140;
+const [refreshingOdds, setRefreshingOdds] = useState(false);
+const [oddsUpdatedAt, setOddsUpdatedAt] = useState(() => Date.now());
+// Pulls fresh results, picks and ESPN win percentages for the Path to Victory
+// popups - loadAll below only runs on open/week change, and also flashes the
+// board's loading screen, which would sit behind the popup.
+const refreshOdds = async () => {
+  if (refreshingOdds || !(hasWeekValue(year) && hasWeekValue(week))) return;
+  setRefreshingOdds(true);
+  const seq = ++loadAllSeqRef.current;
+  try {
+    const { games: g, results: r, rows } = await computeWeekStandings(year, week);
+    if (seq !== loadAllSeqRef.current) return;
+    setGames(g);
+    setResults(r);
+    setPlayers(rows);
+    setOddsUpdatedAt(Date.now());
+  } catch (e) {
+    console.error("refreshOdds failed", e);
+  } finally {
+    setRefreshingOdds(false);
+  }
+};
 const loadAll = async () => {
   if (!(hasWeekValue(year) && hasWeekValue(week))) { return; }
   // Reset before fetching, not just on first load - otherwise switching
@@ -3817,6 +3861,7 @@ const loadAll = async () => {
     setGames(g);
     setResults(r);
     setPlayers(rows);
+    setOddsUpdatedAt(Date.now());
     setMsg(`Week ${week}  -  Included games: ${g.length}  -  Finished: ${playedGames}`);
     setBoardLoaded(true);
   } catch (e) {
@@ -4612,6 +4657,9 @@ while (i < seq.length) {
           players={players}
           gameGroupStartMap={gameGroupStartMap}
           winOdds={winOdds}
+          onRefresh={refreshOdds}
+          refreshing={refreshingOdds}
+          updatedAt={oddsUpdatedAt}
         />
       )}
       {showWinOdds && winOdds && (
@@ -4620,10 +4668,15 @@ while (i < seq.length) {
             <div style={{ padding:"16px 16px 12px", background:"linear-gradient(135deg, rgba(240,180,41,0.18), rgba(106,162,255,0.10))", borderBottom:"1px solid #2a3655", flexShrink:0 }}>
               <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
                 <h3 style={{ margin:0, fontSize:19, letterSpacing:.3 }}>🏆 Path to Victory{isAdmin && pathToVictoryDisabled ? <span style={{ fontSize:12, fontWeight:600, color:"#f0b429", marginLeft:8 }}>Hidden from players</span> : null}</h3>
-                <button type="button" onClick={() => setShowWinOdds(false)} aria-label="Close" style={{ background:"transparent", border:"none", color:"#cfd8f0", cursor:"pointer", fontSize:18, padding:2, lineHeight:1 }}>✕</button>
+                <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                  <button type="button" onClick={refreshOdds} disabled={refreshingOdds} aria-label="Refresh" style={{ background:"transparent", border:"1px solid #2a3655", borderRadius:999, color:"#cfd8f0", cursor: refreshingOdds ? "default" : "pointer", fontSize:12, fontWeight:600, padding:"3px 10px", lineHeight:1.2, opacity: refreshingOdds ? 0.6 : 1 }}>
+                    {refreshingOdds ? "Refreshing…" : "↻ Refresh"}
+                  </button>
+                  <button type="button" onClick={() => setShowWinOdds(false)} aria-label="Close" style={{ background:"transparent", border:"none", color:"#cfd8f0", cursor:"pointer", fontSize:18, padding:2, lineHeight:1 }}>✕</button>
+                </div>
               </div>
               <p style={{ margin:"6px 0 0", fontSize:11.5, color:"#9aa4c7", lineHeight:1.5 }}>
-                Simulated odds, live once games kick off. Ties go to the GameDay tiebreaker.
+                Simulated odds, live once games kick off. Ties go to the GameDay tiebreaker. Last updated: {new Date(oddsUpdatedAt).toLocaleTimeString("en-US", { hour:"numeric", minute:"2-digit", second:"2-digit" })}.
                 {winOdds.hiddenRemainingCount > 0 && ` +${winOdds.hiddenRemainingCount} game${winOdds.hiddenRemainingCount === 1 ? "" : "s"} not revealed yet.`}
               </p>
             </div>
