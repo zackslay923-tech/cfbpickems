@@ -3656,6 +3656,17 @@ useEffect(() => {
     () => (ptvEnabled ? computeEliminatedNames(games, results, players, gameGroupStartMap) : new Set()),
     [games, results, players, gameGroupStartMap, ptvEnabled]
   );
+  // For each Out player, the game whose result made elimination certain
+  // (same replay the per-player screen uses), so the list can say when/how.
+  const eliminationInfo = useMemo(() => {
+    const m = new Map();
+    if (!ptvEnabled) return m;
+    for (const name of eliminatedNames) {
+      const g = findEliminationGame(games, results, players, gameGroupStartMap, name);
+      if (g) m.set(name, g);
+    }
+    return m;
+  }, [eliminatedNames, games, results, players, gameGroupStartMap, ptvEnabled]);
 
   // Computed once and dropped into both of this page's return branches below
   // (the locked/minimal view and the full board) rather than duplicated -
@@ -4687,17 +4698,29 @@ while (i < seq.length) {
                 // stronger, different claim than "hasn't won a simulated
                 // trial yet" (see the <0.0% vs 0.0% distinction below), so
                 // it shouldn't just fall out of a plain percentage sort.
+                // Out players: most recently eliminated first (when that
+                // game's result was recorded, else its kickoff).
+                const elimMs = (name) => {
+                  const eg = eliminationInfo.get(name);
+                  if (!eg) return 0;
+                  const u = results[eg.id]?.updatedAt;
+                  const d = u?.toDate ? u.toDate() : (u ? new Date(u) : new Date(eg.startTimeStr || 0));
+                  return Number.isFinite(+d) ? +d : 0;
+                };
                 const sortedOdds = [...winOdds.odds].sort((a, b) => {
                   const aElim = eliminatedNames.has(a.name), bElim = eliminatedNames.has(b.name);
                   if (aElim !== bElim) return aElim ? 1 : -1;
+                  if (aElim && bElim) return elimMs(b.name) - elimMs(a.name) || a.name.localeCompare(b.name);
                   return b.pct - a.pct || a.name.localeCompare(b.name);
                 });
                 const maxPct = sortedOdds[0]?.pct || 1;
                 return sortedOdds.map((o, i) => {
-                  const widthPct = maxPct > 0 ? Math.max(4, (o.pct / maxPct) * 100) : 0;
-                  const medal = i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : null;
-                  const barColor = i === 0 ? "240,180,41" : i === 1 ? "203,213,225" : i === 2 ? "205,127,50" : "106,162,255";
                   const isElim = eliminatedNames.has(o.name);
+                  // Out players sort below everyone still alive and aren't
+                  // ranked: no place number, medal, or bar.
+                  const widthPct = isElim ? 0 : (maxPct > 0 ? Math.max(4, (o.pct / maxPct) * 100) : 0);
+                  const medal = isElim ? null : i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : null;
+                  const barColor = i === 0 ? "240,180,41" : i === 1 ? "203,213,225" : i === 2 ? "205,127,50" : "106,162,255";
                   // A simulated 0.0% for someone who isn't actually
                   // eliminated just means they never happened to win in any
                   // trial, not that it's provably impossible (that's what
@@ -4706,6 +4729,14 @@ while (i < seq.length) {
                   const pctLabel = o.pct <= 0
                     ? (isElim ? "0.0" : "<0.0")
                     : (o.pct < 0.1 ? "<0.1" : o.pct.toFixed(1));
+                  let elimText = null;
+                  const eg = isElim ? eliminationInfo.get(o.name) : null;
+                  if (eg) {
+                    const r = results[eg.id];
+                    const winner = r?.winner;
+                    const loser = winner === eg.home ? eg.away : eg.home;
+                    elimText = `Eliminated when ${winner} beat ${loser}`;
+                  }
                   return (
                     <div
                       key={o.name}
@@ -4719,8 +4750,8 @@ while (i < seq.length) {
                       <div style={{ position:"absolute", inset:0, width:`${widthPct}%`, background:`linear-gradient(90deg, rgba(${barColor},0.32), rgba(${barColor},0.06))`, transition:"width 400ms ease" }} />
                       <div style={{ position:"relative", display:"flex", justifyContent:"space-between", alignItems:"center", fontSize:13.5 }}>
                         <span style={{ display:"flex", alignItems:"center", gap:6, minWidth:0 }}>
-                          {medal ? <span style={{ fontSize:15 }}>{medal}</span> : <span style={{ opacity:.5, fontSize:11, width:16, textAlign:"right" }}>{i + 1}</span>}
-                          <span style={{ fontWeight: i < 3 ? 700 : 500, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", textDecoration:"underline", textDecorationColor:"rgba(255,255,255,.25)" }}>{o.name}</span>
+                          {medal ? <span style={{ fontSize:15 }}>{medal}</span> : <span style={{ opacity:.5, fontSize:11, width:16, textAlign:"right" }}>{isElim ? "" : i + 1}</span>}
+                          <span style={{ fontWeight: (!isElim && i < 3) ? 700 : 500, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", textDecoration:"underline", textDecorationColor:"rgba(255,255,255,.25)" }}>{o.name}</span>
                         </span>
                         <span style={{ display:"flex", alignItems:"center", gap:6, flexShrink:0, marginLeft:8 }}>
                           <span style={{
@@ -4734,6 +4765,9 @@ while (i < seq.length) {
                           <span style={{ fontWeight:800 }}>{pctLabel}%</span>
                         </span>
                       </div>
+                      {elimText && (
+                        <div style={{ position:"relative", marginTop:3, marginLeft:22, fontSize:10.5, color:"#9aa4c7" }}>{elimText}</div>
+                      )}
                     </div>
                   );
                 });
