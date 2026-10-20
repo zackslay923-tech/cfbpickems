@@ -708,10 +708,16 @@ function AdminActionRow({ label, description, divider = true, children }) {
   );
 }
 
+// Running joke: Miami (FL) is displayed as "University of Coral Gables".
+// Display only - stored picks and game docs keep the real team name.
+const isMiamiFL = (name) => /^miami( hurricanes| \(fl\)| fl| florida)?$/i.test(String(name || "").trim());
+const MIAMI_FL_JOKE_NAME = "University of Coral Gables";
+
 // Renders "#7 Team" if rank is 1..25, else just "Team"
 function teamLabel(name, rank) {
   const n = Number(rank);
-  return n && n > 0 && n <= 25 ? `#${n} ${name}` : name;
+  const shown = isMiamiFL(name) ? MIAMI_FL_JOKE_NAME : name;
+  return n && n > 0 && n <= 25 ? `#${n} ${shown}` : shown;
 }
 
 // ---------- shared helpers ----------
@@ -1739,7 +1745,7 @@ function stripMascot(name) {
 }
 
 function teamLabelNoMascot(name, rank) { if (String(rank) === "99" || Number(rank) === 99) rank = null;
-  const base = stripMascot(name);
+  const base = isMiamiFL(name) ? MIAMI_FL_JOKE_NAME : stripMascot(name);
   return (rank ? `#${rank} ` : "") + base;
 }
 // ---- end helpers ----

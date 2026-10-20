@@ -172,6 +172,8 @@ export default function TeamLogo({ school, size = 96, alt, style, className, ...
 
   const px = Number.isFinite(size) ? size : 96;
   const aria = alt || (school ? `${school} logo` : "Team logo");
+  // Running joke: Miami (FL)'s logo is shown upside down everywhere.
+  const flipped = /^miami(hurricanes|fl|florida)?$/.test(normId(school));
 
   return (
     <img
@@ -180,7 +182,7 @@ export default function TeamLogo({ school, size = 96, alt, style, className, ...
       width={px}
       height={px}
       className={className}
-      style={{ display: "block", objectFit: "contain", width: px, height: px, ...style }}
+      style={{ display: "block", objectFit: "contain", width: px, height: px, ...(flipped ? { transform: "rotate(180deg)" } : null), ...style }}
       {...rest}
     />
   );
