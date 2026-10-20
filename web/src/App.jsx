@@ -708,10 +708,10 @@ function AdminActionRow({ label, description, divider = true, children }) {
   );
 }
 
-// Running joke: Miami (FL) is displayed as "Coral Gables".
+// Running joke: Miami (FL) is displayed as "ACC Officials".
 // Display only - stored picks and game docs keep the real team name.
 const isMiamiFL = (name) => /^miami( hurricanes| \(fl\)| fl| florida)?$/i.test(String(name || "").trim());
-const MIAMI_FL_JOKE_NAME = "Coral Gables";
+const MIAMI_FL_JOKE_NAME = "ACC Officials";
 
 // Renders "#7 Team" if rank is 1..25, else just "Team"
 function teamLabel(name, rank) {
