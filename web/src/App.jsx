@@ -1535,8 +1535,9 @@ async function buildFbsNameSet(apiKey, year) {
   return set;
 }
 
-// Team -> AP Top 25 rank (falls back to whatever poll CFBD does have, e.g.
-// Coaches) for a given week. Week 0 games are early enough that CFBD often
+// Team -> rank for a given week: the College Football Playoff committee
+// ranking once CFBD has one (it starts partway through the season), else the
+// AP Top 25, else whatever poll CFBD does have (e.g. Coaches). Week 0 games are early enough that CFBD often
 // hasn't posted a week-0-specific poll yet, so if the requested week comes
 // back empty, this also tries week 1 (the preseason poll effectively still
 // applies to those games).
@@ -1548,7 +1549,9 @@ async function buildRankMap(apiKey, year, week) {
     if (!res.ok || !Array.isArray(res.data)) return map;
     for (const entry of res.data) {
       const polls = Array.isArray(entry.polls) ? entry.polls : [];
-      const ap = polls.find(p => /ap top ?25/i.test(p.poll || "")) || polls[0];
+      const ap = polls.find(p => /playoff|committee|\bcfp\b/i.test(p.poll || ""))
+        || polls.find(p => /ap top ?25/i.test(p.poll || ""))
+        || polls[0];
       if (!ap || !Array.isArray(ap.ranks)) continue;
       for (const r of ap.ranks) {
         const n = norm(r.school);
@@ -8901,6 +8904,9 @@ function AdminPage({ user, isAdmin, setPage }) {
       if (!hasWeekValue(year) || !hasWeekValue(week)) throw new Error("Select a year/week first.");
 
       const rankMap = await buildRankMap(apiKey, year, week);
+      // An empty result (bad key, CFBD outage, no poll yet) would otherwise
+      // blank every game's rank below.
+      if (!rankMap.size) throw new Error("CFBD returned no rankings for this week - nothing changed.");
       const ourGames = await listGames({ year, week, includedOnly: false });
 
       const batch = writeBatch(db);
@@ -9248,7 +9254,7 @@ await setDoc(doc(db,"config","app"), { currentYear: year, currentWeek: week, upd
             <button style={adminBtn("primary")} onClick={saveKey}>Save key</button>
             <button style={adminBtn("primary")} onClick={doImport}>Import week</button>
             <button style={adminBtn("primary")} onClick={doSyncOdds} title="Pulls spreads/over-under from CFBD for the selected week - only runs when clicked, never automatically">Sync Odds (CFBD)</button>
-            <button style={adminBtn("primary")} onClick={doSyncRankings} title="Pulls AP Top 25 ranks from CFBD for the selected week's games - only runs when clicked, never automatically">Sync Rankings (CFBD)</button>
+            <button style={adminBtn("primary")} onClick={doSyncRankings} title="Pulls CFP committee ranks (AP Top 25 if there's no CFP poll yet) from CFBD for the selected week's games - only updates the rank fields, only runs when clicked, never automatically">Sync Rankings (CFBD)</button>
           </Row>
         </AdminSection>
 
